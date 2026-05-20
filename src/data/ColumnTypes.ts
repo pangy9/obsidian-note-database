@@ -1,0 +1,175 @@
+import { t } from "../i18n";
+import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "./types";
+
+export const STATUS_OPTION_PRESETS: Array<{ key: string; label: string; options: StatusOptionDef[] }> = [
+  {
+    key: "general",
+    label: "通用状态",
+    options: [
+      { value: "未开始", color: "gray" },
+      { value: "进行中", color: "blue" },
+      { value: "已完成", color: "green" },
+    ],
+  },
+  {
+    key: "task",
+    label: "任务状态",
+    options: [
+      { value: "待处理", color: "gray" },
+      { value: "进行中", color: "blue" },
+      { value: "受阻", color: "orange" },
+      { value: "已完成", color: "green" },
+      { value: "已取消", color: "red" },
+    ],
+  },
+  {
+    key: "reading",
+    label: "阅读状态",
+    options: [
+      { value: "待读", color: "gray" },
+      { value: "阅读中", color: "blue" },
+      { value: "已读", color: "green" },
+      { value: "暂停", color: "orange" },
+      { value: "放弃", color: "red" },
+    ],
+  },
+  {
+    key: "review",
+    label: "审核状态",
+    options: [
+      { value: "待审核", color: "gray" },
+      { value: "审核中", color: "blue" },
+      { value: "已通过", color: "green" },
+      { value: "已拒绝", color: "red" },
+    ],
+  },
+];
+
+export const DEFAULT_STATUS_OPTIONS: StatusOptionDef[] = STATUS_OPTION_PRESETS[0].options;
+export const DEFAULT_STATUS_PRESET_ID = STATUS_OPTION_PRESETS[0].key;
+
+export function cloneStatusOptions(options: StatusOptionDef[] | undefined): StatusOptionDef[] {
+  return (options || []).map((option) => ({
+    value: String(option.value || "").trim(),
+    color: option.color || "gray",
+  })).filter((option) => option.value.length > 0);
+}
+
+export function getBuiltinStatusPresets(): StatusPresetDef[] {
+  return STATUS_OPTION_PRESETS.map((preset) => ({
+    id: preset.key,
+    name: preset.label,
+    options: cloneStatusOptions(preset.options),
+  }));
+}
+
+export function normalizeStatusPresets(presets: unknown, fallback: StatusPresetDef[] = getBuiltinStatusPresets()): StatusPresetDef[] {
+  if (!Array.isArray(presets)) return fallback.map((preset) => cloneStatusPreset(preset));
+  const normalized: StatusPresetDef[] = [];
+  const seen = new Set<string>();
+  for (const item of presets) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const name = String(raw["name"] ?? raw["label"] ?? "").trim();
+    const id = String(raw["id"] ?? raw["key"] ?? "").trim() || createStatusPresetId(name || "preset", normalized.length);
+    const options = cloneStatusOptions(raw["options"] as StatusOptionDef[] | undefined);
+    if (!name || options.length === 0 || seen.has(id)) continue;
+    normalized.push({ id, name, options });
+    seen.add(id);
+  }
+  return normalized.length ? normalized : fallback.map((preset) => cloneStatusPreset(preset));
+}
+
+export function cloneStatusPreset(preset: StatusPresetDef): StatusPresetDef {
+  return {
+    id: preset.id,
+    name: preset.name,
+    options: cloneStatusOptions(preset.options),
+  };
+}
+
+export function resolveDefaultStatusPresetId(presets: StatusPresetDef[], preferred?: string): string {
+  if (preferred && presets.some((preset) => preset.id === preferred)) return preferred;
+  if (presets.some((preset) => preset.id === DEFAULT_STATUS_PRESET_ID)) return DEFAULT_STATUS_PRESET_ID;
+  return presets[0]?.id || DEFAULT_STATUS_PRESET_ID;
+}
+
+export function getStatusPresetOptions(presets: StatusPresetDef[], preferred?: string): StatusOptionDef[] {
+  const id = resolveDefaultStatusPresetId(presets, preferred);
+  const preset = presets.find((candidate) => candidate.id === id) || presets[0];
+  return cloneStatusOptions(preset?.options || DEFAULT_STATUS_OPTIONS);
+}
+
+function createStatusPresetId(name: string, index: number): string {
+  return `${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-|-$/g, "") || "preset"}-${index + 1}`;
+}
+
+export function COLUMN_TYPE_LABELS(): Record<ColumnDef["type"], string> {
+  return {
+    text: t("columnType.text"),
+    number: t("columnType.number"),
+    date: t("columnType.date"),
+    currency: t("columnType.currency"),
+    select: t("columnType.select"),
+    "multi-select": t("columnType.multiSelect"),
+    status: t("columnType.status"),
+    checkbox: t("columnType.checkbox"),
+    computed: t("columnType.computed"),
+  };
+}
+
+const OPTION_COLORS: StatusColor[] = ["blue", "green", "orange", "purple", "pink", "yellow", "red", "brown", "gray"];
+
+export function isOptionColumnType(type: ColumnDef["type"]): boolean {
+  return type === "select" || type === "multi-select" || type === "status";
+}
+
+export function getColumnOptions(col: ColumnDef): StatusOptionDef[] {
+  return col.statusOptions?.length ? col.statusOptions : [];
+}
+
+export function getColumnOptionValues(col?: ColumnDef): string[] {
+  if (!col || !isOptionColumnType(col.type)) return [];
+  return getColumnOptions(col).map((option) => option.value);
+}
+
+export function getDefaultCellValue(col: ColumnDef): unknown {
+  if (col.type === "checkbox") return false;
+  if (col.type === "multi-select") return [];
+  if (isOptionColumnType(col.type)) return getColumnOptions(col)[0]?.value || "";
+  return "";
+}
+
+export function toMultiSelectValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (value == null || value === "") return [];
+  return String(value)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function toBooleanValue(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["true", "yes", "y", "1", "on", "checked", "是", "已勾选"].includes(normalized);
+}
+
+export function createOptionsFromValues(values: unknown[]): StatusOptionDef[] {
+  const seen = new Set<string>();
+  const options: StatusOptionDef[] = [];
+  for (const value of values) {
+    const parts = Array.isArray(value) ? value : [value];
+    for (const part of parts) {
+      if (part == null || part === "") continue;
+      const text = String(part).trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      options.push({ value: text, color: OPTION_COLORS[options.length % OPTION_COLORS.length] });
+    }
+  }
+  return options;
+}

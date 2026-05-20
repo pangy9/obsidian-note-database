@@ -1,0 +1,296 @@
+import { getColumnOptions } from "../data/ColumnTypes";
+import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
+import { t } from "../i18n";
+import { positionToolbarPopover } from "./PopoverPosition";
+import { DatabaseViewState } from "./ViewStateStore";
+
+export interface FilterPanelActions {
+  saveState(): void;
+  refresh(): void;
+  close(): void;
+}
+
+export class FilterPanelRenderer {
+  private panelEl: HTMLElement | null = null;
+  private anchorEl: HTMLElement | null = null;
+  private refreshTimer: number | null = null;
+
+  render(
+    containerEl: HTMLElement,
+    visible: boolean,
+    state: DatabaseViewState,
+    config: ViewConfig,
+    actions: FilterPanelActions,
+    anchorEl?: HTMLElement
+  ): void {
+    if (this.panelEl) {
+      this.panelEl.remove();
+      this.panelEl = null;
+    }
+    if (!visible) {
+      this.anchorEl = null;
+      this.clearPendingRefresh();
+      return;
+    }
+    if (anchorEl?.isConnected) this.anchorEl = anchorEl;
+
+    const panel = containerEl.createDiv({
+      cls: "db-filter-panel",
+    });
+    const header = containerEl.querySelector(".db-header") || containerEl.querySelector(".db-toolbar");
+    if (header?.parentElement) {
+      header.parentElement.insertBefore(panel, header.nextSibling);
+    }
+    this.panelEl = panel;
+
+    this.renderHeader(panel, containerEl, state, config, actions);
+    if (state.filters.length === 0) {
+      panel.createDiv({
+        cls: "db-panel-empty",
+        text: t("panel.emptyFilters"),
+      });
+    } else {
+      for (let i = 0; i < state.filters.length; i++) {
+        this.renderFilterRow(panel, i, containerEl, state, config, actions);
+      }
+    }
+
+    const addBtn = panel.createEl("button", {
+      cls: "db-panel-button",
+      text: `+ ${t("panel.addCondition")}`,
+    });
+    addBtn.onclick = () => {
+      state.filters.push({ field: "status", op: "eq", value: "" });
+      actions.saveState();
+      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+      actions.refresh();
+    };
+    positionToolbarPopover(panel, this.anchorEl || undefined);
+  }
+
+  private renderHeader(
+    panel: HTMLElement,
+    containerEl: HTMLElement,
+    state: DatabaseViewState,
+    config: ViewConfig,
+    actions: FilterPanelActions
+  ): void {
+    const header = panel.createDiv({ cls: "db-panel-header" });
+    header.createSpan({ cls: "db-panel-title", text: t("toolbar.filter") });
+    const right = header.createDiv({ cls: "db-panel-header-actions" });
+    const logicBtn = header.createEl("button", {
+      cls: "db-panel-button",
+      text: state.filterLogic === "and" ? t("panel.and") : t("panel.or"),
+    });
+    right.appendChild(logicBtn);
+    logicBtn.onclick = () => {
+      state.filterLogic = state.filterLogic === "and" ? "or" : "and";
+      actions.saveState();
+      actions.refresh();
+      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+    };
+  }
+
+  private renderFilterRow(
+    panel: HTMLElement,
+    index: number,
+    containerEl: HTMLElement,
+    state: DatabaseViewState,
+    config: ViewConfig,
+    actions: FilterPanelActions
+  ): void {
+    const rule = state.filters[index];
+    if (!rule) return;
+    const row = panel.createDiv({ cls: "db-panel-row" });
+
+    const fieldSel = row.createEl("select");
+    const allCols = config.schema?.columns || [];
+    for (const col of allCols) {
+      fieldSel.createEl("option", { value: col.key, text: col.label });
+    }
+    const firstKey = allCols[0]?.key || "status";
+    fieldSel.value = rule.field || firstKey;
+    const currentCol = allCols.find((col) => col.key === fieldSel.value) || allCols[0];
+    fieldSel.onchange = () => {
+      rule.field = fieldSel.value;
+      const nextCol = allCols.find((col) => col.key === rule.field);
+      const nextOps = this.getOperatorsForColumn(nextCol);
+      if (!nextOps.some(([op]) => op === rule.op)) rule.op = nextOps[0]?.[0] || "eq";
+      rule.value = "";
+      actions.saveState();
+      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+      actions.refresh();
+    };
+
+    const opSel = row.createEl("select");
+    const ops = this.getOperatorsForColumn(currentCol);
+    for (const [value, label] of ops) opSel.createEl("option", { value, text: label });
+    if (!ops.some(([op]) => op === rule.op)) rule.op = ops[0]?.[0] || "eq";
+    opSel.value = rule.op;
+    opSel.onchange = () => {
+      rule.op = opSel.value as FilterRule["op"];
+      actions.saveState();
+      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+      actions.refresh();
+    };
+
+    if (rule.op !== "empty" && rule.op !== "notempty") {
+      this.renderValueInput(row, rule, currentCol, actions);
+    } else {
+      row.createSpan({ text: "—", cls: "db-panel-empty-value" });
+    }
+
+    const rmBtn = row.createEl("button", { cls: "db-panel-button", text: "×" });
+    rmBtn.onclick = () => {
+      state.filters.splice(index, 1);
+      actions.saveState();
+      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+      actions.refresh();
+    };
+  }
+
+  private getOperatorsForColumn(col?: ColumnDef): [FilterRule["op"], string][] {
+    const base: [FilterRule["op"], string][] = [
+      ["eq", t("filter.eq")],
+      ["neq", t("filter.neq")],
+    ];
+    const emptyOps: [FilterRule["op"], string][] = [
+      ["empty", t("filter.empty")],
+      ["notempty", t("filter.notempty")],
+    ];
+    if (!col) return [...base, ["contains", t("filter.contains")], ...emptyOps];
+    if (col.type === "number" || col.type === "currency" || col.type === "date") {
+      return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
+    }
+    if (col.type === "select" || col.type === "status") {
+      return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
+    }
+    if (col.type === "multi-select") {
+      return [...base, ["contains", t("filter.contains")], ...emptyOps];
+    }
+    if (col.type === "checkbox") {
+      return [...base, ...emptyOps];
+    }
+    return [...base, ["contains", t("filter.contains")], ...emptyOps];
+  }
+
+  private renderValueInput(row: HTMLElement, rule: FilterRule, col: ColumnDef | undefined, actions: FilterPanelActions): void {
+    if (col?.type === "date") {
+      this.renderDateInput(row, rule, actions);
+      return;
+    }
+    if (col?.type === "select" || col?.type === "status") {
+      const select = row.createEl("select");
+      select.createEl("option", { value: "", text: t("panel.value") });
+      for (const option of getColumnOptions(col)) {
+        select.createEl("option", { value: option.value, text: option.value });
+      }
+      select.value = rule.value || "";
+      select.onchange = () => {
+        rule.value = select.value;
+        actions.saveState();
+        actions.refresh();
+      };
+      return;
+    }
+    if (col?.type === "checkbox") {
+      const select = row.createEl("select");
+      select.createEl("option", { value: "true", text: t("common.true") });
+      select.createEl("option", { value: "false", text: t("common.false") });
+      select.value = rule.value === "false" ? "false" : "true";
+      if (!rule.value) rule.value = select.value;
+      select.onchange = () => {
+        rule.value = select.value;
+        actions.saveState();
+        actions.refresh();
+      };
+      return;
+    }
+    const inp = row.createEl("input", {
+      attr: {
+        type: col?.type === "number" || col?.type === "currency" ? "number" : "text",
+        placeholder: t("panel.value"),
+      },
+    });
+    inp.value = rule.value || "";
+    inp.oninput = () => {
+      rule.value = inp.value;
+      actions.saveState();
+      this.scheduleRefresh(actions);
+    };
+  }
+
+  private renderDateInput(row: HTMLElement, rule: FilterRule, actions: FilterPanelActions): void {
+    const parts = String(rule.value || "").substring(0, 10).split("-");
+    const wrap = row.createDiv({ cls: "db-date-segments db-filter-date-segments" });
+    const yearInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "4", placeholder: "YYYY" } });
+    wrap.createSpan({ cls: "db-date-sep", text: "-" });
+    const monthInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "MM" } });
+    wrap.createSpan({ cls: "db-date-sep", text: "-" });
+    const dayInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
+    yearInp.value = parts[0] || "";
+    monthInp.value = parts[1] || "";
+    dayInp.value = parts[2] || "";
+
+    const inputs = [yearInp, monthInp, dayInp];
+    const updateValue = () => {
+      const y = yearInp.value.replace(/\D/g, "");
+      const m = monthInp.value.replace(/\D/g, "");
+      const d = dayInp.value.replace(/\D/g, "");
+      yearInp.value = y;
+      monthInp.value = m;
+      dayInp.value = d;
+      rule.value = y && m && d ? `${y}-${this.pad2(m)}-${this.pad2(d)}` : "";
+      actions.saveState();
+      this.scheduleRefresh(actions);
+    };
+    const keyHandler = (event: KeyboardEvent, input: HTMLInputElement, prev?: HTMLInputElement) => {
+      if (event.key === "Backspace" && input.value === "" && prev) {
+        event.preventDefault();
+        prev.focus();
+        return;
+      }
+      if (["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      if (!/^\d$/.test(event.key)) event.preventDefault();
+    };
+    yearInp.onkeydown = (event) => keyHandler(event, yearInp);
+    monthInp.onkeydown = (event) => keyHandler(event, monthInp, yearInp);
+    dayInp.onkeydown = (event) => keyHandler(event, dayInp, monthInp);
+    yearInp.oninput = () => {
+      updateValue();
+      if (yearInp.value.length === 4) monthInp.focus();
+    };
+    monthInp.oninput = () => {
+      monthInp.value = monthInp.value.replace(/\D/g, "");
+      if (monthInp.value.length === 1 && /^[2-9]$/.test(monthInp.value)) monthInp.value = `0${monthInp.value}`;
+      updateValue();
+      if (monthInp.value.length >= 2) dayInp.focus();
+    };
+    dayInp.oninput = () => {
+      dayInp.value = dayInp.value.replace(/\D/g, "");
+      if (dayInp.value.length === 1 && /^[4-9]$/.test(dayInp.value)) dayInp.value = `0${dayInp.value}`;
+      updateValue();
+    };
+    inputs.forEach((input) => {
+      input.onblur = () => updateValue();
+    });
+  }
+
+  private pad2(value: string): string {
+    return value.length === 1 ? `0${value}` : value;
+  }
+
+  private scheduleRefresh(actions: FilterPanelActions): void {
+    this.clearPendingRefresh();
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = null;
+      actions.refresh();
+    }, 220);
+  }
+
+  private clearPendingRefresh(): void {
+    if (this.refreshTimer === null) return;
+    window.clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+}

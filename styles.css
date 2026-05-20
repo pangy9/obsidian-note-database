@@ -1,0 +1,4975 @@
+/*
+ * ============================================================================
+ *  Note Database — 样式表
+ * ============================================================================
+ *
+ *  CSS 属性速查（修改样式时参考）：
+ *
+ *  布局类：
+ *    display: flex / grid / block / none    — 元素排列方式
+ *    flex-direction: column / row           — flex 主轴方向
+ *    gap: 8px                               — 子元素间距
+ *    align-items: center / start / stretch  — 交叉轴对齐
+ *    justify-content: space-between / center — 主轴对齐
+ *    position: sticky / absolute / relative — 定位方式
+ *    top / left / right / bottom            — 定位偏移量
+ *    z-index: 25                            — 层叠顺序（越大越在上层）
+ *    overflow: auto / hidden / visible      — 内容溢出处理
+ *
+ *  尺寸类：
+ *    width / height                         — 固定宽高
+ *    min-width / max-width                  — 宽度范围限制
+ *    min-height / max-height                — 高度范围限制
+ *    padding: 8px 12px                      — 内边距（上右下左 或 上下 左右）
+ *    margin: 8px                            — 外边距
+ *
+ *  视觉类：
+ *    background: var(--xxx)                 — 背景色（用 Obsidian CSS 变量）
+ *    color: var(--xxx)                      — 文字颜色
+ *    border: 1px solid var(--xxx)           — 边框（宽度 样式 颜色）
+ *    border-radius: 8px                     — 圆角
+ *    box-shadow: 0 2px 4px rgba(...)        — 阴影
+ *    opacity: 0.5                           — 透明度（0=全透明, 1=不透明）
+ *    font-size / font-weight               — 字号 / 字重
+ *
+ *  Obsidian 常用 CSS 变量（自动适配主题）：
+ *    var(--background-primary)              — 主背景色
+ *    var(--background-secondary)            — 次背景色（卡片、工具栏）
+ *    var(--background-modifier-border)      — 边框颜色
+ *    var(--background-modifier-hover)       — 悬停高亮色
+ *    var(--text-normal)                     — 正文文字色
+ *    var(--text-muted)                      — 次要文字色
+ *    var(--text-faint)                      — 最浅文字色
+ *    var(--text-accent)                     — 强调色文字
+ *    var(--interactive-accent)              — 交互强调色（按钮等）
+ *    var(--file-line-width, 760px)          — 编辑器行宽
+ *
+ *  Sticky 表头原理：
+ *    position: sticky 会让元素在滚动到指定位置时"粘住"。
+ *    top 值决定粘在哪里（相对于滚动容器的可见区域顶部）。
+ *    --db-table-header-top 由 JS 动态测量工具栏高度后设置。
+ *    注意：sticky 元素的任何祖先不能有 overflow: hidden/auto，
+ *    除非那个祖先就是滚动容器本身。
+ *
+ * ============================================================================
+ */
+
+
+/* ============================================================================
+ *  1. 容器基础样式
+ *  .note-database-container 是最外层容器，Dashboard 独立视图和内嵌视图共用
+ * ============================================================================ */
+
+.note-database-container {
+  /* JS 动态测量工具栏高度后更新此值，用于计算 sticky 表头位置 */
+  --db-table-header-top: 96px;
+  --db-group-header-height: 32px;
+  --db-group-header-top: calc(var(--db-table-header-top) - 30px);
+  --db-group-table-head-top: calc(var(--db-group-header-top) + var(--db-group-header-height));
+  --db-board-header-top: calc(var(--db-table-header-top) - 25px);
+  --db-selection-status-offset: 0px;
+  --db-selection-status-top: calc(var(--db-table-header-top) - 20px);
+  --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 62%, transparent);
+  --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  --status-color-bg-gray: rgba(120, 119, 116, 0.18);
+  --status-color-fg-gray: #787774;
+  --status-color-bg-brown: rgba(159, 107, 83, 0.18);
+  --status-color-fg-brown: #8f5d45;
+  --status-color-bg-orange: rgba(217, 115, 13, 0.18);
+  --status-color-fg-orange: #b65f00;
+  --status-color-bg-yellow: rgba(203, 145, 47, 0.2);
+  --status-color-fg-yellow: #8f6a00;
+  --status-color-bg-green: rgba(68, 131, 97, 0.18);
+  --status-color-fg-green: #448361;
+  --status-color-bg-blue: rgba(46, 117, 182, 0.18);
+  --status-color-fg-blue: #2f6fad;
+  --status-color-bg-purple: rgba(105, 64, 165, 0.18);
+  --status-color-fg-purple: #6940a5;
+  --status-color-bg-pink: rgba(193, 76, 138, 0.18);
+  --status-color-fg-pink: #a83272;
+  --status-color-bg-red: rgba(212, 76, 71, 0.18);
+  --status-color-fg-red: #d44c47;
+  height: 100%;
+  /* overflow: auto 让容器自身成为滚动容器，表头 sticky 相对于此生效 */
+  overflow: auto;
+  padding: 0 24px 32px;
+  position: relative;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: 13px;
+  line-height: 1.4;
+  scrollbar-color: var(--db-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.note-database-container * {
+  scrollbar-color: var(--db-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.note-database-container::-webkit-scrollbar,
+.note-database-container *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.note-database-container::-webkit-scrollbar-track,
+.note-database-container *::-webkit-scrollbar-track,
+.note-database-container::-webkit-scrollbar-corner,
+.note-database-container *::-webkit-scrollbar-corner {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.note-database-container::-webkit-scrollbar-thumb,
+.note-database-container *::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 999px;
+  background: var(--db-scrollbar-thumb);
+  box-shadow: none;
+}
+
+.note-database-container::-webkit-scrollbar-thumb:hover,
+.note-database-container *::-webkit-scrollbar-thumb:hover {
+  background: var(--db-scrollbar-thumb-hover);
+}
+
+/* ── 全局焦点和无障碍 ── */
+
+.note-database-container button:focus-visible,
+.note-database-container input:focus-visible,
+.note-database-container select:focus-visible,
+.note-database-container textarea:focus-visible,
+.note-database-container [tabindex]:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.note-database-container *:focus {
+  outline: none;
+}
+
+.note-database-container *:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-database-container *,
+  .note-database-container *::before,
+  .note-database-container *::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+}
+
+.note-database-container.has-selection-status {
+  --db-selection-status-offset: 0px;
+}
+
+/* 默认宽度：跟随 Obsidian 编辑器行宽 */
+.note-database-container.db-width-default:not(.note-database-file-view) {
+  max-width: var(--file-line-width, 760px);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* 宽屏模式：突破行宽限制，占满可用空间 */
+.note-database-container.db-width-wide {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* ============================================================================
+ *  2. 工具栏 Header（标题行 + 工具按钮行）
+ *  包含视图名称、筛选/排序/分组按钮等
+ *  sticky: 滚动时固定在顶部，left:0 防止水平滚动时被带走
+ * ============================================================================ */
+
+.note-database-container .db-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 0px;
+  /* 负 margin 让 header 突破父容器的 24px 左右 padding，横向铺满 */
+  margin-left: -12px;
+  margin-right: -12px;
+  position: sticky;
+  /* -20px 让 header 向上滚动时隐藏顶部 18px 的 padding，视觉上贴顶 */
+  top: -20px;
+  /* 水平滚动时 header 固定在左侧（不跟随表格列移动） */
+  left: -12px;
+  z-index: 30;
+  background: var(--background-primary);
+  padding: 14px 12px 0;
+}
+
+.note-database-container .db-heading-row {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  max-width: min(760px, 100%);
+}
+
+/* 数据库名称大标题 */
+.note-database-container .db-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 28px;
+  font-family: inherit;
+  font-weight: 700;
+  color: var(--text-normal);
+  line-height: 1.3;
+  cursor: pointer;
+  padding: 20px 4px;
+  text-align: left;
+  user-select: none;
+  box-shadow: none;
+}
+
+.note-database-container .db-heading:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-heading-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-heading-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-heading-chevron svg {
+  width: 17px;
+  height: 17px;
+}
+
+.note-database-container .db-heading-more-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0.72;
+  padding: 0;
+  box-shadow: none;
+}
+
+.note-database-container .db-heading-row:hover .db-heading-more-button,
+.note-database-container .db-heading-more-button:hover,
+.note-database-container .db-heading-more-button:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.note-database-container .db-heading-more-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.note-database-container .db-description {
+  max-width: 760px;
+  min-height: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-left: 6px;
+  margin-top: -6px;
+  white-space: pre-wrap;
+}
+
+.note-database-container .db-description.is-empty {
+  color: var(--text-faint);
+}
+
+.note-database-container .db-description.is-empty::before {
+  content: "";
+}
+
+.note-database-container .db-description.is-empty:hover::before,
+.note-database-container .db-description.is-empty:focus-visible::before {
+  content: attr(data-placeholder);
+}
+
+.note-database-embed.note-database-container .db-description {
+  max-width: none;
+  min-height: 0;
+  margin: -2px 0 0;
+}
+
+.note-database-container .db-heading-edit {
+  box-sizing: border-box;
+  width: min(760px, 100%);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 70%, transparent);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.3;
+  outline: none;
+  padding: 2px 6px;
+}
+
+.note-database-container .db-heading-edit-description {
+  min-height: 58px;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* 标题行：左标题 + 右按钮 */
+.note-database-container .db-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.note-database-container .db-title-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+/* 数据库标题文字 */
+.note-database-container .db-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  cursor: text;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  user-select: text;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+ *  3. 工具栏（第二行：视图切换、筛选、排序、搜索等）
+ * ============================================================================ */
+
+.note-database-container .db-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-wrap: nowrap;
+}
+
+.note-database-container .db-toolbar-left,
+.note-database-container .db-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-database-container .db-toolbar-left {
+  overflow: hidden;
+  flex-shrink: 1;
+}
+
+.note-database-container .db-toolbar-right {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+/* 视图选择下拉框（圆角胶囊样式） */
+.note-database-container .db-view-switcher {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--background-secondary);
+  padding: 0 8px;
+}
+
+/* 表格/看板切换按钮组 */
+.note-database-container .db-view-type-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--background-secondary);
+}
+
+.note-database-container .db-view-type-button {
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.note-database-container .db-view-type-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-view-type-button.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+/* 视图标签页（工具栏左侧） */
+.note-database-container .db-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.note-database-container .db-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 8px;
+  transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+  white-space: nowrap;
+}
+.note-database-container .db-view-tab:hover {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  color: var(--text-normal);
+}
+.note-database-container .db-view-tab.is-active {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border), 0 1px 3px rgba(0, 0, 0, 0.08);
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.note-database-container .db-view-tab.is-active:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-view-tab.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-view-tab.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.note-database-container .db-view-tab-icon {
+  display: inline-flex;
+  align-items: center;
+}
+.note-database-container .db-view-tab-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.note-database-container .db-view-tab-add,
+.note-database-container .db-view-tab-more {
+  color: var(--text-faint);
+  padding: 0 6px;
+}
+.note-database-container .db-view-tab-add:hover,
+.note-database-container .db-view-tab-more:hover {
+  color: var(--text-muted);
+}
+.note-database-container .db-view-tab-rename {
+  box-sizing: border-box;
+  height: 20px;
+  min-height: 0;
+  max-height: 20px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 70%, transparent);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 18px;
+  outline: none;
+  padding: 0 4px;
+}
+
+/* 通用工具栏控件（下拉框、输入框） */
+.note-database-container .db-view-switcher select,
+.note-database-container .db-toolbar select,
+.note-database-container .db-toolbar input {
+  height: 28px;
+  max-width: 180px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.note-database-container .db-view-switcher select {
+  max-width: 240px;
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.note-database-container .db-toolbar select:hover,
+.note-database-container .db-toolbar input:hover,
+.note-database-container .db-toolbar button:hover,
+.note-database-container .db-title-actions button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 通用工具栏按钮 */
+.note-database-container .db-toolbar-button,
+.note-database-container .db-toolbar-icon-button,
+.note-database-container .db-new-button {
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.note-database-container .db-toolbar-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  position: relative;
+  padding: 0;
+}
+
+.note-database-container .db-toolbar-icon-button.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-toolbar-icon-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.menu.note-database-group-menu {
+  min-width: 260px;
+  max-height: min(360px, calc(100vh - 120px));
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.menu.note-database-group-menu .menu-item {
+  min-height: 28px;
+  border-radius: 7px;
+  margin: 1px 0;
+}
+
+.menu.note-database-group-menu .menu-item.is-disabled {
+  min-height: 22px;
+  opacity: 1;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+.menu.note-database-group-menu .menu-item.is-disabled .menu-item-title {
+  color: var(--text-faint);
+}
+
+.menu.note-database-group-menu .menu-separator {
+  margin: 6px 4px;
+}
+
+.menu.note-database-copy-menu .menu-item-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.note-database-container .db-toolbar-badge {
+  min-width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  pointer-events: none;
+  position: absolute;
+  right: -5px;
+  text-align: center;
+  top: -5px;
+  padding: 0 4px;
+}
+
+.note-database-container .db-selection-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.note-database-container .db-selection-delete {
+  height: 24px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-error);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.note-database-container .db-selection-delete:hover {
+  background: transparent;
+  color: var(--text-error);
+  text-decoration: underline;
+}
+
+.note-database-container .db-selection-status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  position: sticky;
+  top: var(--db-selection-status-top);
+  left: 0px;
+  z-index: 29;
+  margin: 0px 0;
+  padding: 0 7px;
+  width: max-content;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.note-database-container .db-selection-clear-checkbox {
+  margin: 0;
+}
+
+.note-database-container .db-select-control,
+.note-database-container .db-search-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  padding: 0 6px;
+}
+
+.note-database-container .db-select-control:hover,
+.note-database-container .db-search-control:hover,
+.note-database-container .db-search-control:focus-within {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-select-control-icon,
+.note-database-container .db-search-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.note-database-container .db-select-control-icon svg,
+.note-database-container .db-search-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 下拉选择框（分组等） */
+.note-database-container .db-control-select {
+  max-width: 180px;
+  padding: 0 4px;
+}
+
+.note-database-container .db-select-control .db-control-select {
+  max-width: 150px;
+}
+
+/* 搜索输入框 */
+.note-database-container .db-search-control {
+  width: 28px;
+  overflow: hidden;
+  padding: 0;
+  transition: width 120ms ease;
+}
+
+.note-database-container .db-search-control:focus-within,
+.note-database-container .db-search-control.is-active {
+  width: 150px;
+}
+
+.note-database-container .db-search-button {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-container .db-search-control:hover .db-search-button,
+.note-database-container .db-search-control:focus-within .db-search-button,
+.note-database-container .db-search-control.is-active .db-search-button {
+  color: var(--text-normal);
+}
+
+.note-database-container .db-search-input {
+  min-width: 0;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  padding: 0;
+  transition: opacity 120ms ease, width 120ms ease;
+}
+
+.note-database-container .db-search-control:focus-within .db-search-input,
+.note-database-container .db-search-control.is-active .db-search-input {
+  width: 100%;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* "+ 新建"按钮（强调色） */
+.note-database-container .db-new-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+}
+
+.note-database-container .db-new-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.note-database-container .db-new-button:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.note-database-settings .db-settings-empty {
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  margin: 12px 0;
+  padding: 16px;
+}
+
+.note-database-settings .db-settings-empty-title {
+  color: var(--text-normal);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.note-database-settings .db-settings-empty-desc {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.note-database-settings > .setting-item {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.note-database-settings > .setting-item .setting-item-control select,
+.note-database-settings > .setting-item .setting-item-control input[type="text"],
+.note-database-settings > .setting-item .setting-item-control button {
+  height: 30px;
+  min-height: 30px;
+  border-radius: 6px;
+}
+
+.note-database-settings .db-settings-database-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.note-database-settings .db-settings-database-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px;
+}
+
+.note-database-settings .db-settings-database-card.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-settings .db-settings-database-card.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.note-database-settings .db-settings-database-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.note-database-settings .db-settings-database-heading h4 {
+  margin: 0;
+}
+
+.note-database-settings .db-settings-database-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.note-database-settings .db-settings-database-drag {
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  user-select: none;
+}
+
+.note-database-settings .db-settings-delete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 6px;
+  box-shadow: none;
+  --button-shadow: none;
+  --button-shadow-hover: none;
+}
+
+.note-database-settings .db-settings-delete-button:hover,
+.note-database-settings .db-settings-database-card:hover .db-settings-delete-button {
+  background: var(--background-modifier-hover);
+  color: var(--text-error);
+  opacity: 0.9;
+}
+
+.note-database-settings .db-settings-trash-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  padding: 10px 12px;
+}
+
+.note-database-settings .db-settings-trash-info {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.note-database-settings .db-settings-trash-name {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-settings .db-settings-trash-date {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.note-database-settings .db-settings-trash-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.note-database-settings .db-settings-trash-restore,
+.note-database-settings .db-settings-trash-danger {
+  min-height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 6px;
+  box-shadow: none;
+  --button-shadow: none;
+  --button-shadow-hover: none;
+}
+
+.note-database-settings .db-settings-trash-restore:hover {
+  background: transparent;
+  color: var(--interactive-accent);
+}
+
+.note-database-settings .db-settings-trash-danger:hover {
+  background: transparent;
+  color: var(--text-error);
+}
+
+/* ============================================================================
+ *  4. 汇总统计栏（总数、使用中、总投资等）
+ * ============================================================================ */
+
+.note-database-container .db-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 8px 0 14px;
+  color: var(--text-muted);
+}
+
+.note-database-container:not(.note-database-embed) > .db-summary {
+  margin-left: 6px;
+}
+
+.note-database-container .db-summary-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-database-container .db-summary-item .label {
+  color: var(--text-faint);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.note-database-container .db-summary-item .value {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ============================================================================
+ *  5. 表格基础样式
+ *  min-width:100% 允许列宽拖拽超出容器宽度，产生水平滚动
+ *  min-width:720px 是表格最小宽度（列太少时不会太窄）
+ * ============================================================================ */
+
+.note-database-container .db-table-wrap {
+  min-width: 100%;
+}
+
+.note-database-container .db-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+/* 表头和单元格通用样式 */
+.note-database-container .db-table th,
+.note-database-container .db-table td {
+  height: 34px;                          /* 行高，改大会让每行更高 */
+  border-right: 1px solid var(--background-modifier-border);   /* 列分隔线 */
+  border-bottom: 1px solid var(--background-modifier-border);  /* 行分隔线 */
+  background: var(--background-primary);
+  vertical-align: middle;
+}
+
+/* Sticky 表头（未分组时）：粘在工具栏下方
+   top = JS测量的header高度 - 25px（补偿 header 的 padding 和间距） */
+.note-database-container .db-table thead {
+  position: sticky;
+  top: calc(var(--db-table-header-top) - 22px + var(--db-selection-status-offset));
+  z-index: 25;
+}
+
+.note-database-container .db-table thead tr,
+.note-database-container .db-table thead th {
+  background: var(--background-primary);
+}
+
+.note-database-container .db-table th:last-child,
+.note-database-container .db-table td:last-child {
+  border-right: 0;
+}
+
+.note-database-container .db-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 列头单元格（属性名、排序指示器、"..."菜单按钮） */
+.note-database-container .db-table th {
+  position: relative;
+  background: var(--background-primary);
+  box-shadow: 0 1px 0 var(--background-modifier-border);
+  padding: 0 26px 0 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 500;
+  text-align: left;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.note-database-container .db-th-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 列头左侧的类型图标 */
+.note-database-container .db-property-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-property-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
+}
+
+.note-database-container .db-property-icon-text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.note-database-container .db-th-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-database-container .db-table th:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* "..." 菜单按钮（悬停时才显示） */
+.note-database-container .db-column-menu-trigger {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  opacity: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 18px;
+}
+
+.note-database-container .db-table th:hover .db-column-menu-trigger {
+  opacity: 1;
+}
+
+.note-database-container .db-column-menu-trigger:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 排序方向指示器 ▲▼ */
+.note-database-container .db-table th .sort-indicator {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* ============================================================================
+ *  6. 单元格样式（文本、编辑态、选择态）
+ * ============================================================================ */
+
+/* 普通单元格：溢出省略号 */
+.note-database-container .db-table td {
+  overflow: hidden;
+  padding: 0 8px;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* 开启换行的单元格：允许多行显示 */
+.note-database-container .db-table td.db-cell-wrap {
+  min-width: 180px;
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.note-database-container .db-table td.db-cell-wrap * {
+  white-space: normal;
+}
+
+/* 行悬停高亮 */
+.note-database-container .db-table tr:hover td {
+  background: color-mix(in srgb, var(--background-modifier-hover) 68%, transparent);
+}
+
+/* 单元格悬停边框 */
+.note-database-container .db-table td:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-muted) 22%, transparent);
+}
+
+.note-database-container .db-table th.db-select-col,
+.note-database-container .db-table td.db-select-col {
+  padding: 0;
+  overflow: hidden;
+  text-align: center;
+  line-height: 0;
+  list-style: none;
+}
+
+.note-database-container .db-table td.db-select-col:hover {
+  box-shadow: none;
+}
+
+.note-database-container .db-table .db-select-col input[type="checkbox"] {
+  display: block;
+  margin: 0 auto;
+}
+
+/* 笔记名称列的链接样式 */
+.note-database-container .db-title-cell a {
+  color: var(--text-normal);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.note-database-container .db-title-cell a:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+
+.note-database-container .db-editable-cell {
+  cursor: text;
+}
+
+.note-database-container .db-table td.db-fillable-cell {
+  position: relative;
+}
+
+.note-database-container .db-cell-fill-handle {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 2px;
+  background: var(--background-primary);
+  cursor: crosshair;
+  opacity: 0;
+  z-index: 3;
+}
+
+.note-database-container .db-fillable-cell:hover .db-cell-fill-handle,
+.note-database-container .db-fillable-cell.db-cell-selected .db-cell-fill-handle,
+.note-database-container .db-fillable-cell.is-fill-source .db-cell-fill-handle {
+  opacity: 1;
+}
+
+.note-database-container .db-table td.is-fill-source {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.note-database-container .db-table td.is-fill-target {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
+}
+
+.note-database-container .db-table tr.is-dragging,
+.note-database-container .db-gallery-card.is-dragging,
+.note-database-container .db-list-row.is-dragging {
+  opacity: 0.45;
+}
+
+.note-database-container .db-group-header.is-drop-target,
+.note-database-container .db-table-wrap.is-drop-target,
+.note-database-container .db-gallery-group-header.is-drop-target,
+.note-database-container .db-gallery.is-drop-target,
+.note-database-container .db-list-group-header.is-drop-target,
+.note-database-container .db-list.is-drop-target {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 72%, transparent);
+}
+
+.note-database-container .db-formula-cell {
+  cursor: pointer;
+}
+
+.note-database-container .db-formula-cell:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+}
+
+/* 双击选中单元格时的蓝色边框 */
+.note-database-container .db-cell-selected {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+/* 空值占位（透明文字，悬停时变浅灰色提示可编辑） */
+.note-database-container .db-empty-value {
+  color: transparent;
+}
+
+.note-database-container .db-editable-cell:hover .db-empty-value {
+  color: var(--text-faint);
+}
+
+/* 编辑态输入框 */
+.note-database-container .db-cell-input {
+  height: 28px;
+  width: 100%;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 13px;
+  outline: 0;
+  padding: 0 6px;
+}
+
+/* ============================================================================
+ *  6b. 分段日期输入（YYYY-MM-DD）
+ * ============================================================================ */
+
+.note-database-container .db-date-segments {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  height: 28px;
+}
+
+.note-database-container .db-date-seg {
+  height: 26px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 13px;
+  outline: 0;
+  padding: 0 3px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-database-container .db-date-seg:first-child {
+  width: 50px;
+}
+
+.note-database-container .db-date-seg:not(:first-child) {
+  width: 28px;
+}
+
+.note-database-container .db-date-seg::placeholder {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.note-database-container .db-date-sep {
+  color: var(--text-faint);
+  font-size: 13px;
+  flex-shrink: 0;
+  line-height: 26px;
+}
+
+/* ============================================================================
+ *  7. 下拉选项弹出框（状态/选择类型单元格的选项列表）
+ * ============================================================================ */
+
+.note-database-container .db-cell-option-popover {
+  position: absolute;
+  z-index: 1000;
+  min-width: 140px;
+  max-width: 260px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  padding: 6px;
+}
+
+.note-database-container .db-cell-option-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-normal);
+  cursor: pointer;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.note-database-container .db-cell-option-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* 多选标签容器 */
+.note-database-container .db-multi-select-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 复选框单元格居中 */
+.note-database-container .db-checkbox-cell {
+  cursor: default;
+  text-align: center;
+}
+
+.note-database-container .db-checkbox-cell input {
+  margin: 0;
+}
+
+/* 编辑态单元格：蓝色内边框 */
+.note-database-container .db-cell-editing {
+  background: var(--background-primary);
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.note-database-container .db-cell-textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  max-height: min(320px, 45vh);
+  resize: vertical;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font: inherit;
+  line-height: 1.45;
+  padding: 6px 8px;
+}
+
+/* ============================================================================
+ *  8. 状态标签（带颜色的圆角胶囊）
+ *  颜色使用低饱和度的 9 色调色板
+ * ============================================================================ */
+
+.note-database-container .status-badge,
+.note-database-modal .status-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.note-database-container .status-color-gray,
+.note-database-modal .status-color-gray {
+  background: rgba(120, 119, 116, 0.18);
+  color: #787774;
+}
+
+.note-database-container .status-color-brown,
+.note-database-modal .status-color-brown {
+  background: rgba(159, 107, 83, 0.18);
+  color: #8f5d45;
+}
+
+.note-database-container .status-color-orange,
+.note-database-modal .status-color-orange {
+  background: rgba(217, 115, 13, 0.18);
+  color: #b65f00;
+}
+
+.note-database-container .status-color-yellow,
+.note-database-modal .status-color-yellow {
+  background: rgba(203, 145, 47, 0.2);
+  color: #8f6a00;
+}
+
+.note-database-container .status-color-green,
+.note-database-modal .status-color-green {
+  background: rgba(68, 131, 97, 0.18);
+  color: #448361;
+}
+
+.note-database-container .status-color-blue,
+.note-database-modal .status-color-blue {
+  background: rgba(46, 117, 182, 0.18);
+  color: #2f6fad;
+}
+
+.note-database-container .status-color-purple,
+.note-database-modal .status-color-purple {
+  background: rgba(105, 64, 165, 0.18);
+  color: #6940a5;
+}
+
+.note-database-container .status-color-pink,
+.note-database-modal .status-color-pink {
+  background: rgba(193, 76, 138, 0.18);
+  color: #a83272;
+}
+
+.note-database-container .status-color-red,
+.note-database-modal .status-color-red {
+  background: rgba(212, 76, 71, 0.18);
+  color: #c23b35;
+}
+
+/* 日期紧急度颜色标注（条件格式化） */
+.note-database-container .urgency-red {
+  color: #c23b35;
+  font-weight: 600;
+}
+
+.note-database-container .urgency-orange {
+  color: #b65f00;
+}
+
+.note-database-container .urgency-green {
+  color: #448361;
+}
+
+/* ============================================================================
+ *  10. 底部"+ 新建"行
+ * ============================================================================ */
+
+.note-database-container .db-new-row td {
+  height: 30px;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.note-database-container .db-new-row-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 29px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.55;
+  text-align: left;
+}
+
+.note-database-container .db-new-row-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.note-database-container [data-note-database-row-path].is-new-record-highlight {
+  animation: db-new-record-highlight 2.2s ease-out;
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.note-database-container tr[data-note-database-row-path].is-new-record-highlight {
+  outline: none;
+}
+
+.note-database-container tr[data-note-database-row-path].is-new-record-highlight > td {
+  animation: db-new-record-cell-highlight 2.2s ease-out;
+}
+
+@keyframes db-new-record-highlight {
+  0% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    outline-color: transparent;
+  }
+}
+
+@keyframes db-new-record-cell-highlight {
+  0% {
+    background: color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary));
+  }
+  70% {
+    background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* 空状态提示 */
+.note-database-container .db-empty {
+  padding: 32px 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ============================================================================
+ *  11. 分组模式（Sticky 分组标题 + 表头层级）
+ *
+ *  滚动时的层级（从上到下）：
+ *  ┌─ db-header (z-index:30) — 工具栏，固定在最顶部
+ *  ├─ db-group-header (z-index:26) — "分组A (3)" 这样的标题
+ *  ├─ thead (z-index:25) — 列属性名行
+ *  └─ tbody — 数据行（正常滚动）
+ *
+ *  top 值说明：
+ *    group-header: header高度 - 30px
+ *    thead(分组):  header高度 - 2px
+ *    thead(未分组): header高度 - 25px
+ * ============================================================================ */
+
+/* 分组容器：纵向排列 */
+.note-database-container .db-grouped-table {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分组标题行（如 "使用中（3）"）
+   z-index:26 高于 thead 的 25，确保跨组滚动时分组标题不被属性行覆盖 */
+.note-database-container .db-group-header {
+  display: flex;
+  align-items: center;
+  min-height: var(--db-group-header-height);
+  margin: 0;
+  position: sticky;
+  top: calc(var(--db-group-header-top) + 8px + var(--db-selection-status-offset));
+  z-index: 26;
+  background: var(--background-primary);
+  box-shadow: inset 0 -1px 0 var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.note-database-container .db-group-header-label {
+  position: sticky;
+  left: 0;
+  z-index: 27;
+  display: inline-flex;
+  align-items: center;
+  max-height: calc(var(--db-group-header-height) - 10px);
+  max-width: min(480px, calc(100vw - 48px));
+  overflow: hidden;
+  background: var(--background-primary);
+  gap: 8px;
+  padding: 8px 12px 6px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-group-count {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.note-database-container .db-gallery-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+}
+
+.note-database-container .db-group-collapse-toggle,
+.note-database-container .db-board-group-toggle,
+.note-database-container .db-board-subgroup-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+}
+.note-database-container .db-list-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+  margin-left: 5px;
+}
+
+.note-database-container .db-group-collapse-toggle:hover,
+.note-database-container .db-gallery-group-toggle:hover,
+.note-database-container .db-board-group-toggle:hover,
+.note-database-container .db-board-subgroup-toggle:hover,
+.note-database-container .db-list-group-toggle:hover {
+  color: var(--text-normal);
+}
+
+.note-database-container .db-collapse-triangle {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+  transform: rotate(90deg);
+  transition: transform 160ms ease;
+}
+
+.note-database-container .is-collapsed > .db-collapse-triangle {
+  transform: rotate(0deg);
+}
+
+/* 分组之间的间距 */
+.note-database-container .db-grouped-table > .db-table-wrap + .db-group-header {
+  margin-top: 5px;
+}
+
+/* 分组模式下表头 sticky 在分组标题下方 */
+.note-database-container .db-grouped-table .db-table thead {
+  top: calc(var(--db-group-table-head-top) + 8px + var(--db-selection-status-offset));
+}
+
+
+/* ============================================================================
+ *  12. 分组排序弹窗（Modal 内的拖拽排序列表）
+ * ============================================================================ */
+
+.note-database-modal .db-modal-help {
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.note-database-modal .db-group-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.note-database-modal .db-group-order-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+}
+
+.note-database-modal .db-group-order-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-modal .db-group-order-row.is-drop-target {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-group-order-drag {
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-modal .db-group-order-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-group-order-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.note-database-modal .db-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.db-migrate-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  cursor: help;
+  flex-shrink: 0;
+}
+
+/* 删除数据库弹窗 */
+.note-database-modal .db-delete-modal-info {
+  margin: 12px 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.note-database-modal .db-delete-modal-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.note-database-modal .db-delete-modal-danger-row {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 16px;
+}
+
+.note-database-modal .db-delete-modal-primary-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+
+.note-database-modal .db-delete-modal-danger-row > .mod-warning {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* .base import confirmation modal table */
+.note-database-modal .base-import-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.note-database-modal .base-import-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.note-database-modal .base-import-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.note-database-modal .base-import-table select {
+  height: 26px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+/* ============================================================================
+ *  13. 看板视图（Board / Kanban）
+ *  水平排列的分组列，支持拖拽排序
+ * ============================================================================ */
+
+/* 看板整体：横向排列，水平滚动 */
+.note-database-container .db-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: max-content;
+  min-width: 100%;
+  min-height: 360px;
+  overflow: visible;
+  padding-bottom: 16px;
+}
+
+/* 单个看板列 */
+.note-database-container .db-board-column {
+  position: relative;
+  flex: 0 0 var(--db-board-column-width, 280px);  /* 列宽，可拖拽调整 */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 260px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  padding: 8px;
+}
+
+.note-database-container .db-board-column.is-drop-target {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.note-database-container .db-board-column.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-board-column.is-collapsed {
+  min-height: 0;
+}
+
+/* 看板列头部（分组名 + 数量） */
+.note-database-container .db-board-column-header {
+  position: sticky;
+  top: calc(var(--db-board-header-top) + 5px + var(--db-selection-status-offset));
+  z-index: 24;
+  display: flex;
+  align-items: center;
+  /* justify-content: space-between; */
+  gap: 8px;
+  min-height: 32px;
+  max-height: 32px;
+  margin: -10px -8px 0;
+  border: 1px solid transparent;
+  border-radius: 8px 8px 6px 6px;
+  background: var(--background-secondary);
+  box-shadow: 0 2px 0 var(--background-modifier-border);
+  cursor: grab;
+  padding: 6px 6px;
+}
+
+.note-database-container .db-board-column-header::before {
+  position: absolute;
+  /* inset: -4px -4px 0; */
+  z-index: -1;
+  border-radius: 10px 10px 8px 8px;
+  background: var(--background-secondary);
+  content: "";
+}
+
+.note-database-container .db-board-column-checkbox {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+/* 列宽拖拽手柄（列右边缘的隐形拖拽区域） */
+.note-database-container .db-board-column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  bottom: 0;
+  z-index: 25;
+  width: 10px;
+  cursor: col-resize;
+}
+
+.note-database-container .db-board-column-resize-handle::after {
+  position: absolute;
+  top: 10px;
+  right: 4px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+}
+
+.note-database-container .db-board-column-resize-handle:hover::after {
+  background: var(--interactive-accent);
+}
+
+.note-database-container .db-board-column-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-board-count {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* 卡片列表容器 */
+.note-database-container .db-board-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-database-container .db-board-subgroups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.note-database-container .db-board-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-database-container .db-board-subgroup-header {
+  position: sticky;
+  top: calc(var(--db-board-header-top) + 38px + var(--db-selection-status-offset));
+  z-index: 23;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  margin: -4px -8px 0;
+  /* border-radius: 7px; */
+  background: var(--background-primary);
+  /* box-shadow: 0 1px 0 var(--background-modifier-border); */
+  color: var(--text-muted);
+  padding: 6px 7px;
+}
+
+.note-database-container .db-board-subgroup-checkbox {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.note-database-container .db-board-subgroup-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-board-subgroup-count {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* 单张看板卡片 */
+.note-database-container .db-board-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  cursor: pointer;
+  padding: 10px;
+  transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.note-database-container .db-board-card:hover {
+  background: var(--background-modifier-hover);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.note-database-container .db-board-card.is-dragging {
+  opacity: 0.45;
+}
+
+.note-database-container .db-board-card.is-drop-target {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+/* 卡片顶部：复选框 + 打开按钮 */
+.note-database-container .db-board-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.note-database-container .db-board-card-checkbox {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.note-database-container .db-board-card-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-container .db-board-card-open:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 卡片标题（笔记名） */
+.note-database-container .db-board-card-title {
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+/* 卡片属性字段区域 */
+.note-database-container .db-board-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+/* 单个属性字段：标签名 | 值 */
+.note-database-container .db-board-card-field {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, var(--db-card-field-width, 1fr));
+  align-items: start;
+  gap: 8px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: text;
+  font-size: 12px;
+  padding: 2px;
+}
+
+.note-database-container .db-board-card-field:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-board-card-field-wrap {
+  display: block;
+}
+
+.note-database-container .db-board-card-field-wrap > span:first-child {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.note-database-container .db-board-card-field-wrap .db-board-card-value {
+  text-align: left;
+  white-space: normal;
+}
+
+.note-database-container .db-board-card-field-wrap .db-board-card-value *,
+.note-database-container .db-board-card-field-wrap .db-board-card-link {
+  white-space: normal;
+}
+
+.note-database-container .db-board-card-field span:first-child {
+  color: var(--text-faint);
+}
+
+/* 图片字段特殊布局 */
+.note-database-container .db-board-card-field.is-image-field {
+  display: block;
+  margin: 6px 0 0;
+  cursor: text;
+  padding: 0 6px;
+}
+
+.note-database-container .db-board-card-field.is-image-field > span:first-child {
+  display: none;
+}
+
+.note-database-container .db-board-card-field.is-image-field .db-board-card-value {
+  text-align: left;
+}
+
+.note-database-container .db-board-card-value {
+  min-width: 0;
+  color: var(--text-normal);
+  text-align: right;
+  word-break: break-word;
+}
+
+.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field) .db-board-card-value:not(.has-badges),
+.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field) .db-board-card-link {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* 卡片底部标签区域 */
+.note-database-container .db-board-card-badges {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 卡片内图片网格 */
+.note-database-container .db-board-card-images {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 图片按钮（点击可放大） */
+.note-database-container .db-board-card-image-button {
+  display: block;
+  overflow: visible;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  box-shadow: none;
+  cursor: zoom-in;
+  line-height: 0;
+  padding: 0;
+}
+
+.note-database-container .db-board-card-image-button img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+}
+
+.note-database-container .db-board-card-more {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* 卡片内笔记链接 */
+.note-database-container .db-board-card-link {
+  display: block;
+  overflow: hidden;
+  color: var(--text-accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-board-card-field-wrap .db-board-card-link {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.note-database-container .db-board-card-value.db-cell-editing {
+  text-align: left;
+}
+
+/* 看板底部"新建卡片"和"新增列"按钮 */
+.note-database-container .db-board-new-card,
+.note-database-container .db-board-add-column button {
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-align: left;
+}
+
+.note-database-container .db-board-new-card:hover,
+.note-database-container .db-board-add-column button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-board-add-column {
+  flex: 0 0 180px;
+  padding: 8px;
+}
+
+/* ============================================================================
+ *  13b. 画廊视图（Gallery）
+ *  响应式卡片网格，适配卡片式图库展示方式
+ * ============================================================================ */
+
+.note-database-container .db-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--db-gallery-card-width, 250px)), var(--db-gallery-card-width, 250px)));
+  align-items: start;
+  gap: 14px;
+  width: 100%;
+  padding-bottom: 16px;
+}
+
+.note-database-container .db-gallery-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  padding-bottom: 16px;
+}
+
+.note-database-container .db-gallery-group {
+  min-width: 0;
+}
+
+.note-database-container .db-gallery-group-header,
+.note-database-container .db-gallery-total-header {
+  position: sticky;
+  top: calc(var(--db-table-header-top) - 22px + var(--db-selection-status-offset));
+  z-index: 23;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  padding: 4px 7px;
+}
+
+.note-database-container .db-gallery-total-header {
+  margin-top: 10px;
+}
+
+.note-database-container .db-gallery-group-checkbox {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.note-database-container .db-gallery-group-title {
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.note-database-container .db-gallery-group-count {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.note-database-container .db-gallery-group.is-collapsed {
+  padding-bottom: 0;
+}
+
+.note-database-container .db-gallery-card {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.note-database-container .db-gallery-card-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 2;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.note-database-container .db-gallery-card-resize-handle::after {
+  position: absolute;
+  top: 10px;
+  right: 3px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+}
+
+.note-database-container .db-gallery-card-resize-handle:hover::after {
+  background: var(--interactive-accent);
+}
+
+.note-database-container .db-gallery-card:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-modifier-hover);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.note-database-container .db-gallery-cover {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: var(--db-gallery-cover-ratio, 0.75);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.note-database-container .db-gallery-cover.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-gallery-cover-placeholder svg {
+  width: 28px;
+  height: 28px;
+}
+
+.note-database-container .db-gallery-cover-button {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: zoom-in;
+  line-height: 0;
+  padding: 0;
+}
+
+.note-database-container .db-gallery-cover-button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: var(--db-gallery-image-fit, cover);
+}
+
+.note-database-container .db-gallery-card-body {
+  padding: 10px;
+}
+
+.note-database-container .db-gallery-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  margin-bottom: 6px;
+}
+
+.note-database-container .db-gallery-card-checkbox {
+  margin: 0;
+}
+
+.note-database-container .db-gallery-card-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-container .db-gallery-card-open:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-gallery-card-title {
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.note-database-container .db-gallery-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.note-database-container .db-gallery-field {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, var(--db-card-field-width, 1fr));
+  align-items: start;
+  gap: 8px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: text;
+  font-size: 12px;
+  padding: 2px;
+}
+
+.note-database-container .db-gallery-field:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-gallery-field-wrap {
+  display: block;
+}
+
+.note-database-container .db-gallery-field-wrap .db-gallery-field-label {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.note-database-container .db-gallery-field-label {
+  color: var(--text-faint);
+}
+
+.note-database-container .db-gallery-field-value {
+  min-width: 0;
+  color: var(--text-normal);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.note-database-container .db-gallery-field:not(.db-gallery-field-wrap) .db-gallery-field-value:not(.has-badges),
+.note-database-container .db-gallery-field:not(.db-gallery-field-wrap) .db-gallery-link {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.note-database-container .db-gallery-field-wrap .db-gallery-field-value {
+  text-align: left;
+}
+
+.note-database-container .db-gallery-field-value.db-cell-editing {
+  text-align: left;
+}
+
+.note-database-container .db-gallery-badges {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.note-database-container .db-gallery-link {
+  display: block;
+  overflow: hidden;
+  color: var(--text-accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-gallery-field-wrap .db-gallery-link {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.note-database-container .db-card-empty-placeholder {
+  color: var(--text-faint);
+}
+
+.note-database-container .db-gallery-new-card {
+  min-height: 44px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-align: left;
+  padding: 10px;
+}
+
+.note-database-container .db-gallery-new-card:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* ============================================================================
+ *  13b. 列表视图
+ * ============================================================================ */
+
+.note-database-container .db-list,
+.note-database-container .db-list-grouped {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.note-database-container .db-list-group {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.note-database-container .db-list-group > .db-list {
+  margin-top: 0;
+}
+
+.note-database-container > .db-list {
+  margin-top: 2px;
+}
+
+.note-database-container .db-list-group-header,
+.note-database-container .db-list-total-header {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  position: sticky;
+  top: calc(var(--db-group-header-top) + 8px + var(--db-selection-status-offset));
+  z-index: 26;
+  background: var(--background-primary);
+  box-shadow: inset 0 -1px 0 var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0px 4px;
+}
+
+.note-database-container .db-list-total-header {
+  margin-top: 10px;
+}
+
+.note-database-container .db-list-group-header-label {
+  position: sticky;
+  left: 0;
+  z-index: 27;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-height: calc(var(--db-group-header-height) - 10px);
+  max-width: min(480px, calc(100vw - 48px));
+  overflow: hidden;
+  background: var(--background-primary);
+  padding: 5px 12px 4px 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-group-checkbox {
+  flex: 0 0 auto;
+  margin: 7px;
+}
+
+.note-database-container .db-list-group-count {
+  min-width: 18px;
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  padding: 0 6px;
+}
+
+.note-database-container .db-list-row {
+  display: grid;
+  grid-template-columns: auto max-content;
+  align-items: center;
+  justify-content: start;
+  gap: 10px;
+  min-height: 44px;
+  width: max-content;
+  min-width: 100%;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  cursor: pointer;
+  padding: 8px 10px;
+}
+
+.note-database-container .db-list-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-list-row-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-database-container .db-list-row-main {
+  width: max-content;
+  min-width: 0;
+  text-align: left;
+}
+
+.note-database-container .db-list-row-title {
+  color: var(--text-normal);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-row-meta {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px 12px;
+  margin-top: 4px;
+  width: max-content;
+  min-width: 0;
+  overflow: visible;
+}
+
+.note-database-container .db-list-field {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 180px;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.note-database-container .db-list-field-wrap {
+  align-items: center;
+  width: max-content;
+  max-width: none;
+}
+
+.note-database-container .db-list-field-label {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-list-field-value {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-field-wrap .db-list-field-value {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-badges {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.note-database-container .db-list-field-wrap .db-list-badges {
+  overflow: visible;
+}
+
+.note-database-container .db-list-link {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-field-wrap .db-list-link {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.note-database-container .db-list-row-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-container .db-list-row-open:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-list-new-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.note-database-container .db-list-new-row:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* ============================================================================
+ *  14. 浮动面板（筛选、排序、列管理）
+ *  position: absolute 相对于容器定位，z-index:50 确保在表格之上
+ * ============================================================================ */
+
+.note-database-container .db-filter-panel,
+.note-database-container .db-view-config-panel,
+.note-database-container .db-column-manager,
+.note-database-container .db-database-popover,
+.note-database-container .db-group-popover,
+.note-database-container .db-export-popover,
+.note-database-container .db-view-tab-popover {
+  max-width: min(760px, calc(100vw - 72px));
+  position: absolute;
+  /* 顶部位置 = 工具栏高度（JS 动态测量） */
+  top: var(--db-table-header-top);
+  right: 24px;
+  z-index: 50;
+  width: min(520px, calc(100vw - 72px));
+  max-height: min(560px, calc(100vh - 140px));
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.note-database-container .db-view-config-panel {
+  width: min(440px, calc(100vw - 72px));
+}
+
+.note-database-container .db-group-popover {
+  width: min(380px, calc(100vw - 72px));
+  max-height: min(520px, calc(100vh - 140px));
+}
+
+.note-database-container .db-export-popover,
+.note-database-container .db-view-tab-popover {
+  width: min(320px, calc(100vw - 72px));
+  max-height: min(420px, calc(100vh - 140px));
+}
+
+.note-database-container .db-database-popover {
+  width: min(420px, calc(100vw - 72px));
+  max-height: min(520px, calc(100vh - 140px));
+}
+
+.note-database-container .db-database-popover-section-title {
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 6px 0 3px;
+  padding: 7px 4px 0;
+}
+
+.note-database-container .db-database-popover-section-title:first-of-type {
+  border-top: 0;
+  margin-top: 2px;
+  padding-top: 0;
+}
+
+.note-database-container .db-database-popover-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 6px;
+}
+
+.note-database-container .db-database-popover-row.has-source {
+  grid-template-columns: 18px minmax(0, 1fr) minmax(112px, 0.7fr) 16px;
+}
+
+.note-database-container .db-database-popover-row:hover,
+.note-database-container .db-database-popover-row.is-active,
+.note-database-container .db-database-popover-row.is-drop-target {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-database-popover-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-database-popover-row.is-draggable .db-database-popover-drag {
+  cursor: grab;
+}
+
+.note-database-container .db-database-popover-drag {
+  color: var(--text-faint);
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-container .db-database-popover-label,
+.note-database-container .db-database-popover-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-database-popover-source {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.note-database-container .db-database-popover-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-accent);
+}
+
+.note-database-container .db-group-popover-section-title {
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 6px 0 3px;
+  padding: 7px 4px 0;
+}
+
+.note-database-container .db-group-popover-section-title:first-of-type {
+  border-top: 0;
+  margin-top: 2px;
+  padding-top: 0;
+}
+
+.note-database-container .db-group-popover-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  padding: 3px 6px;
+}
+
+.note-database-container .db-group-popover-row:hover,
+.note-database-container .db-group-popover-row.is-active {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-group-popover-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-group-popover-marker svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-group-popover-label {
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-export-popover-row,
+.note-database-container .db-view-tab-popover-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 6px;
+}
+
+.note-database-container .db-export-popover-row:hover,
+.note-database-container .db-view-tab-popover-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-view-tab-popover-row.is-danger:hover {
+  color: var(--text-error);
+}
+
+.note-database-container .db-export-popover-marker,
+.note-database-container .db-view-tab-popover-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-view-tab-popover-row.is-danger:hover .db-view-tab-popover-marker {
+  color: var(--text-error);
+}
+
+.note-database-container .db-export-popover-marker svg,
+.note-database-container .db-view-tab-popover-marker svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-export-popover-label,
+.note-database-container .db-view-tab-popover-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-group-popover-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-accent);
+}
+
+.note-database-container .db-group-popover-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-view-config-section-title {
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 700;
+  margin: 12px 0 4px;
+  padding-top: 10px;
+}
+
+.note-database-container .db-view-config-section-title:first-of-type {
+  border-top: 0;
+  margin-top: 4px;
+  padding-top: 0;
+}
+
+.note-database-container .db-view-config-readonly-note {
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 6px 0 8px;
+  padding: 7px 8px;
+}
+
+.note-database-container .db-view-config-row {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+
+.note-database-container .db-view-config-row-top {
+  align-items: start;
+}
+
+.note-database-container .db-view-config-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.note-database-container .db-view-config-text,
+.note-database-container .db-view-config-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+  padding: 5px 7px;
+}
+
+.note-database-container .db-view-config-field {
+  min-width: 0;
+}
+
+.note-database-container .db-view-config-inline-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-database-container .db-view-config-inline-controls .db-control-select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.note-database-container .db-view-config-inline-controls button {
+  flex: 0 0 auto;
+}
+
+.note-database-container .db-view-config-help {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 4px;
+}
+
+.note-database-container .db-view-config-textarea {
+  min-height: 58px;
+  resize: vertical;
+}
+
+.note-database-container .db-view-config-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-database-container .db-view-config-number {
+  width: 64px;
+}
+
+/* 面板头部（标题 + 关闭按钮） */
+.note-database-container .db-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.note-database-container .db-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.note-database-container .db-panel-title {
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 列管理：全选/全不选 */
+.note-database-container .db-column-manager-toggle-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.note-database-container .db-column-manager-toggle-all input {
+  margin: 0;
+}
+
+/* ============================================================================
+ *  15. 面板通用行样式（筛选条件行、排序规则行）
+ * ============================================================================ */
+
+.note-database-container .db-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.note-database-container .db-panel-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-sort-rule-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-sort-rule-row.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+/* 拖拽手柄（⋮⋮） */
+.note-database-container .db-panel-drag {
+  flex: 0 0 18px;
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-container .db-panel-row select,
+.note-database-container .db-panel-row input {
+  height: 28px;
+  min-width: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
+.note-database-container .db-panel-row input {
+  flex: 1;
+  padding: 0 8px;
+}
+
+.note-database-container .db-panel-empty-value {
+  flex: 1;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.note-database-container .db-panel-row .db-filter-date-segments {
+  flex: 1;
+  max-width: 140px;
+  height: 28px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  padding: 0 4px;
+  box-sizing: border-box;
+}
+
+.note-database-container .db-panel-row .db-filter-date-segments input {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 22px;
+  border: 0;
+  padding: 0 2px;
+}
+
+.note-database-modal .db-csv-markdown-import-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.note-database-modal .db-csv-markdown-import-row > span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.note-database-modal .db-csv-markdown-import-row input {
+  width: 100%;
+}
+
+.note-database-modal .db-csv-markdown-option-row {
+  margin: 18px 0 6px;
+}
+
+.note-database-modal .db-csv-markdown-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  line-height: 1.4;
+}
+
+.note-database-modal .db-csv-markdown-option-label input[type="checkbox"] {
+  position: relative;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--checkbox-border-color, var(--background-modifier-border-hover));
+  border-radius: 4px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--background-primary);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.note-database-modal .db-csv-markdown-option-label input[type="checkbox"]:checked {
+  border-color: var(--interactive-accent);
+  background: var(--interactive-accent);
+  background-image: url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.1 7.2L5.7 9.8L10.9 4.2' stroke='white' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 14px 14px;
+}
+
+.note-database-modal .db-csv-markdown-option-label input[type="checkbox"]:checked::after {
+  display: none;
+  content: "";
+}
+
+.note-database-modal .db-csv-markdown-option-label span {
+  min-width: 0;
+}
+
+.note-database-modal .db-hidden-file-input {
+  display: none;
+}
+
+.note-database-modal .db-file-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-database-modal .db-file-picker-label {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 面板内通用按钮 */
+.note-database-container .db-panel-button {
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.note-database-container .db-panel-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 面板空状态 */
+.note-database-container .db-panel-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+/* ============================================================================
+ *  16. 列管理面板的行（拖拽排序 + 可见性 + 换行 + 上移下移 + 编辑 + 隐藏）
+ *  grid-template-columns: 拖拽 | 图标 | 名称 | 换行 | 上移 | 下移 | 编辑 | 隐藏
+ * ============================================================================ */
+
+.note-database-container .db-column-manager-row {
+  display: grid;
+  grid-template-columns: 18px 20px minmax(120px, 1fr) auto auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 2px 4px;
+}
+
+.note-database-container .db-column-manager-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-column-manager-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-column-manager-row.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.note-database-container .db-column-drag {
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-container .db-column-name-wrap {
+  min-width: 0;
+}
+
+.note-database-container .db-column-name {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-column-group-hint {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-column-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.note-database-container .db-column-type-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-column-type-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-column-wrap-toggle.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+/* ============================================================================
+ *  17. Modal 弹窗通用样式（列编辑、公式编辑、状态选项编辑等）
+ * ============================================================================ */
+
+.note-database-modal label {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.note-database-modal input,
+.note-database-modal select,
+.note-database-modal textarea {
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.note-database-modal input,
+.note-database-modal select {
+  height: 32px;
+}
+
+.note-database-modal textarea {
+  min-height: 140px;
+  padding: 8px;
+  font-family: var(--font-monospace);
+  resize: vertical;
+}
+
+/* ============================================================================
+ *  18. 公式编辑器 Modal
+ *  左侧：公式编辑 + 实时预览
+ *  右侧：字段 / 函数 / 示例帮助
+ * ============================================================================ */
+
+.modal.formula-workbench-modal-host {
+  width: min(1240px, 96vw);
+  max-width: min(1240px, 96vw);
+}
+
+.formula-workbench-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  --db-formula-control-radius: 8px;
+  --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 62%, transparent);
+  --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  max-height: min(780px, calc(100vh - 96px));
+  min-height: min(680px, calc(100vh - 96px));
+  overflow: hidden;
+}
+
+.formula-workbench-modal,
+.formula-workbench-modal .db-formula-workbench,
+.formula-workbench-modal .db-formula-textarea,
+.formula-workbench-modal .db-formula-category-list,
+.formula-workbench-modal .db-formula-function-list-compact,
+.formula-workbench-modal .db-formula-function-detail,
+.formula-workbench-modal .db-formula-preview-details,
+.formula-workbench-modal .db-formula-property-suggestions {
+  scrollbar-color: var(--db-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.formula-workbench-modal::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-workbench::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-textarea::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-category-list::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-function-list-compact::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-function-detail::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-preview-details::-webkit-scrollbar,
+.formula-workbench-modal .db-formula-property-suggestions::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.formula-workbench-modal::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-workbench::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-textarea::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-category-list::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-function-list-compact::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-function-detail::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-preview-details::-webkit-scrollbar-track,
+.formula-workbench-modal .db-formula-property-suggestions::-webkit-scrollbar-track {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.formula-workbench-modal::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-workbench::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-textarea::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-category-list::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-function-list-compact::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-function-detail::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-preview-details::-webkit-scrollbar-corner,
+.formula-workbench-modal .db-formula-property-suggestions::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.formula-workbench-modal::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-workbench::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-textarea::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-category-list::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-function-list-compact::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-function-detail::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-preview-details::-webkit-scrollbar-thumb,
+.formula-workbench-modal .db-formula-property-suggestions::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 999px;
+  background-color: var(--db-scrollbar-thumb);
+  box-shadow: none;
+}
+
+.formula-workbench-modal::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-workbench::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-textarea::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-category-list::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-function-list-compact::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-function-detail::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-preview-details::-webkit-scrollbar-thumb:hover,
+.formula-workbench-modal .db-formula-property-suggestions::-webkit-scrollbar-thumb:hover {
+  background-color: var(--db-scrollbar-thumb-hover);
+}
+
+.note-database-modal .db-formula-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-right: 15px;
+}
+
+.note-database-modal .db-formula-title-wrap {
+  min-width: 0;
+}
+
+.formula-workbench-modal h3 {
+  margin: 0;
+}
+
+.note-database-modal .db-formula-subtitle {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.note-database-modal .db-formula-result-type {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-result-type select {
+  width: auto;
+  min-width: 104px;
+  height: 32px;
+  margin-top: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-formula-control-radius);
+  background-color: var(--background-primary);
+  box-shadow: none;
+  color: var(--text-normal);
+  padding: 0 30px 0 10px;
+}
+
+.note-database-modal .db-formula-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 410px);
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.note-database-modal .db-formula-editor-pane,
+.note-database-modal .db-formula-help-pane {
+  min-width: 0;
+}
+
+.note-database-modal .db-formula-editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.note-database-modal .db-formula-help-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.note-database-modal .db-formula-section-title {
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.note-database-modal .db-formula-editor-shell {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  height: 270px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.note-database-modal .db-formula-line-numbers {
+  overflow: hidden;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 12px 9px 12px 0;
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+.note-database-modal .db-formula-code-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.note-database-modal .db-formula-highlight,
+.note-database-modal .db-formula-textarea {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-monospace);
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 12px;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.note-database-modal .db-formula-highlight {
+  overflow: hidden;
+  color: var(--code-normal, var(--text-normal));
+  pointer-events: none;
+}
+
+.note-database-modal .db-formula-highlight code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.note-database-modal .db-formula-textarea {
+  z-index: 1;
+  color: transparent;
+  caret-color: var(--text-normal);
+  outline: none;
+  overflow: auto;
+  resize: none;
+  scrollbar-gutter: stable;
+}
+
+.note-database-modal .db-formula-textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+.note-database-modal .db-formula-textarea::selection {
+  background: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+  color: transparent;
+}
+
+.note-database-modal .db-formula-token-field,
+.note-database-modal .db-formula-token-field-key {
+  color: var(--code-property, var(--text-accent));
+  font-weight: 600;
+}
+
+.note-database-modal .db-formula-token-is-unknown {
+  color: var(--text-error);
+}
+
+.note-database-modal .db-formula-token-string {
+  color: var(--code-string, var(--color-green));
+}
+
+.note-database-modal .db-formula-token-function {
+  color: var(--code-function, var(--code-property, var(--color-blue)));
+  font-weight: 700;
+}
+
+.note-database-modal .db-formula-token-number {
+  color: var(--code-value, var(--color-orange));
+}
+
+.note-database-modal .db-formula-token-keyword {
+  color: var(--code-keyword, var(--color-purple));
+  font-weight: 600;
+}
+
+.note-database-modal .db-formula-token-operator {
+  color: var(--code-operator, var(--code-punctuation, var(--text-faint)));
+}
+
+.note-database-modal .db-formula-token-bracket-match {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  color: var(--text-normal);
+}
+
+.note-database-modal .db-formula-reference-note {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* 公式预览区 */
+.note-database-modal .db-formula-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.note-database-modal .db-formula-preview-row {
+  display: grid;
+  grid-template-columns: 72px minmax(180px, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.note-database-modal .db-formula-result-card {
+  margin-top: 10px;
+}
+
+.note-database-modal .db-formula-preview-label {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.note-database-modal .db-formula-preview-output {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--code-background, var(--background-primary));
+  color: var(--code-normal, var(--text-normal));
+  font-family: var(--font-monospace);
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-preview-output.is-error,
+.note-database-modal .db-formula-preview-status.is-error {
+  color: var(--text-error);
+}
+
+.note-database-modal .db-formula-preview-output.is-warning,
+.note-database-modal .db-formula-preview-status.is-warning {
+  color: var(--text-warning);
+}
+
+.note-database-modal .db-formula-preview-status.is-ok {
+  color: var(--text-success);
+}
+
+.note-database-modal .db-formula-preview-status {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.note-database-modal .db-formula-preview-details {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  margin-top: 12px;
+  overflow: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.note-database-modal .db-formula-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-database-modal .db-formula-preview-section-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.note-database-modal .db-formula-preview-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.note-database-modal .db-formula-preview-field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.note-database-modal .db-formula-preview-field-item {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.note-database-modal .db-formula-preview-field-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.note-database-modal .db-formula-preview-field-name {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-preview-field-ref {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-preview-field-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.note-database-modal .db-formula-preview-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.note-database-modal .db-formula-preview-steps li {
+  min-width: 0;
+  color: var(--text-faint);
+}
+
+.note-database-modal .db-formula-preview-step-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.note-database-modal .db-formula-preview-step-code {
+  display: block;
+  max-width: 100%;
+  max-height: 96px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--code-background, var(--background-primary));
+  box-shadow: none;
+  color: var(--code-normal, var(--text-normal));
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 7px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-database-modal .db-formula-preview select {
+  height: 32px;
+  margin-top: 0;
+}
+
+/* 属性自动补全弹出列表 */
+.note-database-modal .db-formula-property-suggestions {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  width: min(420px, calc(100% - 24px));
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  box-shadow: none;
+  padding: 6px;
+}
+
+.note-database-modal .db-formula-property-suggestions.is-visible {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px;
+}
+
+.note-database-modal .db-formula-property-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-normal);
+  cursor: pointer;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.note-database-modal .db-formula-property-suggestion:hover,
+.note-database-modal .db-formula-property-suggestion.is-selected {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-formula-property-suggestion span:last-child {
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+}
+
+.note-database-modal button {
+  border-radius: 8px;
+}
+
+/* Modal 底部按钮行 */
+.note-database-modal .db-modal-button-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.formula-workbench-modal > .db-modal-button-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--modal-background, var(--background-primary));
+}
+
+.note-database-modal .db-formula-hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .note-database-modal .db-formula-header,
+  .note-database-modal .db-formula-result-type {
+    align-items: stretch;
+  }
+
+  .note-database-modal .db-formula-header {
+    flex-direction: column;
+  }
+
+  .note-database-modal .db-formula-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .note-database-modal .db-formula-preview {
+    flex: 0 0 auto;
+  }
+
+  .note-database-modal .db-formula-preview-details {
+    max-height: 260px;
+  }
+}
+
+/* ============================================================================
+ *  19. 状态选项编辑器（颜色 + 名称 + 拖拽排序）
+ * ============================================================================ */
+
+.note-database-modal .db-status-preset-list {
+  margin-top: 10px;
+}
+
+.note-database-modal .db-status-preset-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.note-database-modal .db-status-preset-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.note-database-modal .db-status-preset-button {
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
+.note-database-modal .db-status-preset-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-status-preset-default-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.note-database-modal .db-status-preset-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  margin: 10px -16px 10px 0;
+  overflow: auto;
+  padding-right: 16px;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 70%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.note-database-modal .db-status-preset-manager-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.note-database-modal .db-status-preset-manager-list::-webkit-scrollbar-track,
+.note-database-modal .db-status-preset-manager-list::-webkit-scrollbar-corner {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.note-database-modal .db-status-preset-manager-list::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 70%, transparent);
+  box-shadow: none;
+}
+
+.note-database-modal .db-status-preset-manager-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 88%, transparent);
+}
+
+.note-database-modal .db-status-preset-manager-row {
+  display: grid;
+  grid-template-areas:
+    "name controls"
+    "preview controls";
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .db-status-preset-manager-row:last-child {
+  border-bottom: 0;
+}
+
+.note-database-modal .db-status-preset-name-input {
+  grid-area: name;
+  width: 100%;
+  margin: 0;
+  box-shadow: none;
+}
+
+.note-database-modal .db-status-preset-preview {
+  display: flex;
+  align-items: center;
+  grid-area: preview;
+  flex-wrap: nowrap;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 0 2px;
+  scrollbar-width: none;
+}
+
+.note-database-modal .db-status-preset-preview::-webkit-scrollbar {
+  display: none;
+}
+
+.note-database-modal .db-status-preset-preview .status-badge {
+  flex: 0 0 auto;
+}
+
+.note-database-modal .db-status-preset-more,
+.note-database-modal .db-status-preset-default-badge {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.note-database-modal .db-status-preset-manager-controls {
+  display: flex;
+  align-items: center;
+  grid-area: controls;
+  gap: 4px;
+}
+
+.note-database-modal .db-status-preset-manager-controls button {
+  margin: 0;
+  box-shadow: none;
+  padding: 4px 8px;
+}
+
+.note-database-modal .db-status-preset-manager-controls button:hover {
+  box-shadow: none;
+}
+
+.note-database-modal .db-status-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.note-database-modal .db-status-option-row {
+  display: grid;
+  grid-template-areas:
+    "drag preview input controls"
+    "drag palette palette .";
+  grid-template-columns: 22px minmax(120px, auto) minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.note-database-modal .db-status-option-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-modal .db-status-option-row.is-drop-target {
+  border-radius: 8px;
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-status-option-drag {
+  grid-area: drag;
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-modal .db-status-option-preview {
+  grid-area: preview;
+  align-self: center;
+  justify-self: start;
+}
+
+.note-database-modal .db-status-option-input {
+  grid-area: input;
+  align-self: center;
+}
+
+.note-database-modal .db-status-option-row input,
+.note-database-modal .db-status-option-row select {
+  margin-top: 0;
+}
+
+/* 颜色选择调色板 */
+.note-database-modal .db-status-color-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  grid-area: palette;
+  min-width: 0;
+}
+
+.note-database-modal .db-status-option-controls {
+  display: flex;
+  grid-area: controls;
+  gap: 4px;
+}
+
+/* 单个颜色按钮 */
+.note-database-modal .db-status-color-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-modal .db-status-color-button.is-selected {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* 颜色指示圆点 */
+.note-database-modal .db-status-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  background: currentColor;
+}
+
+/* ============================================================================
+ *  20. 公式帮助浏览器（分类 | 条目列表 | 详情）
+ * ============================================================================ */
+
+.note-database-modal .db-formula-browser {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-rows: minmax(220px, 1fr) minmax(170px, auto);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: min(560px, calc(100vh - 230px));
+  margin-top: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.note-database-modal .db-formula-browser-three-col {
+  display: grid;
+  grid-template-columns: 150px 300px 1fr;
+  min-height: 320px;
+  max-height: 360px;
+}
+
+.note-database-modal .db-formula-category-list,
+.note-database-modal .db-formula-function-list-compact,
+.note-database-modal .db-formula-function-detail {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.note-database-modal .db-formula-category-list {
+  grid-row: 1 / -1;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.note-database-modal .db-formula-function-list-compact {
+  min-height: 0;
+}
+
+.note-database-modal .db-formula-function-detail {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .db-formula-category,
+.note-database-modal .db-formula-function-row {
+  display: flex;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.note-database-modal .db-formula-category {
+  justify-content: flex-start;
+  min-height: 32px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.note-database-modal .db-formula-category.is-active,
+.note-database-modal .db-formula-function-row.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.note-database-modal .db-formula-function-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+  height: auto;
+  min-height: 54px;
+  margin: 0;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.note-database-modal .db-formula-function-row span:first-child {
+  color: var(--text-normal);
+  font-weight: 700;
+}
+
+.note-database-modal .db-formula-function-row span:last-child,
+.note-database-modal .db-formula-signature {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.note-database-modal .db-formula-field-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+}
+
+.note-database-modal .db-formula-field-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+}
+
+.note-database-modal .db-formula-field-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-database-modal .db-formula-help-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* 函数详情面板 */
+.note-database-modal .db-formula-function-detail h4 {
+  margin: 2px 0 4px;
+  font-size: 18px;
+}
+
+.note-database-modal .db-formula-function-desc {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* "插入示例"按钮 */
+.note-database-modal .db-formula-insert-example {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  max-height: 150px;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-formula-control-radius);
+  background: var(--code-background, var(--background-primary));
+  box-shadow: none;
+  color: var(--code-normal, var(--text-accent));
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 10px;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-database-modal .db-formula-help-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.note-database-modal .db-formula-help-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-database-modal .db-formula-copy-ai-prompt {
+  height: 32px;
+  margin: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-formula-control-radius);
+  background: var(--background-primary);
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-copy-ai-prompt:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  border-color: var(--background-modifier-border-hover);
+  box-shadow: none;
+}
+
+.note-database-modal .db-formula-copy-ai-prompt:focus-visible,
+.note-database-modal .db-formula-result-type select:focus-visible,
+.note-database-modal .db-formula-insert-example:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+  outline: none;
+}
+
+.note-database-modal .db-formula-help-search {
+  width: 100%;
+  margin: 0;
+}
+
+.note-database-modal .db-formula-empty-help {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px;
+}
+
+/* 浏览器顶栏 */
+.note-database-modal .db-formula-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 公式函数列表（完整模式，弹出框外使用） */
+.note-database-modal .db-formula-function-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  gap: 8px;
+}
+
+.note-database-modal .db-formula-function-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+}
+
+.note-database-modal .db-formula-function-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-formula-function-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.note-database-modal .db-formula-function-title span:last-child,
+.note-database-modal .db-formula-function-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.note-database-modal .db-formula-function-example {
+  margin-top: 6px;
+  color: var(--text-accent);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  white-space: normal;
+}
+
+/* ============================================================================
+ *  21. 列头拖拽排序（drag & drop 视觉反馈）
+ * ============================================================================ */
+
+.note-database-container .db-table th[draggable] {
+  cursor: grab;
+}
+
+.note-database-container .db-table th[draggable]:active {
+  cursor: grabbing;
+}
+
+.note-database-container .db-table th.db-dragging {
+  opacity: 0.45;
+}
+
+.note-database-container .db-table th.db-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 2px 0 0 var(--interactive-accent), inset -2px 0 0 var(--interactive-accent);
+}
+
+/* ============================================================================
+ *  22. 数据库文件标签页/标题栏图标
+ * ============================================================================ */
+
+.workspace-tab-header.note-database-file-tab .workspace-tab-header-inner-title::before,
+.workspace-leaf-content.note-database-file-leaf .view-header-title::before,
+.workspace-leaf-content.note-database-file-leaf .inline-title::before {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  color: var(--text-accent);
+  content: "🗄️";
+  font-size: 0.95em;
+  line-height: 1;
+  vertical-align: -0.08em;
+}
+
+/* ============================================================================
+ *  23. 数据库文件列表 Modal（查看/打开/删除数据库文件）
+ * ============================================================================ */
+
+.note-database-modal .db-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.note-database-modal .db-file-list-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+}
+
+.note-database-modal .db-file-list-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-modal .db-file-list-row.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.note-database-modal .db-file-list-drag {
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+}
+
+.note-database-modal .db-file-list-title {
+  font-weight: 600;
+}
+
+.note-database-modal .db-file-list-path {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+ *  24. 内嵌视图（代码块 / frontmatter 渲染）
+ *
+ *  内嵌容器自身是滚动容器（overflow:auto + max-height:80vh），
+ *  所以 sticky 表头相对于此容器生效，而非外部页面。
+ *
+ *  Sticky 层级（容器内）：
+ *    top:0    → db-header（工具栏）
+ *    top:header高度    → group-header（分组标题）
+ *    top:header高度+30 → thead（列属性行）
+ * ============================================================================ */
+
+.note-database-embed {
+  margin: 12px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+}
+
+/* 内嵌容器：自身作为滚动容器，限制最大高度 */
+.note-database-embed.note-database-container {
+  --db-group-header-top: calc(var(--db-table-header-top) - 2px);
+  --db-group-table-head-top: calc(var(--db-group-header-top) + var(--db-group-header-height));
+  --db-board-header-top: calc(var(--db-table-header-top) - 7px);
+  --db-gallery-header-top: calc(var(--db-table-header-top) - 2px);
+  height: auto;
+  max-height: 80vh;    /* 超过视口 80% 时出现垂直滚动条 */
+  overflow: auto;       /* 同时处理水平和垂直滚动 */
+  padding: 0 12px 12px;
+  font-family: var(--font-interface);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* 表格内容自适应列宽，超出容器时产生水平滚动 */
+.note-database-embed .db-table {
+  min-width: max-content;
+  font-family: var(--font-interface);
+  font-size: 13px;
+  margin: 0;
+}
+
+.note-database-embed.note-database-container table.db-table {
+  display: table;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  border: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-interface);
+  font-size: 13px;
+  line-height: 1.4;
+  table-layout: fixed;
+}
+
+.note-database-embed.note-database-container table.db-table thead {
+  display: table-header-group;
+}
+
+.note-database-embed.note-database-container table.db-table tbody {
+  display: table-row-group;
+}
+
+.note-database-embed.note-database-container table.db-table tr {
+  display: table-row;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.note-database-embed .db-table th,
+.note-database-embed .db-table td {
+  border-top: 0;
+  border-left: 0;
+  font-family: var(--font-interface);
+  font-size: 13px;
+}
+
+.note-database-embed.note-database-container table.db-table th,
+.note-database-embed.note-database-container table.db-table td {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 34px;
+  border-top: 0;
+  border-left: 0;
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: inherit;
+  font-family: var(--font-interface);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: none;
+  vertical-align: middle;
+}
+
+.note-database-embed.note-database-container table.db-table th {
+  position: relative;
+  display: table-cell;
+  padding: 0 26px 0 8px;
+  border-radius: 0;
+  box-shadow: 0 1px 0 var(--background-modifier-border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.note-database-embed.note-database-container table.db-table td {
+  display: table-cell;
+  overflow: hidden;
+  padding: 0 8px;
+  border-radius: 0;
+  color: var(--text-normal);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-embed.note-database-container table.db-table th:last-child,
+.note-database-embed.note-database-container table.db-table td:last-child {
+  border-right: 0;
+}
+
+.note-database-embed.note-database-container table.db-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.note-database-embed.note-database-container .db-table-wrap,
+.note-database-embed.note-database-container .db-grouped-table,
+.note-database-embed.note-database-container .db-group-header {
+  margin: 0;
+}
+
+.note-database-embed.note-database-container .db-grouped-table > .db-table-wrap + .db-group-header {
+  margin-top: 0;
+}
+
+/* 看板列的水平滚动 */
+.note-database-embed .db-board-columns {
+  overflow-x: auto;
+}
+
+/* Embed: header 固定在容器顶部 */
+.note-database-embed.note-database-container > .db-header {
+  top: 0;
+  /* 负 margin 让 header 突破父容器的 24px 左右 padding，横向铺满 */
+  margin-left: -12px;
+  margin-right: -12px;
+}
+
+/* Embed: 未分组时，属性行紧贴 header 底边 */
+.note-database-embed.note-database-container .db-table thead {
+  top: calc(var(--db-table-header-top) - 2px);
+}
+
+/* Embed: 分组标题紧贴 header 底边 */
+.note-database-embed.note-database-container .db-group-header {
+  top: var(--db-group-header-top);
+}
+/* Embed: 分组标题紧贴 header 底边 */
+.note-database-embed.note-database-container .db-list-group-header,
+.note-database-embed.note-database-container .db-list-total-header {
+  top: var(--db-group-header-top);
+}
+
+.note-database-embed.note-database-container .db-gallery-group-header,
+.note-database-embed.note-database-container .db-gallery-total-header {
+  top: var(--db-gallery-header-top);
+}
+
+/* Embed: 分组模式下属性行在分组标题下方 */
+.note-database-embed.note-database-container .db-grouped-table .db-table thead {
+  top: var(--db-group-table-head-top);
+}
+
+/* 内嵌宽屏模式 */
+.note-database-embed.db-width-wide {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* ============================================================================
+ *  25. 数据库文件视图（db_view: true 的 frontmatter 文件）
+ *  在阅读视图中以全宽表格形式渲染
+ * ============================================================================ */
+
+/* 宽屏模式：突破阅读视图行宽限制 */
+.markdown-preview-view.note-database-file-view-wide .markdown-preview-sizer,
+.markdown-preview-view.note-database-file-view-wide .markdown-preview-section {
+  max-width: none;
+  width: 100%;
+}
+
+.note-database-file-view.db-width-wide {
+  width: min(100%, calc(100vw - 64px));
+}
+
+.note-database-file-view.db-width-default {
+  max-width: var(--file-line-width, 760px);
+}
+
+/* 文件视图中的内嵌容器去掉边框（避免双重边框） */
+.note-database-file-view .note-database-embed {
+  border: 0;
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ============================================================================
+ *  26. 响应式适配（窄屏/移动端）
+ *  减小 padding，工具栏纵向排列，搜索框全宽
+ * ============================================================================ */
+
+@media (max-width: 760px) {
+  .note-database-container {
+    padding: 0 12px 24px;
+  }
+
+  .note-database-container .db-title-row,
+  .note-database-container .db-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .note-database-container .db-toolbar-right {
+    justify-content: flex-start;
+  }
+
+  .note-database-container .db-search-control:focus-within .db-search-input,
+  .note-database-container .db-search-control.is-active .db-search-input {
+    width: 100%;
+  }
+
+  .note-database-container .db-filter-panel,
+  .note-database-container .db-column-manager,
+  .note-database-container .db-database-popover,
+  .note-database-container .db-group-popover,
+  .note-database-container .db-export-popover,
+  .note-database-container .db-view-tab-popover {
+    left: 12px;
+    right: 12px;
+    top: var(--db-table-header-top);
+    width: auto;
+    max-width: none;
+  }
+}

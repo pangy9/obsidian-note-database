@@ -1,8 +1,8 @@
 import { App, Modal, Notice } from "obsidian";
-import { COLUMN_TYPE_LABELS } from "../../data/ColumnTypes";
+import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValues } from "../../data/ColumnTypes";
 import { ComputedFieldEngine } from "../../data/ComputedField";
-import { ColumnDef, ComputedFieldDef, RowData } from "../../data/types";
-import { t } from "../../i18n";
+import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../../data/types";
+import { getEffectiveLocale, t } from "../../i18n";
 import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
 
 export interface FormulaSaveResult {
@@ -198,8 +198,9 @@ export class FormulaModal extends Modal {
       this.updateSuggestions();
     });
     this.textarea.addEventListener("scroll", () => this.syncEditorScroll());
-    this.textarea.addEventListener("keyup", () => {
+    this.textarea.addEventListener("keyup", (event) => {
       this.updateMatchedBrackets();
+      if (["Tab", "ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) return;
       this.updateSuggestions();
     });
     this.textarea.addEventListener("click", () => {
@@ -214,6 +215,10 @@ export class FormulaModal extends Modal {
         const items = Array.from(
           this.propertySuggestEl.querySelectorAll<HTMLButtonElement>("button.db-formula-property-suggestion")
         );
+        if (items.length === 0) {
+          this.hideSuggestions();
+          return;
+        }
         if (event.key === "ArrowDown") {
           event.preventDefault();
           this.suggestionIndex = Math.min(this.suggestionIndex + 1, items.length - 1);
@@ -223,6 +228,13 @@ export class FormulaModal extends Modal {
         if (event.key === "ArrowUp") {
           event.preventDefault();
           this.suggestionIndex = Math.max(this.suggestionIndex - 1, 0);
+          this.highlightSuggestion(items);
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const step = event.shiftKey ? -1 : 1;
+          this.suggestionIndex = (this.suggestionIndex + step + items.length) % items.length;
           this.highlightSuggestion(items);
           return;
         }
@@ -392,6 +404,7 @@ export class FormulaModal extends Modal {
       this.helpDetailEl.createEl("h4", { text: item.col.label || item.col.key });
       this.helpDetailEl.createDiv({ cls: "db-formula-signature", text: `[${item.col.key}]` });
       this.helpDetailEl.createDiv({ cls: "db-formula-function-desc", text: `${COLUMN_TYPE_LABELS()[item.col.type]} · frontmatter key: ${item.col.key}` });
+      this.renderFieldOptions(this.helpDetailEl, item.col);
       const insert = this.helpDetailEl.createEl("button", {
         cls: "db-formula-insert-example",
         text: t("formula.insertField", { key: item.col.key }),
@@ -425,6 +438,55 @@ export class FormulaModal extends Modal {
       cls: "db-formula-hint",
       text: t("formula.syntaxHint"),
     });
+  }
+
+  private renderFieldOptions(parent: HTMLElement, col: ColumnDef): void {
+    if (!["select", "multi-select", "status"].includes(col.type)) return;
+    const options = this.getFieldOptionEntries(col);
+    const section = parent.createDiv({ cls: "db-formula-field-options" });
+    section.createDiv({ cls: "db-formula-field-options-title", text: t("formula.availableOptions") });
+    if (options.length === 0) {
+      section.createDiv({ cls: "db-formula-hint", text: t("formula.noOptions") });
+      return;
+    }
+    const list = section.createDiv({ cls: "db-formula-field-option-list" });
+    for (const option of options) {
+      const button = list.createEl("button", {
+        cls: `db-formula-field-option status-badge status-color-${option.color || "gray"}`,
+        text: option.value,
+        attr: { type: "button", title: option.value },
+      });
+      button.onclick = () => this.insertAtCursor(JSON.stringify(option.value));
+    }
+  }
+
+  private getFieldOptionValues(col: ColumnDef): string[] {
+    return this.getFieldOptionEntries(col).map((option) => option.value);
+  }
+
+  private getFieldOptionEntries(col: ColumnDef): StatusOptionDef[] {
+    if (!isOptionColumnType(col.type)) return [];
+    const values = new Set<string>();
+    const colorsByValue = new Map<string, StatusOptionDef["color"]>();
+    for (const option of getColumnOptions(col)) {
+      const value = String(option.value || "").trim();
+      if (!value) continue;
+      values.add(value);
+      colorsByValue.set(value, option.color || "gray");
+    }
+    for (const row of this.rows) {
+      const raw = row.frontmatter[col.key];
+      if (col.type === "multi-select") {
+        for (const value of toMultiSelectValues(raw)) {
+          if (value) values.add(value);
+        }
+      } else if (raw != null && raw !== "") {
+        values.add(String(raw));
+      }
+    }
+    return [...values]
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, color: colorsByValue.get(value) || "gray" }));
   }
 
   private renderButtons(): void {
@@ -1031,6 +1093,7 @@ export class FormulaModal extends Modal {
         item.createSpan({ text: `[${col.key}]` });
         item.onclick = () => this.insertProperty(openIndex, cursor, col.key);
       }
+      this.activateFirstSuggestion();
       return;
     }
 
@@ -1054,6 +1117,7 @@ export class FormulaModal extends Modal {
       item.createSpan({ text: fn.signature });
       item.onclick = () => this.replaceRange(cursor - functionMatch[1].length, cursor, fn.signature);
     }
+    this.activateFirstSuggestion();
   }
 
   private showSuggestionBox(): void {
@@ -1075,6 +1139,15 @@ export class FormulaModal extends Modal {
     if (this.suggestionIndex >= 0 && items[this.suggestionIndex]) {
       items[this.suggestionIndex].scrollIntoView({ block: "nearest" });
     }
+  }
+
+  private activateFirstSuggestion(): void {
+    if (!this.propertySuggestEl) return;
+    const items = Array.from(
+      this.propertySuggestEl.querySelectorAll<HTMLButtonElement>("button.db-formula-property-suggestion")
+    );
+    this.suggestionIndex = items.length > 0 ? 0 : -1;
+    this.highlightSuggestion(items);
   }
 
   private estimateCaretPosition(): { left: number; top: number } {
@@ -1167,48 +1240,129 @@ export class FormulaModal extends Modal {
   }
 
   private copyAiPrompt(): void {
+    const locale = getEffectiveLocale();
+    const prompt = locale === "en"
+      ? {
+        intro: [
+          "You are helping me write formulas for an Obsidian plugin called Note Database.",
+          "The formula syntax is based on JavaScript expressions.",
+        ],
+        syntaxTitle: "## Syntax Rules",
+        syntaxRules: [
+          "Formulas are JavaScript expressions evaluated with `new Function()`.",
+          "Use `===` for equality and `!==` for inequality.",
+          "Use single or double quotes for text.",
+          "Formulas can optionally start with `=`.",
+          "Reference database fields with bracket notation, for example `[field_key]`.",
+          "Direct variable names and `field(\"field_key\")` are also supported, but bracket notation is preferred.",
+          "The formula must return one value: a number, text, boolean, or date string.",
+        ],
+        fieldsTitle: "## Available Database Fields",
+        label: "label",
+        options: "options",
+        functionsTitle: "## Available Functions",
+        specialTitle: "## Special Values",
+        specialValues: [
+          "`today`: current date as a YYYY-MM-DD string",
+          "`pi`: Math.PI",
+          "`e`: Math.E",
+        ],
+        request: "Please write a formula for me. I will describe what I need.",
+      }
+      : locale === "zh-TW"
+        ? {
+          intro: [
+            "請幫我為 Obsidian 外掛 Note Database 編寫公式。",
+            "公式語法基於 JavaScript 運算式。",
+          ],
+          syntaxTitle: "## 語法規則",
+          syntaxRules: [
+            "公式是以 `new Function()` 求值的 JavaScript 運算式。",
+            "相等比較請使用 `===`，不相等請使用 `!==`。",
+            "文字請使用單引號或雙引號。",
+            "公式可以選擇性地以 `=` 開頭。",
+            "引用資料庫欄位請使用方括號，例如 `[field_key]`。",
+            "也支援直接變數名和 `field(\"field_key\")`，但優先使用方括號寫法。",
+            "公式必須回傳一個值：數字、文字、布林值或日期字串。",
+          ],
+          fieldsTitle: "## 可用資料庫欄位",
+          label: "顯示名稱",
+          options: "可選項",
+          functionsTitle: "## 可用函式",
+          specialTitle: "## 特殊值",
+          specialValues: [
+            "`today`：目前日期，格式為 YYYY-MM-DD 字串",
+            "`pi`：Math.PI",
+            "`e`：Math.E",
+          ],
+          request: "請根據我接下來描述的需求，寫出可直接使用的公式。",
+        }
+        : {
+          intro: [
+            "请帮我为 Obsidian 插件 Note Database 编写公式。",
+            "公式语法基于 JavaScript 表达式。",
+          ],
+          syntaxTitle: "## 语法规则",
+          syntaxRules: [
+            "公式是通过 `new Function()` 求值的 JavaScript 表达式。",
+            "相等比较请使用 `===`，不相等请使用 `!==`。",
+            "文本请使用单引号或双引号。",
+            "公式可以选择性地以 `=` 开头。",
+            "引用数据库字段请使用方括号，例如 `[field_key]`。",
+            "也支持直接变量名和 `field(\"field_key\")`，但优先使用方括号写法。",
+            "公式必须返回一个值：数字、文本、布尔值或日期字符串。",
+          ],
+          fieldsTitle: "## 可用数据库字段",
+          label: "显示名称",
+          options: "可选项",
+          functionsTitle: "## 可用函数",
+          specialTitle: "## 特殊值",
+          specialValues: [
+            "`today`：当前日期，格式为 YYYY-MM-DD 字符串",
+            "`pi`：Math.PI",
+            "`e`：Math.E",
+          ],
+          request: "请根据我接下来描述的需求，写出可以直接使用的公式。",
+        };
     const lines: string[] = [
-      "You are helping me write formulas for an Obsidian plugin called Note Database.",
-      "The formula syntax is based on JavaScript expressions.",
+      ...prompt.intro,
       "",
-      "## Syntax Rules",
-      "- Formulas are JavaScript expressions evaluated with `new Function()`.",
-      "- Use `===` for equality, `!==` for inequality (strict comparison).",
-      "- Strings use single or double quotes.",
-      "- Formulas can optionally start with `=`.",
-      "- Reference database fields using bracket notation: `[field_key]`.",
-      "- Direct variable names are also supported but bracket notation is preferred.",
-      "- The formula must return a single value (number, string, or date string).",
+      prompt.syntaxTitle,
+      ...prompt.syntaxRules.map((line) => `- ${line}`),
       "",
-      "## Available Database Fields",
+      prompt.fieldsTitle,
     ];
     const fields = this.getAvailableFields();
     for (const col of fields) {
-      lines.push(`- \`${col.key}\` (${COLUMN_TYPE_LABELS()[col.type]}${col.label && col.label !== col.key ? `, label: ${col.label}` : ""})`);
+      const meta = [COLUMN_TYPE_LABELS()[col.type]];
+      if (col.label && col.label !== col.key) meta.push(`${prompt.label}: ${col.label}`);
+      const options = this.getFieldOptionValues(col);
+      if (options.length > 0) meta.push(`${prompt.options}: ${options.join(", ")}`);
+      lines.push(`- \`${col.key}\` (${meta.join("; ")})`);
     }
     lines.push("");
-    lines.push("## Available Functions");
+    lines.push(prompt.functionsTitle);
     const categories = Array.from(new Set(FUNCTIONS.map((fn) => fn.categoryKey)));
     for (const catKey of categories) {
       lines.push("");
       lines.push(`### ${t(catKey)}`);
       for (const fn of FUNCTIONS.filter((f) => f.categoryKey === catKey)) {
-        lines.push(`- ${fn.signature} — ${t(fn.descriptionKey)}`);
+        lines.push(`- ${fn.signature}: ${t(fn.descriptionKey)}`);
       }
     }
     lines.push("");
-    lines.push("## Special Values");
-    lines.push("- `today`: current date as YYYY-MM-DD string");
-    lines.push("- `pi`: Math.PI");
-    lines.push("- `e`: Math.E");
+    lines.push(prompt.specialTitle);
+    for (const value of prompt.specialValues) {
+      lines.push(`- ${value}`);
+    }
     lines.push("");
-    lines.push("Please write a formula for me. I will describe what I need.");
+    lines.push(prompt.request);
 
     const text = lines.join("\n");
     navigator.clipboard.writeText(text).then(() => {
       new Notice(t("formula.copyAiPrompt") + " ✓");
     }).catch(() => {
-      new Notice("Failed to copy");
+      new Notice(t("errors.clipboardFailed"));
     });
   }
 

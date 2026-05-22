@@ -3,7 +3,10 @@ import { COLUMN_TYPE_LABELS, DEFAULT_STATUS_OPTIONS, getBuiltinStatusPresets } f
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../data/types";
 import { t } from "../../i18n";
 
-const COLORS: StatusColor[] = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"];
+const COLORS: StatusColor[] = [
+  "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
+  "red", "slate", "cyan", "teal", "lime", "indigo", "violet", "rose",
+];
 const COLOR_KEYS: Record<StatusColor, string> = {
   gray: "common.colorGray",
   brown: "common.colorBrown",
@@ -14,6 +17,13 @@ const COLOR_KEYS: Record<StatusColor, string> = {
   purple: "common.colorPurple",
   pink: "common.colorPink",
   red: "common.colorRed",
+  slate: "common.colorSlate",
+  cyan: "common.colorCyan",
+  teal: "common.colorTeal",
+  lime: "common.colorLime",
+  indigo: "common.colorIndigo",
+  violet: "common.colorViolet",
+  rose: "common.colorRose",
 };
 
 export class StatusOptionsModal extends Modal {

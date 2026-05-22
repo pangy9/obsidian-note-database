@@ -118,7 +118,10 @@ export function COLUMN_TYPE_LABELS(): Record<ColumnDef["type"], string> {
   };
 }
 
-const OPTION_COLORS: StatusColor[] = ["blue", "green", "orange", "purple", "pink", "yellow", "red", "brown", "gray"];
+const OPTION_COLORS: StatusColor[] = [
+  "blue", "green", "orange", "purple", "pink", "yellow", "red", "brown",
+  "gray", "teal", "cyan", "lime", "indigo", "violet", "rose", "slate",
+];
 
 export function isOptionColumnType(type: ColumnDef["type"]): boolean {
   return type === "select" || type === "multi-select" || type === "status";

@@ -60,7 +60,8 @@ export class FilterPanelRenderer {
       text: `+ ${t("panel.addCondition")}`,
     });
     addBtn.onclick = () => {
-      state.filters.push({ field: "status", op: "eq", value: "" });
+      const first = this.getFilterColumns(config)[0]?.key || "file.name";
+      state.filters.push({ field: first, op: "contains", value: "" });
       actions.saveState();
       this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
       actions.refresh();
@@ -104,7 +105,7 @@ export class FilterPanelRenderer {
     const row = panel.createDiv({ cls: "db-panel-row" });
 
     const fieldSel = row.createEl("select");
-    const allCols = config.schema?.columns || [];
+    const allCols = this.getFilterColumns(config);
     for (const col of allCols) {
       fieldSel.createEl("option", { value: col.key, text: col.label });
     }
@@ -172,6 +173,12 @@ export class FilterPanelRenderer {
       return [...base, ...emptyOps];
     }
     return [...base, ["contains", t("filter.contains")], ...emptyOps];
+  }
+
+  private getFilterColumns(config: ViewConfig): ColumnDef[] {
+    const columns = config.schema?.columns || [];
+    if (columns.some((col) => col.key === "file.name")) return columns;
+    return [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }, ...columns];
   }
 
   private renderValueInput(row: HTMLElement, rule: FilterRule, col: ColumnDef | undefined, actions: FilterPanelActions): void {

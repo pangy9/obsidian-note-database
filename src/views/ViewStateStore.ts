@@ -62,6 +62,14 @@ export class ViewStateStore {
   }
 
   private create(viewConfig: ViewConfig | undefined): DatabaseViewState {
+    const sortRules = this.copySortRules(viewConfig?.sortRules);
+    const legacySortColumn = viewConfig?.sortColumn;
+    if (sortRules.length === 0 && legacySortColumn) {
+      sortRules.push({
+        field: legacySortColumn,
+        direction: viewConfig?.sortDirection ?? "asc",
+      });
+    }
     return {
       searchText: viewConfig?.searchText ?? "",
       statusFilter: viewConfig?.statusFilter ?? "",
@@ -69,9 +77,9 @@ export class ViewStateStore {
       filters: this.copyFilters(viewConfig?.filters),
       hiddenColumns: new Set(viewConfig?.hiddenColumns ?? []),
       filterLogic: viewConfig?.filterLogic ?? "and",
-      sortColumn: viewConfig?.sortColumn,
-      sortDirection: viewConfig?.sortDirection ?? "asc",
-      sortRules: this.copySortRules(viewConfig?.sortRules),
+      sortColumn: sortRules.length > 0 ? undefined : viewConfig?.sortColumn,
+      sortDirection: sortRules.length > 0 ? "asc" : viewConfig?.sortDirection ?? "asc",
+      sortRules,
     };
   }
 

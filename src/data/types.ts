@@ -27,7 +27,14 @@ export type StatusColor =
   | "blue"
   | "purple"
   | "pink"
-  | "red";
+  | "red"
+  | "slate"
+  | "cyan"
+  | "teal"
+  | "lime"
+  | "indigo"
+  | "violet"
+  | "rose";
 
 export interface StatusOptionDef {
   value: string;

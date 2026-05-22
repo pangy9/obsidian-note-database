@@ -44,7 +44,7 @@ export class TableRenderer {
     const visibleColumns = this.actions.getVisibleColumns(config, rows);
     const tableWrap = container.createDiv({ cls: "db-table-wrap" });
     const table = tableWrap.createEl("table", { cls: "db-table" });
-    table.style.minWidth = `${this.getTableMinWidth(config, visibleColumns)}px`;
+    this.applyTableWidth(table, config, visibleColumns);
     this.renderColgroup(table, config, visibleColumns);
     this.renderHeader(table, config, visibleColumns, rows);
     const tbody = table.createEl("tbody");
@@ -108,7 +108,7 @@ export class TableRenderer {
       const tableWrap = container.createDiv({ cls: "db-table-wrap" });
       if (groupField) this.setupGroupDropTarget(tableWrap, groupField, group.key);
       const table = tableWrap.createEl("table", { cls: "db-table" });
-      table.style.minWidth = `${tableMinWidth}px`;
+      this.applyTableWidth(table, config, visibleColumns);
       this.renderColgroup(table, config, visibleColumns);
       this.renderHeader(table, config, visibleColumns, group.rows);
       const tbody = table.createEl("tbody");
@@ -127,20 +127,41 @@ export class TableRenderer {
 
   private renderColgroup(table: HTMLElement, config: ViewConfig, columns: ColumnDef[]): void {
     const colgroup = table.createEl("colgroup");
+    const renderedWidths = this.getRenderedColumnWidths(config, columns);
     if (!this.actions.isReadOnly) {
       const selectionCol = colgroup.createEl("col");
+      selectionCol.addClass("db-select-colgroup");
+      selectionCol.setAttr("width", "34");
       selectionCol.style.width = "34px";
     }
-    for (const col of columns) {
+    columns.forEach((col, index) => {
       const colEl = colgroup.createEl("col");
-      colEl.style.width = `${this.getColumnWidth(config, col)}px`;
-    }
+      colEl.setAttr("data-note-database-column-key", col.key);
+      colEl.style.width = `${renderedWidths[index]}px`;
+    });
   }
 
   private getTableMinWidth(config: ViewConfig, columns: ColumnDef[]): number {
     const selectionWidth = this.actions.isReadOnly ? 0 : 34;
     const columnWidth = columns.reduce((total, col) => total + this.getColumnWidth(config, col), 0);
     return Math.max(720, selectionWidth + columnWidth);
+  }
+
+  private applyTableWidth(table: HTMLElement, config: ViewConfig, columns: ColumnDef[]): void {
+    const width = this.getTableMinWidth(config, columns);
+    table.style.width = `${width}px`;
+    table.style.minWidth = `${width}px`;
+  }
+
+  private getRenderedColumnWidths(config: ViewConfig, columns: ColumnDef[]): number[] {
+    const widths = columns.map((col) => this.getColumnWidth(config, col));
+    if (widths.length === 0) return widths;
+    const selectionWidth = this.actions.isReadOnly ? 0 : 34;
+    const baseWidth = widths.reduce((total, width) => total + width, 0);
+    const extraWidth = this.getTableMinWidth(config, columns) - selectionWidth - baseWidth;
+    if (extraWidth <= 0) return widths;
+    const extraPerColumn = extraWidth / widths.length;
+    return widths.map((width) => width + extraPerColumn);
   }
 
   private getColumnWidth(config: ViewConfig, col: ColumnDef): number {
@@ -160,15 +181,35 @@ export class TableRenderer {
     }
     for (const col of columns) {
       const th = headerRow.createEl("th");
+      th.setAttr("data-note-database-column-key", col.key);
+      th.toggleClass("is-narrow", this.isHeaderNarrow(config, col));
       const content = th.createDiv({ cls: "db-th-content" });
       renderPropertyTypeIcon(content, col);
-      content.createSpan({ cls: "db-th-label", text: col.label });
-      if (config.sortColumn === col.key) {
-        const arrow = config.sortDirection === "asc" ? " ▲" : " ▼";
-        content.createSpan({ text: arrow, cls: "sort-indicator" });
+      content.createSpan({ cls: "db-th-label", text: col.label || col.key, attr: { title: col.label || col.key } });
+      const sort = this.getColumnSortState(config, col);
+      if (sort) {
+        const arrow = sort.direction === "asc" ? "▲" : "▼";
+        const suffix = sort.total > 1 ? String(sort.index + 1) : "";
+        content.createSpan({ text: `${arrow}${suffix}`, cls: "sort-indicator" });
       }
       this.actions.setupColumnHeader(th, col);
     }
+  }
+
+  private getColumnSortState(config: ViewConfig, col: ColumnDef): { direction: "asc" | "desc"; index: number; total: number } | null {
+    const rules = (config.sortRules || []).filter((rule) => rule.field && rule.direction);
+    const index = rules.findIndex((rule) => rule.field === col.key);
+    if (index >= 0) return { direction: rules[index].direction, index, total: rules.length };
+    if (rules.length === 0 && config.sortColumn === col.key) {
+      return { direction: config.sortDirection || "asc", index: 0, total: 1 };
+    }
+    return null;
+  }
+
+  private isHeaderNarrow(config: ViewConfig, col: ColumnDef): boolean {
+    const width = this.getColumnWidth(config, col);
+    const labelLength = (col.label || col.key).length;
+    return width < Math.min(180, Math.max(96, labelLength * 7 + 54));
   }
 
   private renderRows(

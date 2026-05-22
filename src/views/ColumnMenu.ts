@@ -15,6 +15,10 @@ export interface ColumnMenuActions {
   hideColumn(col: ColumnDef): void;
   toggleColumnWrap(col: ColumnDef): void;
   sortByColumn(col: ColumnDef): void;
+  getColumnSortDirection?(col: ColumnDef): "asc" | "desc" | null;
+  clearColumnSort?(col: ColumnDef): void;
+  autoFitColumn?(col: ColumnDef): void;
+  autoFitAllColumns?(): void;
   deleteColumn(col: ColumnDef): void;
 }
 
@@ -126,11 +130,32 @@ export class ColumnMenu {
       .setIcon("wrap-text")
       .onClick(() => this.actions.toggleColumnWrap(col))
     );
+    if (this.actions.autoFitColumn) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.autoFitColumn"))
+        .setIcon("scan-text")
+        .onClick(() => this.actions.autoFitColumn?.(col))
+      );
+    }
+    if (this.actions.autoFitAllColumns) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.autoFitAllColumns"))
+        .setIcon("scan-line")
+        .onClick(() => this.actions.autoFitAllColumns?.())
+      );
+    }
     menu.addItem((item) => item
       .setTitle(t("menu.sortBy", { name: col.label }))
       .setIcon("arrow-up-down")
       .onClick(() => this.actions.sortByColumn(col))
     );
+    if (this.actions.getColumnSortDirection?.(col)) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.clearSort"))
+        .setIcon("x")
+        .onClick(() => this.actions.clearColumnSort?.(col))
+      );
+    }
 
     menu.addSeparator();
 

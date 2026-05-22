@@ -1,7 +1,7 @@
 {
   "id": "note-database",
   "name": "Note Database",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.4.0",
   "description": "Database views for notes with table, board, gallery, formulas, filters, and inline editing.",
   "author": "pangy9",

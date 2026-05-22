@@ -3,6 +3,7 @@ import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
 import { QueryEngine } from "../data/QueryEngine";
 import { PropertyService } from "../data/PropertyService";
+import { ComputedFieldEngine } from "../data/ComputedField";
 import {
   ensureColumnOrder,
   getColumnsInOrder,
@@ -145,7 +146,9 @@ export class DatabaseView extends ItemView {
       () => this.refreshAfterSave(),
       (row) => this.openRow(row),
       (col) => this.columnMenu.showOptionsEditor(col),
-      (col) => this.showFormulaModal(col)
+      (col) => this.showFormulaModal(col),
+      false,
+      () => this.scheduleConfigSave()
     );
     this.columnOperations = new ColumnOperations({
       dataSource: this.dataSource,
@@ -252,6 +255,10 @@ export class DatabaseView extends ItemView {
       hideColumn: (col) => this.columnOperations.hideColumn(col),
       toggleColumnWrap: (col) => this.toggleColumnWrap(col),
       sortByColumn: (col) => this.sortByColumn(col),
+      getColumnSortDirection: (col) => this.getColumnSortDirection(col),
+      clearColumnSort: (col) => this.clearColumnSort(col),
+      autoFitColumn: (col) => this.autoFitColumn(col),
+      autoFitAllColumns: () => this.autoFitAllColumns(),
       deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
     });
     this.databases = databases;
@@ -900,25 +907,10 @@ export class DatabaseView extends ItemView {
   }
 
   private selectView(index: number): void {
+    this.closeHeaderPopovers();
     this.currentDbIndex = index;
     this.currentViewIndex = 0;
     this.clearSelection();
-    if (this.showFilterPanel) {
-      this.showFilterPanel = false;
-      this.renderFilterPanel();
-    }
-    if (this.showColumnManager) {
-      this.showColumnManager = false;
-      this.renderColumnManager();
-    }
-    if (this.showSortPanel) {
-      this.showSortPanel = false;
-      this.renderSortPanel();
-    }
-    if (this.showViewConfigPanel) {
-      this.showViewConfigPanel = false;
-      this.renderViewConfigPanel();
-    }
     this.clearHeaderPopover();
     this.rerenderToolbar();
     this.refresh();
@@ -926,6 +918,7 @@ export class DatabaseView extends ItemView {
 
   /** Switch to a different view within the current database */
   private switchView(viewIndex: number): void {
+    this.closeHeaderPopovers();
     this.currentViewIndex = viewIndex;
     this.clearSelection();
     this.rerenderToolbar();
@@ -2707,16 +2700,86 @@ export class DatabaseView extends ItemView {
     if (!config) return;
     ensureColumnOrder(config);
     const state = this.vs();
-    state.sortRules = [];
-    if (state.sortColumn === col.key) {
-      state.sortDirection =
-        state.sortDirection === "asc" ? "desc" : "asc";
+    const currentRule = state.sortRules.length === 1 && state.sortRules[0].field === col.key
+      ? state.sortRules[0]
+      : undefined;
+    state.sortColumn = undefined;
+    state.sortDirection = "asc";
+    if (!currentRule) {
+      state.sortRules = [{ field: col.key, direction: "asc" }];
+    } else if (currentRule.direction === "asc") {
+      state.sortRules = [{ field: col.key, direction: "desc" }];
     } else {
-      state.sortColumn = col.key;
+      state.sortRules = [];
+    }
+    this.scheduleViewStateSave();
+    this.refresh();
+  }
+
+  private getColumnSortDirection(col: ColumnDef): "asc" | "desc" | null {
+    const state = this.vs();
+    const rule = state.sortRules.length === 1
+      ? state.sortRules[0]
+      : undefined;
+    if (rule?.field === col.key) return rule.direction;
+    if (state.sortRules.length === 0 && state.sortColumn === col.key) return state.sortDirection;
+    return null;
+  }
+
+  private clearColumnSort(col: ColumnDef): void {
+    const state = this.vs();
+    state.sortRules = state.sortRules.filter((rule) => rule.field !== col.key);
+    if (state.sortColumn === col.key) {
+      state.sortColumn = undefined;
       state.sortDirection = "asc";
     }
     this.scheduleViewStateSave();
     this.refresh();
+  }
+
+  private autoFitColumn(col: ColumnDef): void {
+    const config = this.getConfig();
+    if (!config) return;
+    col.width = this.calculateAutoColumnWidth(col, this.rows);
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private autoFitAllColumns(): void {
+    const config = this.getConfig();
+    if (!config) return;
+    for (const col of getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns)) {
+      col.width = this.calculateAutoColumnWidth(col, this.rows);
+    }
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
+    const labelLength = (col.label || col.key).length;
+    const longestValue = rows.reduce((max, row) => {
+      const text = this.getColumnDisplayText(row, col);
+      return Math.max(max, text.length);
+    }, labelLength);
+    const base = col.type === "checkbox" ? Math.max(54, labelLength * 7.2 + 32) : Math.ceil(longestValue * 7.2 + 48);
+    return Math.max(36, Math.min(base, 800));
+  }
+
+  private getColumnDisplayText(row: RowData, col: ColumnDef): string {
+    if (col.key === "file.name") return row.file.basename;
+    const value = col.type === "computed" && col.computedKey
+      ? row.computed[col.computedKey]
+      : row.frontmatter[col.key];
+    if (value == null) return "";
+    if (Array.isArray(value)) return value.map((entry) => String(entry)).join(", ");
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value);
   }
 
   /** Refresh after waiting for metadata cache to catch up */
@@ -2731,32 +2794,38 @@ export class DatabaseView extends ItemView {
     if (this.computedSyncTimer !== null) clearTimeout(this.computedSyncTimer);
     this.computedSyncTimer = window.setTimeout(() => {
       this.computedSyncTimer = null;
-      void this.syncComputedFieldsNow(false, config, rows);
+      void this.syncComputedFieldsNow(false, config);
     }, 500);
   }
 
   private async syncComputedFieldsNow(
     notify: boolean,
-    config = this.getConfig(),
-    rows = this.rows
+    config = this.getConfig()
   ): Promise<void> {
     if (!config || this.syncingComputed) return;
     this.syncingComputed = true;
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
+      const db = this.getCurrentEntry()?.config;
+      const records = db ? this.dataSource.getRecordsForDatabase(db) : this.rows.map((row) => ({
+        file: row.file,
+        frontmatter: row.frontmatter,
+      }));
+      const engine = new ComputedFieldEngine(config.schema.computedFields, config.schema.columns);
       let changed = 0;
-      for (const row of rows) {
+      for (const record of records) {
+        const computed = engine.evaluate(record.frontmatter);
         const updates: Record<string, unknown> = {};
         for (const col of computedColumns) {
           const key = col.computedKey || col.key;
-          const value = row.computed[key];
+          const value = computed[key];
           const nextValue = value == null ? "" : value;
-          if (String(row.frontmatter[col.key] ?? "") !== String(nextValue ?? "")) {
+          if (String(record.frontmatter[col.key] ?? "") !== String(nextValue ?? "")) {
             updates[col.key] = nextValue;
           }
         }
         if (Object.keys(updates).length > 0) {
-          await this.dataSource.updateFrontmatter(row.file, updates);
+          await this.dataSource.updateFrontmatter(record.file, updates);
           changed += 1;
         }
       }

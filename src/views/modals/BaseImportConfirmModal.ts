@@ -46,13 +46,21 @@ export class BaseImportConfirmModal extends Modal {
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
     headRow.createEl("th", { text: t("baseImport.property") });
+    headRow.createEl("th", { text: t("baseImport.displayName") });
     headRow.createEl("th", { text: t("baseImport.inferredType") });
     headRow.createEl("th", { text: t("baseImport.fileCount") });
 
     const tbody = table.createEl("tbody");
     for (const col of this.columns) {
       const tr = tbody.createEl("tr");
-      tr.createEl("td", { text: col.label || col.key });
+      tr.createEl("td", { text: col.key });
+      const labelTd = tr.createEl("td");
+      const labelInput = labelTd.createEl("input", {
+        attr: { type: "text", value: col.label || col.key },
+      });
+      labelInput.oninput = () => {
+        col.label = labelInput.value.trim() || col.key;
+      };
       const typeTd = tr.createEl("td");
       const select = typeTd.createEl("select");
       for (const t of BaseImportConfirmModal.TYPES) {

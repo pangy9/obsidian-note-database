@@ -89,6 +89,20 @@
   --status-color-fg-pink: #a83272;
   --status-color-bg-red: rgba(212, 76, 71, 0.18);
   --status-color-fg-red: #d44c47;
+  --status-color-bg-slate: rgba(100, 116, 139, 0.18);
+  --status-color-fg-slate: #64748b;
+  --status-color-bg-cyan: rgba(8, 145, 178, 0.18);
+  --status-color-fg-cyan: #0891b2;
+  --status-color-bg-teal: rgba(15, 118, 110, 0.18);
+  --status-color-fg-teal: #0f766e;
+  --status-color-bg-lime: rgba(101, 163, 13, 0.18);
+  --status-color-fg-lime: #65a30d;
+  --status-color-bg-indigo: rgba(79, 70, 229, 0.18);
+  --status-color-fg-indigo: #4f46e5;
+  --status-color-bg-violet: rgba(124, 58, 237, 0.18);
+  --status-color-fg-violet: #7c3aed;
+  --status-color-bg-rose: rgba(225, 29, 72, 0.18);
+  --status-color-fg-rose: #e11d48;
   height: 100%;
   /* overflow: auto 让容器自身成为滚动容器，表头 sticky 相对于此生效 */
   overflow: auto;
@@ -100,6 +114,25 @@
   line-height: 1.4;
   scrollbar-color: var(--db-scrollbar-thumb) transparent;
   scrollbar-width: thin;
+}
+
+.note-database-modal {
+  --status-color-fg-gray: #787774;
+  --status-color-fg-brown: #8f5d45;
+  --status-color-fg-orange: #b65f00;
+  --status-color-fg-yellow: #8f6a00;
+  --status-color-fg-green: #448361;
+  --status-color-fg-blue: #2f6fad;
+  --status-color-fg-purple: #6940a5;
+  --status-color-fg-pink: #a83272;
+  --status-color-fg-red: #d44c47;
+  --status-color-fg-slate: #64748b;
+  --status-color-fg-cyan: #0891b2;
+  --status-color-fg-teal: #0f766e;
+  --status-color-fg-lime: #65a30d;
+  --status-color-fg-indigo: #4f46e5;
+  --status-color-fg-violet: #7c3aed;
+  --status-color-fg-rose: #e11d48;
 }
 
 .note-database-container * {
@@ -1029,6 +1062,12 @@
   table-layout: fixed;
 }
 
+.note-database-container .db-table col.db-select-colgroup {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+}
+
 /* 表头和单元格通用样式 */
 .note-database-container .db-table th,
 .note-database-container .db-table td {
@@ -1066,11 +1105,12 @@
   position: relative;
   background: var(--background-primary);
   box-shadow: 0 1px 0 var(--background-modifier-border);
-  padding: 0 26px 0 8px;
+  padding: 0 8px;
   color: var(--text-muted);
   cursor: pointer;
   font-weight: 500;
   text-align: left;
+  transition: padding-right 120ms ease, background-color 120ms ease, color 120ms ease;
   user-select: none;
   white-space: nowrap;
 }
@@ -1105,6 +1145,7 @@
 }
 
 .note-database-container .db-th-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1112,6 +1153,7 @@
 .note-database-container .db-table th:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
+  padding-right: 32px;
 }
 
 /* "..." 菜单按钮（悬停时才显示） */
@@ -1129,10 +1171,12 @@
   color: var(--text-muted);
   cursor: pointer;
   line-height: 18px;
+  pointer-events: none;
 }
 
 .note-database-container .db-table th:hover .db-column-menu-trigger {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .note-database-container .db-column-menu-trigger:hover {
@@ -1142,8 +1186,17 @@
 
 /* 排序方向指示器 ▲▼ */
 .note-database-container .db-table th .sort-indicator {
-  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--text-accent);
   font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.note-database-container .db-table th.is-narrow:not(:hover) .sort-indicator {
+  display: none;
 }
 
 /* ============================================================================
@@ -1187,11 +1240,18 @@
 
 .note-database-container .db-table th.db-select-col,
 .note-database-container .db-table td.db-select-col {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
   padding: 0;
   overflow: hidden;
   text-align: center;
   line-height: 0;
   list-style: none;
+}
+
+.note-database-container .db-table th.db-select-col:hover {
+  padding: 0;
 }
 
 .note-database-container .db-table td.db-select-col:hover {
@@ -1385,6 +1445,29 @@
   background: var(--background-modifier-hover);
 }
 
+.note-database-container .db-option-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.note-database-container .db-option-delete:hover {
+  background: transparent;
+  color: var(--text-error);
+}
+
 /* 多选标签容器 */
 .note-database-container .db-multi-select-values {
   display: flex;
@@ -1425,7 +1508,7 @@
 
 /* ============================================================================
  *  8. 状态标签（带颜色的圆角胶囊）
- *  颜色使用低饱和度的 9 色调色板
+ *  颜色使用低饱和度的 16 色调色板
  * ============================================================================ */
 
 .note-database-container .status-badge,
@@ -1492,6 +1575,48 @@
 .note-database-modal .status-color-red {
   background: rgba(212, 76, 71, 0.18);
   color: #c23b35;
+}
+
+.note-database-container .status-color-slate,
+.note-database-modal .status-color-slate {
+  background: rgba(100, 116, 139, 0.18);
+  color: #64748b;
+}
+
+.note-database-container .status-color-cyan,
+.note-database-modal .status-color-cyan {
+  background: rgba(8, 145, 178, 0.18);
+  color: #0891b2;
+}
+
+.note-database-container .status-color-teal,
+.note-database-modal .status-color-teal {
+  background: rgba(15, 118, 110, 0.18);
+  color: #0f766e;
+}
+
+.note-database-container .status-color-lime,
+.note-database-modal .status-color-lime {
+  background: rgba(101, 163, 13, 0.18);
+  color: #65a30d;
+}
+
+.note-database-container .status-color-indigo,
+.note-database-modal .status-color-indigo {
+  background: rgba(79, 70, 229, 0.18);
+  color: #4f46e5;
+}
+
+.note-database-container .status-color-violet,
+.note-database-modal .status-color-violet {
+  background: rgba(124, 58, 237, 0.18);
+  color: #7c3aed;
+}
+
+.note-database-container .status-color-rose,
+.note-database-modal .status-color-rose {
+  background: rgba(225, 29, 72, 0.18);
+  color: #e11d48;
 }
 
 /* 日期紧急度颜色标注（条件格式化） */
@@ -2160,7 +2285,7 @@
   white-space: normal;
 }
 
-.note-database-container .db-board-card-field span:first-child {
+.note-database-container .db-board-card-field > span:first-child {
   color: var(--text-faint);
 }
 
@@ -3826,9 +3951,9 @@
 /* 公式预览区 */
 .note-database-modal .db-formula-preview {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 0 300px;
   flex-direction: column;
-  min-height: 0;
+  min-height: 300px;
   margin-top: 14px;
   padding: 12px;
   border: 1px solid var(--background-modifier-border);
@@ -3895,7 +4020,7 @@
   flex: 1 1 auto;
   flex-direction: column;
   gap: 10px;
-  min-height: 0;
+  min-height: 120px;
   margin-top: 12px;
   overflow: auto;
   padding-right: 4px;
@@ -4034,8 +4159,8 @@
 }
 
 .note-database-modal .db-formula-property-suggestions.is-visible {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 4px;
 }
 
@@ -4051,6 +4176,7 @@
   cursor: pointer;
   padding: 6px 8px;
   text-align: left;
+  width: 100%;
 }
 
 .note-database-modal .db-formula-property-suggestion:hover,
@@ -4058,8 +4184,20 @@
   background: var(--background-modifier-hover);
 }
 
+.note-database-modal .db-formula-property-suggestion.is-selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 38%, transparent);
+}
+
+.note-database-modal .db-formula-property-suggestion span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .note-database-modal .db-formula-property-suggestion span:last-child {
   color: var(--text-faint);
+  flex: 0 1 auto;
   font-family: var(--font-monospace);
   font-size: 11px;
 }
@@ -4494,6 +4632,44 @@
   line-height: 1.5;
 }
 
+.note-database-modal .db-formula-field-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.note-database-modal .db-formula-field-options-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.note-database-modal .db-formula-field-option-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.note-database-modal .db-formula-field-option {
+  max-width: 100%;
+  overflow: hidden;
+  min-height: 20px;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+  cursor: pointer;
+  padding: 0 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-formula-field-option:hover {
+  filter: brightness(0.98);
+}
+
 /* "插入示例"按钮 */
 .note-database-modal .db-formula-insert-example {
   display: block;
@@ -4650,7 +4826,7 @@
 
 .note-database-container .db-table th.db-drop-target {
   background: var(--background-modifier-hover);
-  box-shadow: inset 2px 0 0 var(--interactive-accent), inset -2px 0 0 var(--interactive-accent);
+  box-shadow: inset 2px 0 0 var(--interactive-accent);
 }
 
 /* ============================================================================

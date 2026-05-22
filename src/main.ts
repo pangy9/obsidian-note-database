@@ -427,6 +427,7 @@ export default class NoteDatabasePlugin extends Plugin {
       const schemaCol = config.schema.columns.find((c) => c.key === col.key);
       if (!schemaCol) continue;
       const originalType = schemaCol.type;
+      schemaCol.label = col.label || col.key;
       schemaCol.type = col.type;
       // If user changed to an option-based type, collect unique values as options
       if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && originalType !== col.type) {
@@ -639,6 +640,7 @@ export default class NoteDatabasePlugin extends Plugin {
         const col = columns.find((c) => c.key === confirmedCol.key);
         if (!col) continue;
         const typeChanged = col.type !== confirmedCol.type;
+        col.label = confirmedCol.label || col.key;
         col.type = confirmedCol.type;
         if (typeChanged && (col.type === "select" || col.type === "multi-select" || col.type === "status")) {
           const values = rows.map((row) => {
@@ -1067,10 +1069,12 @@ export default class NoteDatabasePlugin extends Plugin {
       const columnOrder = bv.order.map(k => this.cleanBaseKey(k)).filter(key => schemaColumnKeys.has(key));
 
       // Extract sort rules
-      const sortRules: SortRule[] = (bv.sort || []).map((s: any) => ({
-        field: this.cleanBaseKey(s.property),
-        direction: (s.direction || "ASC").toLowerCase() === "desc" ? "desc" as const : "asc" as const,
-      }));
+      const sortRules: SortRule[] = (bv.sort || [])
+        .map((s: any) => ({
+          field: this.cleanBaseKey(s.property),
+          direction: (s.direction || "ASC").toLowerCase() === "desc" ? "desc" as const : "asc" as const,
+        }))
+        .filter((rule: SortRule) => schemaColumnKeys.has(rule.field));
 
       // Primary sort column/direction (first sort rule)
       const primarySort = sortRules[0];
@@ -1098,7 +1102,9 @@ export default class NoteDatabasePlugin extends Plugin {
         sortRules: sortRules.length > 0 ? sortRules : undefined,
         sortColumn: primarySort?.field,
         sortDirection: primarySort?.direction,
-        groupByField: bv.groupBy ? this.cleanBaseKey(bv.groupBy.property) : undefined,
+        groupByField: bv.groupBy && schemaColumnKeys.has(this.cleanBaseKey(bv.groupBy.property))
+          ? this.cleanBaseKey(bv.groupBy.property)
+          : undefined,
       };
 
       if (viewType === "gallery") {

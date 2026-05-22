@@ -1,4 +1,4 @@
-import { SortRule, ViewConfig } from "../data/types";
+import { ColumnDef, SortRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
@@ -46,7 +46,7 @@ export class SortPanelRenderer {
     }
 
     panel.createEl("button", { cls: "db-panel-button", text: `+ ${t("panel.addSort")}` }).onclick = () => {
-      const first = config.schema.columns[0]?.key || "file.name";
+      const first = this.getSortColumns(config)[0]?.key || "file.name";
       state.sortColumn = undefined;
       state.sortDirection = "asc";
       state.sortRules = [...rules, { field: first, direction: "asc" }];
@@ -80,7 +80,7 @@ export class SortPanelRenderer {
     drag.ondragstart = (event) => this.startDrag(event, index, row);
 
     const fieldSel = row.createEl("select");
-    for (const col of config.schema.columns) fieldSel.createEl("option", { value: col.key, text: col.label });
+    for (const col of this.getSortColumns(config)) fieldSel.createEl("option", { value: col.key, text: col.label });
     fieldSel.value = rule.field;
     fieldSel.onchange = () => {
       state.sortColumn = undefined;
@@ -176,5 +176,11 @@ export class SortPanelRenderer {
     this.panelEl?.querySelectorAll(".db-sort-rule-row").forEach((row) => {
       row.removeClass("is-dragging", "is-drop-target");
     });
+  }
+
+  private getSortColumns(config: ViewConfig): ColumnDef[] {
+    const columns = config.schema?.columns || [];
+    if (columns.some((col) => col.key === "file.name")) return columns;
+    return [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }, ...columns];
   }
 }

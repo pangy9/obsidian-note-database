@@ -6,7 +6,10 @@ import { t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
 
-const OPTION_COLORS: StatusOptionDef["color"][] = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"];
+const OPTION_COLORS: StatusOptionDef["color"][] = [
+  "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
+  "red", "slate", "cyan", "teal", "lime", "indigo", "violet", "rose",
+];
 
 const OPTION_COLOR_HEX: Record<string, string> = {
   gray: "#787774",
@@ -18,6 +21,13 @@ const OPTION_COLOR_HEX: Record<string, string> = {
   purple: "#6940a5",
   pink: "#a83272",
   red: "#d44c47",
+  slate: "#64748b",
+  cyan: "#0891b2",
+  teal: "#0f766e",
+  lime: "#65a30d",
+  indigo: "#4f46e5",
+  violet: "#7c3aed",
+  rose: "#e11d48",
 };
 
 export class CellRenderer {
@@ -29,7 +39,8 @@ export class CellRenderer {
     private openNote: (row: RowData) => void | Promise<void> = (row) => this.dataSource.openNote(row.file),
     private manageOptions?: (col: ColumnDef) => void,
     private editFormula?: (col: ColumnDef) => void,
-    private isReadOnly = false
+    private isReadOnly = false,
+    private onColumnOptionsChanged?: () => void
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -81,10 +92,15 @@ export class CellRenderer {
       td.createSpan({ cls: "db-empty-value", text: t("common.empty") });
       if (!this.isReadOnly && col.type === "computed") {
         this.makeComputedEditable(td, col);
+        setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEditFormula"));
       }
       if (!this.isReadOnly && col.type !== "computed" && col.key !== "file.name") {
         td.addClass("db-editable-cell");
         this.makeEditable(td, row, col, "");
+        setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEdit"));
+      }
+      if (this.isReadOnly) {
+        setFieldTooltip(td, t("common.empty"));
       }
       return;
     }
@@ -149,6 +165,7 @@ export class CellRenderer {
 
   private renderCheckbox(td: HTMLElement, row: RowData, col: ColumnDef, value: unknown): void {
     td.addClass("db-checkbox-cell");
+    setFieldTooltip(td, toBooleanValue(value) ? t("common.true") : t("common.false"));
     const checkbox = td.createEl("input", { attr: { type: "checkbox" } });
     checkbox.checked = toBooleanValue(value);
     checkbox.disabled = this.isReadOnly;
@@ -322,6 +339,10 @@ export class CellRenderer {
     const saveValueNow = async (value: unknown) => {
       await this.saveValue(row, col, value);
     };
+    const persistOptions = () => {
+      col.statusOptions = optionDefs.map(o => ({ ...o }));
+      this.onColumnOptionsChanged?.();
+    };
 
     const renderOptionList = () => {
       // Clear existing options
@@ -382,7 +403,7 @@ export class CellRenderer {
             if (lastTarget !== idx && lastTarget >= 0 && lastTarget < optionDefs.length) {
               const [moved] = optionDefs.splice(idx, 1);
               optionDefs.splice(lastTarget, 0, moved);
-              col.statusOptions = optionDefs.map(o => ({ ...o }));
+              persistOptions();
               renderOptionList();
             }
             document.removeEventListener("mousemove", onMove);
@@ -402,7 +423,7 @@ export class CellRenderer {
         dot.onclick = (e) => {
           e.stopPropagation();
           e.preventDefault();
-          showColorPicker(dot, opt, () => { col.statusOptions = optionDefs.map(o => ({ ...o })); updateDot(); });
+          showColorPicker(dot, opt, () => { persistOptions(); updateDot(); });
         };
 
         // Label — double-click to rename
@@ -430,7 +451,7 @@ export class CellRenderer {
                 selected.delete(oldValue);
                 selected.add(name);
               }
-              col.statusOptions = optionDefs.map(o => ({ ...o }));
+              persistOptions();
             }
             input.replaceWith(label);
             label.textContent = opt.value;
@@ -445,11 +466,33 @@ export class CellRenderer {
         // Check mark
         const mark = item.createSpan({ text: selected.has(opt.value) ? "✓" : "", cls: "db-option-check" });
         mark.style.cssText = "margin-left:4px;font-size:12px;";
+        const deleteButton = item.createSpan({
+          cls: "db-option-delete",
+          text: "×",
+          attr: { role: "button", tabindex: "0", title: t("common.delete"), "aria-label": t("common.delete") },
+        });
+        deleteButton.onmousedown = (event) => event.preventDefault();
+        deleteButton.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const removed = opt.value;
+          optionDefs.splice(idx, 1);
+          if (selected.delete(removed)) {
+            void saveValueNow(multiple ? Array.from(selected) : "");
+          }
+          persistOptions();
+          renderOptionList();
+        };
+        deleteButton.onkeydown = (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          deleteButton.click();
+        };
 
         item.onmousedown = (event) => event.preventDefault();
         item.onclick = () => {
           if (!multiple) {
-            col.statusOptions = optionDefs.map(o => ({ ...o }));
+            persistOptions();
             void saveValueNow(opt.value);
             // Update check marks
             popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
@@ -459,7 +502,7 @@ export class CellRenderer {
           if (selected.has(opt.value)) selected.delete(opt.value);
           else selected.add(opt.value);
           mark.textContent = selected.has(opt.value) ? "✓" : "";
-          col.statusOptions = optionDefs.map(o => ({ ...o }));
+          persistOptions();
           void saveValueNow(Array.from(selected));
         };
       });
@@ -469,7 +512,7 @@ export class CellRenderer {
     const showColorPicker = (anchor: HTMLElement, opt: StatusOptionDef, onUpdate: () => void) => {
       document.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
       const picker = document.body.createDiv({ cls: "db-color-picker-popup" });
-      picker.style.cssText = "position:fixed;display:flex;flex-wrap:wrap;gap:4px;padding:6px;background:var(--background-primary);border:1px solid var(--background-modifier-border);border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:1002;width:100px;";
+      picker.style.cssText = "position:fixed;display:flex;flex-wrap:wrap;gap:4px;padding:6px;background:var(--background-primary);border:1px solid var(--background-modifier-border);border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:1002;width:124px;";
       OPTION_COLORS.forEach(color => {
         const swatch = picker.createSpan();
         swatch.style.cssText = `width:18px;height:18px;border-radius:2px;background:${OPTION_COLOR_HEX[color]};cursor:pointer;${color === opt.color ? 'box-shadow:0 0 0 2px var(--interactive-accent);' : ''}`;
@@ -517,7 +560,7 @@ export class CellRenderer {
         return;
       }
       optionDefs.push({ value: name, color: OPTION_COLORS[optionDefs.length % OPTION_COLORS.length] });
-      col.statusOptions = optionDefs.map(o => ({ ...o }));
+      persistOptions();
       addInput.value = "";
       if (!multiple) {
         void saveValueNow(name);

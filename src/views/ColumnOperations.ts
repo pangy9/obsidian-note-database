@@ -171,21 +171,18 @@ export class ColumnOperations {
       const computedKey = col.computedKey || col.key;
       config.schema.computedFields = config.schema.computedFields.filter((field) => field.key !== computedKey);
     }
-    if (config.titleField === col.key) config.titleField = undefined;
-    if (config.boardGroupField === col.key) config.boardGroupField = undefined;
-    if (config.boardSubgroupField === col.key) config.boardSubgroupField = undefined;
-    delete config.groupOrders?.[col.key];
-    delete config.collapsedGroups?.[col.key];
-    delete config.boardCardOrders?.[col.key];
-    const orderIdx = config.columnOrder!.indexOf(col.key);
-    if (orderIdx >= 0) config.columnOrder!.splice(orderIdx, 1);
+    const db = this.deps.getActiveDb();
     const state = this.deps.getState();
-    state.hiddenColumns.delete(col.key);
+    for (const view of db.views || [config]) {
+      this.removeColumnReferences(view, col.key);
+    }
+    this.removeColumnFromState(state, col.key);
     this.deps.viewStateStore.persist(config, state);
+    this.deps.viewStateStore.clear();
+    this.deps.refreshSchemaChanged();
 
     try {
       await this.deps.saveConfigImmediately();
-      this.deps.refreshSchemaChanged();
       const result = col.type === "computed"
         ? { changed: 0, skipped: files.length }
         : await this.propertySync.delete(config, col);
@@ -196,6 +193,47 @@ export class ColumnOperations {
       console.error("Note Database: failed to delete column", err);
       new Notice(t("column.deleteFailed", { error: String(err) }));
     }
+  }
+
+  private removeColumnReferences(config: ViewConfig, key: string): void {
+    ensureColumnOrder(config);
+    config.columnOrder = (config.columnOrder || []).filter((candidate) => candidate !== key);
+    config.hiddenColumns = (config.hiddenColumns || []).filter((candidate) => candidate !== key);
+    config.filters = (config.filters || []).filter((rule) => rule.field !== key);
+    config.sortRules = (config.sortRules || []).filter((rule) => rule.field !== key);
+    if (config.sortColumn === key) {
+      config.sortColumn = undefined;
+      config.sortDirection = "asc";
+    }
+    if (config.groupByField === key) config.groupByField = undefined;
+    if (config.titleField === key) config.titleField = undefined;
+    if (config.boardGroupField === key) config.boardGroupField = undefined;
+    if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
+    delete config.groupOrders?.[key];
+    delete config.collapsedGroups?.[key];
+    delete config.boardCardOrders?.[key];
+    for (const viewState of Object.values(config.viewStates || {})) {
+      if (!viewState) continue;
+      viewState.hiddenColumns = (viewState.hiddenColumns || []).filter((candidate) => candidate !== key);
+      viewState.filters = (viewState.filters || []).filter((rule) => rule.field !== key);
+      viewState.sortRules = (viewState.sortRules || []).filter((rule) => rule.field !== key);
+      if (viewState.sortColumn === key) {
+        viewState.sortColumn = undefined;
+        viewState.sortDirection = "asc";
+      }
+      if (viewState.groupByField === key) viewState.groupByField = undefined;
+    }
+  }
+
+  private removeColumnFromState(state: DatabaseViewState, key: string): void {
+    state.hiddenColumns.delete(key);
+    state.filters = state.filters.filter((rule) => rule.field !== key);
+    state.sortRules = state.sortRules.filter((rule) => rule.field !== key);
+    if (state.sortColumn === key) {
+      state.sortColumn = undefined;
+      state.sortDirection = "asc";
+    }
+    if (state.groupByField === key) state.groupByField = "";
   }
 
   async insertColumnNear(col: ColumnDef, side: "left" | "right"): Promise<void> {

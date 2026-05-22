@@ -419,6 +419,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
         if (!this.currentDbConfig || viewIndex === this.currentViewIndex) return;
+        this.closePopovers();
         this.currentViewIndex = viewIndex;
         this.viewIndexOverride = viewIndex;
         this.config = undefined;
@@ -896,10 +897,27 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       })
     );
     menu.addItem((item) => item
+      .setTitle(t("menu.autoFitColumn"))
+      .setIcon("scan-text")
+      .onClick(() => this.autoFitColumn(config, col))
+    );
+    menu.addItem((item) => item
+      .setTitle(t("menu.autoFitAllColumns"))
+      .setIcon("scan-line")
+      .onClick(() => this.autoFitAllColumns(config))
+    );
+    menu.addItem((item) => item
       .setTitle(t("menu.sortBy", { name: col.label }))
       .setIcon("arrow-up-down")
       .onClick(() => this.sortByColumn(col))
     );
+    if (this.getColumnSortDirection(config, col)) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.clearSort"))
+        .setIcon("x")
+        .onClick(() => this.clearColumnSort(config, col))
+      );
+    }
 
     if (anchorEl?.isConnected) {
       const rect = anchorEl.getBoundingClientRect();
@@ -909,15 +927,84 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
   }
 
+  private autoFitColumn(config: ViewConfig, col: ColumnDef): void {
+    col.width = this.calculateAutoColumnWidth(col, this.rows);
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    void this.saveEmbeddedConfigToSource();
+  }
+
+  private autoFitAllColumns(config: ViewConfig): void {
+    for (const col of getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns)) {
+      col.width = this.calculateAutoColumnWidth(col, this.rows);
+    }
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    void this.saveEmbeddedConfigToSource();
+  }
+
+  private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
+    const labelLength = (col.label || col.key).length;
+    const longestValue = rows.reduce((max, row) => {
+      const text = this.getColumnDisplayText(row, col);
+      return Math.max(max, text.length);
+    }, labelLength);
+    const base = col.type === "checkbox" ? Math.max(54, labelLength * 7.2 + 32) : Math.ceil(longestValue * 7.2 + 48);
+    return Math.max(36, Math.min(base, 800));
+  }
+
+  private getColumnDisplayText(row: RowData, col: ColumnDef): string {
+    if (col.key === "file.name") return row.file.basename;
+    const value = col.type === "computed" && col.computedKey
+      ? row.computed[col.computedKey]
+      : row.frontmatter[col.key];
+    if (value == null) return "";
+    if (Array.isArray(value)) return value.map((entry) => String(entry)).join(", ");
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value);
+  }
+
   private sortByColumn(col: ColumnDef): void {
     const config = this.config;
     if (!config) return;
     const state = this.vs(config);
-    state.sortRules = [];
-    if (state.sortColumn === col.key) {
-      state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+    const currentRule = state.sortRules.length === 1 && state.sortRules[0].field === col.key
+      ? state.sortRules[0]
+      : undefined;
+    state.sortColumn = undefined;
+    state.sortDirection = "asc";
+    if (!currentRule) {
+      state.sortRules = [{ field: col.key, direction: "asc" }];
+    } else if (currentRule.direction === "asc") {
+      state.sortRules = [{ field: col.key, direction: "desc" }];
     } else {
-      state.sortColumn = col.key;
+      state.sortRules = [];
+    }
+    this.persistEmbeddedConfigLocally(config);
+    this.updateToolbarIndicators(config);
+    this.renderResults(config);
+    void this.saveEmbeddedConfigToSource();
+  }
+
+  private getColumnSortDirection(config: ViewConfig, col: ColumnDef): "asc" | "desc" | null {
+    const state = this.vs(config);
+    const rule = state.sortRules.length === 1 ? state.sortRules[0] : undefined;
+    if (rule?.field === col.key) return rule.direction;
+    if (state.sortRules.length === 0 && state.sortColumn === col.key) return state.sortDirection;
+    return null;
+  }
+
+  private clearColumnSort(config: ViewConfig, col: ColumnDef): void {
+    const state = this.vs(config);
+    state.sortRules = state.sortRules.filter((rule) => rule.field !== col.key);
+    if (state.sortColumn === col.key) {
+      state.sortColumn = undefined;
       state.sortDirection = "asc";
     }
     this.persistEmbeddedConfigLocally(config);

@@ -8,6 +8,15 @@ It is useful for project tracking, reading plans, subscription lists, content li
 
 ![Table view](assets/screenshots/en-table-view.png)
 
+## What's New In 1.0.3 (Compared To 1.0.1)
+
+- **More reliable writes and refresh**: frontmatter writes are serialized per file to reduce race conditions; computed sync and embedded refresh are more consistent.
+- **Database-file experience is closer to the dashboard**: opening a `db_view: true` database file now automatically switches into the dedicated database view instead of relying on Markdown preview.
+- **Better embedded views**: embedded tables support cell-range selection and clipboard copy; CSV + Markdown ZIP export is available in embedded views too.
+- **Batch editing and undo**: tables support drag-to-select cell ranges and copy as TSV/Markdown/CSV; batch fill/clear/paste can be undone and will report skipped non-editable fields.
+- **Smoother formula editor**: narrow/short windows no longer overlap; the help categories can scroll horizontally; preview sections scroll and avoid content overlap.
+- **New dashboard start-page setting**: choose whether the dashboard opens on the first settings database or the first database file (with safe fallback).
+
 ## Highlights
 
 - **Four database views**: show the same notes as a table, board, gallery, or list. Each database can have up to 15 views, and every view can keep its own filters, sorting, grouping, visible properties, title field, and layout settings.
@@ -151,6 +160,8 @@ If Note Database helps you, a star or donation helps support continued developme
 <a href="https://paypal.me/pangy9">
   <img src="https://img.shields.io/badge/PayPal-Donate-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal">
 </a>
+
+<img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## License
 

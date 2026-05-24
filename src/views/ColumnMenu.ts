@@ -22,6 +22,12 @@ export interface ColumnMenuActions {
   deleteColumn(col: ColumnDef): void;
 }
 
+export interface ColumnMenuOptions {
+  readonly?: boolean;
+  includeLayoutActions?: boolean;
+  includeWidthActions?: boolean;
+}
+
 export class ColumnMenu {
   constructor(private actions: ColumnMenuActions) {}
 
@@ -31,92 +37,102 @@ export class ColumnMenu {
     }
   }
 
-  show(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void {
+  show(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement, options: ColumnMenuOptions = {}): void {
     event.preventDefault();
+    event.stopPropagation();
+    const readonly = options.readonly === true;
+    const includeLayoutActions = options.includeLayoutActions !== false;
+    const includeWidthActions = options.includeWidthActions !== false;
     const menu = new Menu().setUseNativeMenu(false);
 
-    menu.addItem((item) => item
-      .setTitle(t("menu.editProperty", { name: col.label }))
-      .setIcon("pencil")
-      .onClick(() => this.actions.editColumn(col))
-    );
-
-    if (isOptionColumnType(col.type)) {
+    if (!readonly) {
       menu.addItem((item) => item
-        .setTitle(t("menu.editOptions"))
-        .setIcon("palette")
-        .onClick(() => this.actions.editStatusOptions(col))
+        .setTitle(t("menu.editProperty", { name: col.label }))
+        .setIcon("edit")
+        .onClick(() => this.actions.editColumn(col))
       );
-    }
 
-    if (col.type === "computed") {
-      menu.addItem((item) => item
-        .setTitle(t("menu.openFormula"))
-        .setIcon("sigma")
-        .onClick(() => this.actions.editFormula(col))
-      );
-    }
-
-    menu.addItem((item) => {
-      const sub = (item as any).setTitle(t("menu.changeType")).setIcon("layers").setSubmenu() as Menu;
-      const types: ColumnDef["type"][] = [
-        "text",
-        "number",
-        "date",
-        "currency",
-        "select",
-        "multi-select",
-        "status",
-        "checkbox",
-        "computed",
-      ];
-      for (const type of types) {
-        (sub as any).addItem((subItem: any) => {
-          const label = COLUMN_TYPE_LABELS()[type];
-          subItem.setTitle(type === col.type ? `✓ ${label}` : label);
-          if (type === col.type) subItem.setIcon("checkmark");
-          subItem.onClick(() => {
-            if (type !== col.type) {
-              menu.hide();
-              this.actions.changeColumnType(col, type);
-            }
-          });
-        });
+      if (isOptionColumnType(col.type)) {
+        menu.addItem((item) => item
+          .setTitle(t("menu.editOptions"))
+          .setIcon("palette")
+          .onClick(() => this.actions.editStatusOptions(col))
+        );
       }
-      return item;
-    });
 
-    menu.addSeparator();
+      if (col.type === "computed") {
+        menu.addItem((item) => item
+          .setTitle(t("menu.openFormula"))
+          .setIcon("sigma")
+          .onClick(() => this.actions.editFormula(col))
+        );
+      }
 
-    menu.addItem((item) => item
-      .setTitle(t("menu.insertLeft"))
-      .setIcon("arrow-left-to-line")
-      .onClick(() => this.actions.insertColumn(col, "left"))
-    );
-    menu.addItem((item) => item
-      .setTitle(t("menu.insertRight"))
-      .setIcon("arrow-right-to-line")
-      .onClick(() => this.actions.insertColumn(col, "right"))
-    );
-    menu.addItem((item) => item
-      .setTitle(t("menu.duplicateColumn"))
-      .setIcon("copy")
-      .onClick(() => this.actions.duplicateColumn(col))
-      .setDisabled(col.key === "file.name")
-    );
+      menu.addItem((item) => {
+        const sub = (item as any).setTitle(t("menu.changeType")).setIcon("layers").setSubmenu() as Menu;
+        const types: ColumnDef["type"][] = [
+          "text",
+          "number",
+          "date",
+          "currency",
+          "select",
+          "multi-select",
+          "status",
+          "checkbox",
+          "computed",
+        ];
+        for (const type of types) {
+          (sub as any).addItem((subItem: any) => {
+            const label = COLUMN_TYPE_LABELS()[type];
+            subItem.setTitle(type === col.type ? `✓ ${label}` : label);
+            if (type === col.type) subItem.setIcon("check");
+            subItem.onClick(() => {
+              if (type !== col.type) {
+                menu.hide();
+                this.actions.changeColumnType(col, type);
+              }
+            });
+          });
+        }
+        return item;
+      });
+    }
 
-    menu.addSeparator();
+    if (!readonly && includeLayoutActions) {
+      menu.addSeparator();
 
-    menu.addItem((item) => item
-      .setTitle(t("menu.moveUp"))
-      .setIcon("arrow-up")
-      .onClick(() => this.actions.moveColumn(col.key, -1))
-    );
-    menu.addItem((item) => item
-      .setTitle(t("menu.moveDown"))
-      .setIcon("arrow-down")
-      .onClick(() => this.actions.moveColumn(col.key, 1))
-    );
+      menu.addItem((item) => item
+        .setTitle(t("menu.insertLeft"))
+        .setIcon("arrow-left-to-line")
+        .onClick(() => this.actions.insertColumn(col, "left"))
+      );
+      menu.addItem((item) => item
+        .setTitle(t("menu.insertRight"))
+        .setIcon("arrow-right-to-line")
+        .onClick(() => this.actions.insertColumn(col, "right"))
+      );
+      menu.addItem((item) => item
+        .setTitle(t("menu.duplicateColumn"))
+        .setIcon("copy")
+        .onClick(() => this.actions.duplicateColumn(col))
+        .setDisabled(col.key === "file.name")
+      );
+    }
+
+    if (!readonly && includeLayoutActions) {
+      menu.addSeparator();
+
+      menu.addItem((item) => item
+        .setTitle(t("menu.moveUp"))
+        .setIcon("arrow-up")
+        .onClick(() => this.actions.moveColumn(col.key, -1))
+      );
+      menu.addItem((item) => item
+        .setTitle(t("menu.moveDown"))
+        .setIcon("arrow-down")
+        .onClick(() => this.actions.moveColumn(col.key, 1))
+      );
+    }
 
     menu.addSeparator();
 
@@ -130,14 +146,14 @@ export class ColumnMenu {
       .setIcon("wrap-text")
       .onClick(() => this.actions.toggleColumnWrap(col))
     );
-    if (this.actions.autoFitColumn) {
+    if (includeWidthActions && this.actions.autoFitColumn) {
       menu.addItem((item) => item
         .setTitle(t("menu.autoFitColumn"))
-        .setIcon("scan-text")
+        .setIcon("ruler-dimension-line")
         .onClick(() => this.actions.autoFitColumn?.(col))
       );
     }
-    if (this.actions.autoFitAllColumns) {
+    if (includeWidthActions && this.actions.autoFitAllColumns) {
       menu.addItem((item) => item
         .setTitle(t("menu.autoFitAllColumns"))
         .setIcon("scan-line")
@@ -157,14 +173,16 @@ export class ColumnMenu {
       );
     }
 
-    menu.addSeparator();
+    if (!readonly && includeLayoutActions) {
+      menu.addSeparator();
 
-    menu.addItem((item) => item
-      .setTitle(t("menu.deleteColumn"))
-      .setIcon("trash")
-      .setDisabled(col.key === "file.name")
-      .onClick(() => this.actions.deleteColumn(col))
-    );
+      menu.addItem((item) => item
+        .setTitle(t("menu.deleteColumn"))
+        .setIcon("trash")
+        .setDisabled(col.key === "file.name")
+        .onClick(() => this.actions.deleteColumn(col))
+      );
+    }
 
     if (anchorEl?.isConnected) {
       const rect = anchorEl.getBoundingClientRect();

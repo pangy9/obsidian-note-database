@@ -29,11 +29,32 @@ export class DataSource {
   private viewConfigListeners: ViewConfigMutationCallback[] = [];
   private eventRefs: { offref: () => void }[] = [];
   private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private frontmatterOverrides = new Map<string, { values: Record<string, unknown>; expiresAt: number }>();
+  private viewDefOverrides = new Map<string, { config: DatabaseConfig; expiresAt: number }>();
+  /** Per-file write queue to serialize processFrontMatter calls on the same file */
+  private writeQueues = new Map<string, Promise<void>>();
 
   constructor(app: App) {
     this.app = app;
     this.vault = app.vault;
     this.metadataCache = app.metadataCache;
+  }
+
+  /** Serialize async writes to the same file path to prevent overlapping processFrontMatter.
+   *  Errors from a previous write do not block subsequent writes in the queue. */
+  private enqueueWrite(path: string, operation: () => Promise<void>): Promise<void> {
+    const prev = this.writeQueues.get(path) ?? Promise.resolve();
+    // Swallow previous error so the queue is never poisoned, then run this operation
+    const next = prev.catch(() => {}).then(() => operation());
+    this.writeQueues.set(path, next);
+    // Clean up when this slot is the tail of the chain (whether fulfilled or rejected)
+    const cleanup = () => {
+      if (this.writeQueues.get(path) === next) {
+        this.writeQueues.delete(path);
+      }
+    };
+    next.then(cleanup, cleanup);
+    return next;
   }
 
   onDataChanged(cb: DataChangeCallback): () => void {
@@ -77,6 +98,7 @@ export class DataSource {
     this.eventRefs = [];
     this.listeners = [];
     this.viewConfigListeners = [];
+    this.writeQueues.clear();
   }
 
   private trackEvent(ref: any): void {
@@ -98,9 +120,10 @@ export class DataSource {
     return files
       .map((f) => {
         const cache = this.metadataCache.getFileCache(f);
-        const frontmatter = cache?.frontmatter
-          ? (cache.frontmatter as Record<string, unknown>)
-          : {};
+        const frontmatter = this.withFrontmatterOverride(
+          f.path,
+          cache?.frontmatter ? (cache.frontmatter as Record<string, unknown>) : {}
+        );
         return { file: f, frontmatter };
       })
       .filter((r) => {
@@ -142,15 +165,24 @@ export class DataSource {
     return this.getRecordsForDatabase(db);
   }
 
-  /** Modify a note's frontmatter fields using the official API */
+  /** Modify a note's frontmatter fields using the official API.
+   *  Writes to the same file are serialized to prevent overlapping processFrontMatter. */
   async updateFrontmatter(
     file: TFile,
     updates: Record<string, unknown>
   ): Promise<void> {
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      for (const [key, value] of Object.entries(updates)) {
-        if (value === null) delete (fm as Record<string, unknown>)[key];
-        else (fm as Record<string, unknown>)[key] = value;
+    return this.enqueueWrite(file.path, async () => {
+      this.rememberFrontmatterUpdates(file.path, updates);
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          for (const [key, value] of Object.entries(updates)) {
+            if (value === null) delete (fm as Record<string, unknown>)[key];
+            else (fm as Record<string, unknown>)[key] = value;
+          }
+        });
+      } catch (err) {
+        this.frontmatterOverrides.delete(file.path);
+        throw err;
       }
     });
   }
@@ -195,6 +227,11 @@ export class DataSource {
     const allFiles = this.vault.getMarkdownFiles();
 
     for (const f of allFiles) {
+      const override = this.getViewDefOverride(f.path);
+      if (override) {
+        results.push({ file: f, config: override });
+        continue;
+      }
       const cache = this.metadataCache.getFileCache(f);
       const fm = cache?.frontmatter as Record<string, unknown> | undefined;
       if (!fm || fm["db_view"] !== true) continue;
@@ -208,7 +245,7 @@ export class DataSource {
   }
 
   /** Parse DatabaseConfig from a view definition file's frontmatter */
-  private parseDatabaseConfig(fm: Record<string, unknown>): DatabaseConfig | null {
+  parseDatabaseConfig(fm: Record<string, unknown>): DatabaseConfig | null {
     try {
       const database = fm["database"] && typeof fm["database"] === "object"
         ? fm["database"] as Record<string, unknown>
@@ -231,7 +268,7 @@ export class DataSource {
         const viewType = this.parseViewType(source["viewType"]);
         views = [{
           id: generateId(),
-          name: viewType === "board" ? t("common.boardView") : viewType === "gallery" ? t("common.galleryView") : viewType === "list" ? t("common.listView") : t("common.tableView"),
+          name: this.getDefaultViewName(viewType),
           viewType,
           sourceFolder: String(source["sourceFolder"] || ""),
           sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as any : undefined,
@@ -303,7 +340,7 @@ export class DataSource {
   private parseViewConfig(v: Record<string, unknown>, sharedSchema: any): ViewConfig {
     return {
       id: (v["id"] as string) || generateId(),
-      name: String(v["name"] || (this.parseViewType(v["viewType"]) === "gallery" ? t("common.galleryView") : this.parseViewType(v["viewType"]) === "board" ? t("common.boardView") : this.parseViewType(v["viewType"]) === "list" ? t("common.listView") : t("common.tableView"))),
+      name: String(v["name"] || this.getDefaultViewName(this.parseViewType(v["viewType"]))),
       viewType: this.parseViewType(v["viewType"]),
       sourceFolder: String(v["sourceFolder"] || ""),
       sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as any : undefined,
@@ -351,16 +388,25 @@ export class DataSource {
     };
   }
 
-  /** Write database config changes back to a view definition file */
+  /** Write database config changes back to a view definition file.
+   *  Serialized per-file to prevent conflicts with concurrent frontmatter writes. */
   async updateViewDefFile(file: TFile, dbConfig: DatabaseConfig, mutation?: ViewConfigMutation): Promise<void> {
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      const f = fm as Record<string, unknown>;
-      f["db_view"] = true;
-      f["name"] = dbConfig.name;
-      f["database"] = this.toDatabasePayload(dbConfig) as any;
-      for (const key of this.legacyViewKeys()) delete f[key];
+    return this.enqueueWrite(file.path, async () => {
+      this.rememberViewDefConfig(file.path, dbConfig);
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          const f = fm as Record<string, unknown>;
+          f["db_view"] = true;
+          f["name"] = dbConfig.name;
+          f["database"] = this.toDatabasePayload(dbConfig) as any;
+          for (const key of this.legacyViewKeys()) delete f[key];
+        });
+      } catch (err) {
+        this.viewDefOverrides.delete(file.path);
+        throw err;
+      }
+      if (mutation) this.notifyViewConfigChanged({ ...mutation, database: dbConfig });
     });
-    if (mutation) this.notifyViewConfigChanged({ ...mutation, database: dbConfig });
   }
 
   async createViewDefFile(folderPath: string, filename: string, dbConfig: DatabaseConfig): Promise<TFile> {
@@ -481,6 +527,13 @@ export class DataSource {
     return "table";
   }
 
+  private getDefaultViewName(viewType: ViewConfig["viewType"]): string {
+    if (viewType === "board") return t("common.boardView");
+    if (viewType === "gallery") return t("common.galleryView");
+    if (viewType === "list") return t("common.listView");
+    return t("common.tableView");
+  }
+
   private async ensureFolder(folderPath: string): Promise<void> {
     if (!folderPath) return;
     const parts = folderPath.split("/").filter(Boolean);
@@ -495,10 +548,64 @@ export class DataSource {
 
   private toRecord(file: TFile): NoteRecord | null {
     const cache = this.metadataCache.getFileCache(file);
-    const frontmatter = cache?.frontmatter
-      ? (cache.frontmatter as Record<string, unknown>)
-      : {};
+    const frontmatter = this.withFrontmatterOverride(
+      file.path,
+      cache?.frontmatter ? (cache.frontmatter as Record<string, unknown>) : {}
+    );
     return { file, frontmatter };
+  }
+
+  private rememberFrontmatterUpdates(path: string, updates: Record<string, unknown>): void {
+    this.cleanupFrontmatterOverrides();
+    const existing = this.frontmatterOverrides.get(path)?.values || {};
+    this.frontmatterOverrides.set(path, {
+      values: { ...existing, ...updates },
+      expiresAt: Date.now() + 10000,
+    });
+  }
+
+  private withFrontmatterOverride(path: string, frontmatter: Record<string, unknown>): Record<string, unknown> {
+    this.cleanupFrontmatterOverrides();
+    const override = this.frontmatterOverrides.get(path);
+    if (!override) return frontmatter;
+    const merged = { ...frontmatter };
+    for (const [key, value] of Object.entries(override.values)) {
+      if (value === null) delete merged[key];
+      else merged[key] = value;
+    }
+    return merged;
+  }
+
+  private cleanupFrontmatterOverrides(): void {
+    const now = Date.now();
+    for (const [path, override] of this.frontmatterOverrides) {
+      if (override.expiresAt <= now) this.frontmatterOverrides.delete(path);
+    }
+  }
+
+  private rememberViewDefConfig(path: string, config: DatabaseConfig): void {
+    this.cleanupViewDefOverrides();
+    this.viewDefOverrides.set(path, {
+      config: this.cloneDatabaseConfig(config),
+      expiresAt: Date.now() + 10000,
+    });
+  }
+
+  private getViewDefOverride(path: string): DatabaseConfig | null {
+    this.cleanupViewDefOverrides();
+    const override = this.viewDefOverrides.get(path);
+    return override ? this.cloneDatabaseConfig(override.config) : null;
+  }
+
+  private cleanupViewDefOverrides(): void {
+    const now = Date.now();
+    for (const [path, override] of this.viewDefOverrides) {
+      if (override.expiresAt <= now) this.viewDefOverrides.delete(path);
+    }
+  }
+
+  private cloneDatabaseConfig(config: DatabaseConfig): DatabaseConfig {
+    return JSON.parse(JSON.stringify(config)) as DatabaseConfig;
   }
 
   private matchesSourceRule(record: NoteRecord, rule: SourceRule): boolean {

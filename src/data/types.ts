@@ -202,6 +202,7 @@ export interface PluginSettings {
   databases: DatabaseConfig[];
   databaseFolder: string;
   databaseFileOrder?: string[];
+  dashboardInitialSource?: "settings" | "file";
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
   language?: LocaleCode;

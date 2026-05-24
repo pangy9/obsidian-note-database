@@ -5,6 +5,7 @@ import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
+import { installPopoverAutoClose } from "./PopoverAutoClose";
 
 export interface ToolbarViewEntry {
   config: DatabaseConfig;
@@ -48,6 +49,7 @@ export interface ToolbarActions {
   readonly hideWidthSelect?: boolean;
   /** When true, show database selector and view tabs (standalone view) */
   readonly showDatabaseChrome?: boolean;
+  readonly hideDatabaseActions?: boolean;
 }
 
 export class ToolbarRenderer {
@@ -89,38 +91,47 @@ export class ToolbarRenderer {
     // Row 0: Database name heading
     if (actions.showDatabaseChrome) {
       const headingRow = header.createDiv({ cls: "db-heading-row" });
-      const heading = headingRow.createEl("button", {
-        cls: "db-heading db-heading-button",
-        attr: {
-          type: "button",
-          title: currentDb?.name || t("common.untitledDatabase"),
-          "aria-label": currentDb?.name || t("common.untitledDatabase"),
-        },
-      });
+      const heading = actions.hideDatabaseActions
+        ? headingRow.createDiv({
+          cls: "db-heading",
+          attr: { title: currentDb?.name || t("common.untitledDatabase") },
+        })
+        : headingRow.createEl("button", {
+          cls: "db-heading db-heading-button",
+          attr: {
+            type: "button",
+            title: currentDb?.name || t("common.untitledDatabase"),
+            "aria-label": currentDb?.name || t("common.untitledDatabase"),
+          },
+        });
       heading.createSpan({ cls: "db-heading-text", text: currentDb?.name || t("common.untitledDatabase") });
-      setIcon(heading.createSpan({ cls: "db-heading-chevron" }), "chevron-down");
-      heading.onclick = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        actions.closeToolbarPopovers?.();
-        this.closeGroupPopover();
-        this.closeViewTabPopover();
-        this.closeExportPopover();
-        this.closeTitleActionsPopover();
-        this.renderDatabasePopover(heading, viewEntries, currentDbIndex, actions);
-      };
+      if (!actions.hideDatabaseActions) {
+        setIcon(heading.createSpan({ cls: "db-heading-chevron" }), "chevron-down");
+        heading.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          actions.closeToolbarPopovers?.();
+          this.closeGroupPopover();
+          this.closeViewTabPopover();
+          this.closeExportPopover();
+          this.closeTitleActionsPopover();
+          this.renderDatabasePopover(heading, viewEntries, currentDbIndex, actions);
+        };
+      }
       if (actions.renameDatabase) {
         heading.ondblclick = (event) => {
           this.closeDatabasePopover();
           this.startDatabaseTextEdit(event, heading, currentDb?.name || "", false, actions.renameDatabase!);
         };
       }
-      const moreBtn = headingRow.createEl("button", {
-        cls: "db-heading-more-button",
-        attr: { type: "button", title: t("common.more"), "aria-label": t("common.more") },
-      });
-      setIcon(moreBtn, "more-horizontal");
-      moreBtn.onclick = (event) => this.showTitleActionsMenu(event, moreBtn, actions, currentDb?.name || "", heading);
+      if (!actions.hideDatabaseActions) {
+        const moreBtn = headingRow.createEl("button", {
+          cls: "db-heading-more-button",
+          attr: { type: "button", title: t("common.more"), "aria-label": t("common.more") },
+        });
+        setIcon(moreBtn, "more-horizontal");
+        moreBtn.onclick = (event) => this.showTitleActionsMenu(event, moreBtn, actions, currentDb?.name || "", heading);
+      }
       if (currentDb?.description || actions.updateDatabaseDescription) {
         const description = currentDb?.description || "";
         const placeholder = t("viewConfig.descriptionPlaceholder");
@@ -214,8 +225,13 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeDatabasePopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeDatabasePopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeDatabasePopover() });
+    this.removeDatabasePopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private populateDatabasePopover(
@@ -357,7 +373,7 @@ export class ToolbarRenderer {
       this.renderTitleActionsPopoverRow(panel, t("toolbar.copyCurrentDatabase"), "copy", () => actions.copyCurrentDatabase?.());
     }
     this.renderTitleActionsPopoverRow(panel, t("toolbar.addDatabase"), "plus", () => actions.addDatabase());
-    this.renderTitleActionsPopoverRow(panel, t("toolbar.deleteDatabase"), "trash-2", () => actions.deleteDatabase(), "is-danger");
+    this.renderTitleActionsPopoverRow(panel, t("toolbar.deleteDatabase"), "trash", () => actions.deleteDatabase(), "is-danger");
 
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (outsideEvent: MouseEvent) => {
@@ -365,8 +381,13 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeTitleActionsPopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeTitleActionsPopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeTitleActionsPopover() });
+    this.removeTitleActionsPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private renderTitleActionsPopoverRow(
@@ -583,7 +604,7 @@ export class ToolbarRenderer {
       this.renderViewTabPopoverRow(panel, t("toolbar.copyViewCode"), "code-xml", () => actions.copyViewCode?.(viewIndex));
     }
     if (totalViews > 1) {
-      this.renderViewTabPopoverRow(panel, t("toolbar.deleteView"), "trash-2", () => {
+      this.renderViewTabPopoverRow(panel, t("toolbar.deleteView"), "trash", () => {
         actions.deleteView(viewIndex);
       }, "is-danger");
     }
@@ -594,8 +615,13 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || tab.contains(target))) return;
       this.closeViewTabPopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeViewTabPopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl: tab, close: () => this.closeViewTabPopover() });
+    this.removeViewTabPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private renderViewTabPopoverRow(
@@ -642,15 +668,19 @@ export class ToolbarRenderer {
     this.renderViewTabPopoverRow(panel, t("common.boardView"), this.getViewTypeIcon("board"), () => actions.addView("board"));
     this.renderViewTabPopoverRow(panel, t("common.galleryView"), this.getViewTypeIcon("gallery"), () => actions.addView("gallery"));
     this.renderViewTabPopoverRow(panel, t("common.listView"), this.getViewTypeIcon("list"), () => actions.addView("list"));
-
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (outsideEvent: MouseEvent) => {
       const target = outsideEvent.target as Node | null;
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeViewTabPopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeViewTabPopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeViewTabPopover() });
+    this.removeViewTabPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private getViewTypeIcon(viewType: DatabaseViewType): string {
@@ -730,7 +760,7 @@ export class ToolbarRenderer {
       : config?.dashboardDisplayWidth || config?.displayWidth || "default";
     const next = current === "wide" ? "default" : "wide";
     const btn = this.createIconButton(toolbar, "", current === "wide" ? t("toolbar.defaultWidth") : t("toolbar.wide"), "db-width-toggle-btn");
-    this.setButtonSvg(btn, current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut);
+    btn.innerHTML = current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut;
     btn.addClass(current === "wide" ? "is-active" : "is-inactive");
     btn.onclick = () => actions.setDisplayWidth(next);
   }
@@ -771,8 +801,8 @@ export class ToolbarRenderer {
     const groupValue = currentViewType === "board"
       ? config?.boardGroupField || state.groupByField
       : state.groupByField;
-    const btn = this.createIconButton(toolbar, "layers", t("toolbar.group"), "db-group-btn");
-    this.setButtonSvg(btn, ToolbarRenderer.ICONS.group);
+    const btn = this.createIconButton(toolbar, "", t("toolbar.group"), "db-group-btn");
+    btn.innerHTML = ToolbarRenderer.ICONS.group;
     if (groupValue) btn.addClass("is-active");
     btn.onclick = (event) => {
       event.preventDefault();
@@ -836,8 +866,13 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeGroupPopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeGroupPopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeGroupPopover() });
+    this.removeGroupPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private renderGroupPopoverSection(panel: HTMLElement, title: string): void {
@@ -967,8 +1002,8 @@ export class ToolbarRenderer {
   }
 
   private renderViewConfigButton(toolbar: HTMLElement, actions: ToolbarActions): void {
-    const btn = this.createIconButton(toolbar, "settings-2", t("toolbar.settings"), "db-view-config-btn");
-    this.setButtonSvg(btn, ToolbarRenderer.ICONS.settings);
+    const btn = this.createIconButton(toolbar, "", t("toolbar.settings"), "db-view-config-btn");
+    btn.innerHTML = ToolbarRenderer.ICONS.settings;
     btn.onclick = () => {
       this.closeDatabasePopover();
       this.closeGroupPopover();
@@ -987,8 +1022,8 @@ export class ToolbarRenderer {
   private renderSyncButton(toolbar: HTMLElement, config: ViewConfig | undefined, actions: ToolbarActions): void {
     const hasComputed = (config?.schema.computedFields.length || 0) > 0;
     if (!hasComputed) return;
-    const syncBtn = this.createIconButton(toolbar, "sigma", t("toolbar.syncFormulas"));
-    this.setButtonSvg(syncBtn, ToolbarRenderer.ICONS.refresh_fx);
+    const syncBtn = this.createIconButton(toolbar, "", t("toolbar.syncFormulas"));
+    syncBtn.innerHTML = ToolbarRenderer.ICONS.refresh_fx;
     syncBtn.onclick = () => actions.syncComputedFields();
   }
 
@@ -1009,7 +1044,7 @@ export class ToolbarRenderer {
   private renderExportButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.exportData && !actions.copyViewCode && !actions.exportCsvMarkdownZip) return;
     const btn = this.createIconButton(toolbar, "", t("toolbar.copyFormats"), "db-export-btn");
-    this.setButtonSvg(btn, ToolbarRenderer.ICONS.copy);
+    btn.innerHTML = ToolbarRenderer.ICONS.copy;
     btn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1049,8 +1084,13 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeExportPopover();
     };
-    setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    this.removeExportPopoverListener = () => document.removeEventListener("mousedown", onOutside, true);
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeExportPopover() });
+    this.removeExportPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
   }
 
   private renderExportPopoverRow(panel: HTMLElement, label: string, icon: string, onClick: () => void): void {
@@ -1103,18 +1143,13 @@ export class ToolbarRenderer {
       cls: `db-toolbar-icon-button ${extraClass}`.trim(),
       attr: { title: label, "aria-label": label },
     });
-    setIcon(btn, icon);
+    if (icon) setIcon(btn, icon);
     return btn;
   }
 
   private setBadge(button: HTMLElement, count: number): void {
     if (count <= 0) return;
     button.createSpan({ cls: "db-toolbar-badge", text: String(count) });
-  }
-
-  private setButtonSvg(button: HTMLElement, svg: string): void {
-    button.empty();
-    button.innerHTML = svg;
   }
 
   private markLatestMenu(className: string, icons?: string[]): void {
@@ -1131,13 +1166,21 @@ export class ToolbarRenderer {
     });
   }
 
+  closePopovers(): void {
+    this.closeDatabasePopover();
+    this.closeGroupPopover();
+    this.closeViewTabPopover();
+    this.closeExportPopover();
+    this.closeTitleActionsPopover();
+  }
+
   private static readonly ICONS = {
     widthIn: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-arrows-move-horizontal"><path d="M3 5v14" /><path d="M21 5v14" /><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M17 9l-3 3l3 3" /><path d="M21 12h-7" /><path d="M7 9l3 3l-3 3" /><path d="M3 12h7" /></svg>`,
     widthOut: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-arrows-move-horizontal"><path d="M3 5v14" /><path d="M21 5v14" /><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M18 9l3 3l-3 3" /><path d="M14 12h7" /><path d="M6 9l-3 3l3 3" /><path d="M3 12h7" /></svg>`,
     copy: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-clipboard-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h3m9 -9v-5a2 2 0 0 0 -2 -2h-2" /><path d="M13 17v-1a1 1 0 0 1 1 -1h1m3 0h1a1 1 0 0 1 1 1v1m0 3v1a1 1 0 0 1 -1 1h-1m-3 0h-1a1 1 0 0 1 -1 -1v-1" /><path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2" /></svg>',
-    code: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8l-4 4l4 4"/><path d="M17 8l4 4l-4 4"/><path d="M14 4l-4 16"/></svg>`,
-    csv: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/><path d="M9 5v14"/><path d="M15 5v14"/></svg>`,
-    markdown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15v-6l3 4l3-4v6"/><path d="M16 9v6"/><path d="M14 13l2 2l2-2"/></svg>`,
+    code: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-code"><path d="M7 8l-4 4l4 4"/><path d="M17 8l4 4l-4 4"/><path d="M14 4l-4 16"/></svg>`,
+    csv: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-table"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/><path d="M9 5v14"/><path d="M15 5v14"/></svg>`,
+    markdown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-markdown"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15v-6l3 4l3-4v6"/><path d="M16 9v6"/><path d="M14 13l2 2l2-2"/></svg>`,
     settings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-settings-cog"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" /></svg>',
     group: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-group-fields"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 6v12" /><path d="M5 9h3" /><path d="M5 15h3" /><rect x="9" y="5" width="10" height="5" rx="1.5" /><rect x="9" y="14" width="10" height="5" rx="1.5" /></svg>',
     refresh_fx: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-recalculate-badge"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7a7 7 0 1 0 2 5"/><path d="M15 4v4h-4"/><g transform="translate(12 10)"><g transform="scale(0.6)" stroke-width="4"><path d="M6.5 5.5h10.5l-5.5 6.5l5.5 6.5h-10.5"/></g></g></svg>',

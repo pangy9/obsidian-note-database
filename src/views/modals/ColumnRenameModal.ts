@@ -22,14 +22,16 @@ export class ColumnRenameModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
+    contentEl.addClass("note-database-modal");
     contentEl.createEl("h3", { text: t("modal.editProperty", { label: this.col.label }) });
 
     const keyLabel = contentEl.createEl("label", {
       text: t("modal.propertyKey"),
-      attr: { style: "display: block; margin-top: 8px; font-size: 12px; font-weight: 600;" },
+      cls: "db-modal-label",
     });
     const keyInput = contentEl.createEl("input", {
-      attr: { type: "text", style: "width: 100%; margin-top: 4px;" },
+      attr: { type: "text" },
+      cls: "db-modal-input",
     });
     keyInput.value = this.col.key;
     keyInput.disabled = this.col.key === "file.name";
@@ -37,24 +39,21 @@ export class ColumnRenameModal extends Modal {
 
     contentEl.createEl("label", {
       text: t("modal.displayName"),
-      attr: { style: "display: block; margin-top: 8px; font-size: 12px; font-weight: 600;" },
+      cls: "db-modal-label",
     });
     const labelInput = contentEl.createEl("input", {
-      attr: { type: "text", style: "width: 100%; margin-top: 4px;" },
+      attr: { type: "text" },
+      cls: "db-modal-input",
     });
     labelInput.value = this.col.label;
 
-    const wrapRow = contentEl.createEl("label", {
-      attr: { style: "display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px;" },
-    });
+    const wrapRow = contentEl.createEl("label", { cls: "db-modal-row" });
     const wrapCheckbox = wrapRow.createEl("input", { attr: { type: "checkbox" } });
     wrapCheckbox.checked = !!this.col.wrap;
     wrapRow.createSpan({ text: t("modal.wrapContent") });
 
     const canMigrate = this.col.key !== "file.name" && this.col.type !== "computed";
-    const migrateRow = contentEl.createEl("label", {
-      attr: { style: "display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px;" },
-    });
+    const migrateRow = contentEl.createEl("label", { cls: "db-modal-row" });
     const migrateCheckbox = migrateRow.createEl("input", { attr: { type: "checkbox" } });
     migrateCheckbox.checked = canMigrate;
     migrateCheckbox.disabled = !canMigrate;
@@ -69,9 +68,7 @@ export class ColumnRenameModal extends Modal {
       e.stopPropagation();
     };
 
-    const buttonRow = contentEl.createDiv({
-      attr: { style: "display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;" },
-    });
+    const buttonRow = contentEl.createDiv({ cls: "db-modal-button-row" });
     buttonRow.createEl("button", { text: t("common.cancel") }).onclick = () => this.close();
     const saveBtn = buttonRow.createEl("button", { text: t("common.save"), cls: "mod-cta" });
     saveBtn.onclick = async () => {

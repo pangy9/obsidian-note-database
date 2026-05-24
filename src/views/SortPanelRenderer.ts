@@ -102,12 +102,6 @@ export class SortPanelRenderer {
       actions.refresh();
     };
 
-    row.createEl("button", { cls: "db-panel-button", text: "↑" }).onclick = () => {
-      this.moveRule(panel, config, state, actions, index, index - 1);
-    };
-    row.createEl("button", { cls: "db-panel-button", text: "↓" }).onclick = () => {
-      this.moveRule(panel, config, state, actions, index, index + 1);
-    };
     row.createEl("button", { cls: "db-panel-button", text: "×" }).onclick = () => {
       state.sortRules.splice(index, 1);
       if (state.sortRules.length === 0) {

@@ -38,6 +38,7 @@ export interface BoardRendererActions {
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
+  showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   readonly isReadOnly?: boolean;
   readonly canReorderGroups?: boolean;
 }
@@ -59,7 +60,9 @@ interface ParsedImage {
 export class BoardRenderer {
   private rowByPath = new Map<string, RowData>();
   private transientTimers = new WeakMap<HTMLElement, Map<string, number>>();
+  private dragEnterCount = new WeakMap<HTMLElement, number>();
   private resizeState?: { startX: number; startWidth: number; board: HTMLElement };
+  private draggingCardPath?: string;
 
   constructor(private app: App, private actions: BoardRendererActions) {}
 
@@ -85,8 +88,17 @@ export class BoardRenderer {
     groupField: string
   ): void {
     const column = board.createDiv({ cls: "db-board-column" });
+    const subgroupField = config.boardSubgroupField && config.boardSubgroupField !== groupField
+      ? config.boardSubgroupField
+      : undefined;
     column.addEventListener("dragover", (event) => {
-      if (!this.canReorderGroups() && this.actions.isReadOnly) return;
+      if (this.isGroupDrag(event)) {
+        if (!this.canReorderGroups()) return;
+      } else if (this.isCardDrag(event)) {
+        if (this.actions.isReadOnly || !this.canReorderCards(config) || subgroupField) return;
+      } else {
+        return;
+      }
       event.preventDefault();
       this.addTransientClass(column, "is-drop-target", 900);
     });
@@ -141,9 +153,6 @@ export class BoardRenderer {
     resizeHandle.addEventListener("mousedown", (event) => this.startColumnResize(event, board, config));
     if (columnCollapsed) return;
 
-    const subgroupField = config.boardSubgroupField && config.boardSubgroupField !== groupField
-      ? config.boardSubgroupField
-      : undefined;
     if (subgroupField && group.subgroups?.length) {
       const subgroups = column.createDiv({ cls: "db-board-subgroups" });
       for (const subgroup of group.subgroups) {
@@ -217,7 +226,9 @@ export class BoardRenderer {
     cards.addEventListener("dragover", (event) => {
       if (this.actions.isReadOnly) return;
       if (!this.canReorderCards(config)) return;
+      if (!this.isCardDrag(event)) return;
       event.preventDefault();
+      this.highlightCardDropZone(cards);
     });
     cards.addEventListener("drop", (event) => {
       if (this.actions.isReadOnly) return;
@@ -227,13 +238,11 @@ export class BoardRenderer {
       const row = this.rowByPath.get(path);
       if (!row) return;
       event.preventDefault();
+      event.stopPropagation();
+      this.clearCardDropZone(cards);
       const fromGroup = event.dataTransfer?.getData(CARD_FROM_GROUP_MIME) || undefined;
       const fromSubgroup = event.dataTransfer?.getData(CARD_FROM_SUBGROUP_MIME) || undefined;
-      if (fromGroup && fromGroup !== group.key) void this.actions.updateGroup(row, groupField, group.key, fromGroup);
-      if (subgroupField && subgroup && fromSubgroup && fromSubgroup !== subgroup.key) {
-        void this.actions.updateGroup(row, subgroupField, subgroup.key, fromSubgroup);
-      }
-      this.updateCardOrder(groupField, group.key, [...group.rows.map((item) => item.file.path).filter((item) => item !== path), path]);
+      void this.moveCardAndOrder(row, groupField, group.key, fromGroup, path, this.getContainerDropOrder(group, path, subgroupField, subgroup), subgroupField, subgroup?.key, fromSubgroup);
     });
     return cards;
   }
@@ -263,33 +272,55 @@ export class BoardRenderer {
         event.dataTransfer?.setData("text/plain", row.file.path);
         event.dataTransfer?.setData(CARD_FROM_GROUP_MIME, group.key);
         if (subgroupKey != null) event.dataTransfer?.setData(CARD_FROM_SUBGROUP_MIME, subgroupKey);
+        this.draggingCardPath = row.file.path;
         this.addTransientClass(card, "is-dragging", 2400);
       });
       card.addEventListener("dragover", (event) => {
         if (!this.canReorderCards(config)) return;
-        const path = event.dataTransfer?.getData(CARD_MIME);
+        if (!this.isCardDrag(event)) return;
+        const path = this.draggingCardPath || event.dataTransfer?.getData(CARD_MIME);
         if (!path || path === row.file.path || !this.rowByPath.has(path)) return;
         event.preventDefault();
+        const rect = card.getBoundingClientRect();
+        card.toggleClass("is-drop-before", event.clientY <= rect.top + rect.height / 2);
+        card.toggleClass("is-drop-after", event.clientY > rect.top + rect.height / 2);
         this.addTransientClass(card, "is-drop-target", 900);
+        this.highlightCardDropZone(card);
       });
-      card.addEventListener("dragleave", () => this.clearTransientClass(card, "is-drop-target"));
+      card.addEventListener("dragenter", (event) => {
+        if (!this.canReorderCards(config)) return;
+        if (!event.dataTransfer?.types.includes(CARD_MIME)) return;
+        const count = (this.dragEnterCount.get(card) || 0) + 1;
+        this.dragEnterCount.set(card, count);
+      });
+      card.addEventListener("dragleave", () => {
+        if (!this.canReorderCards(config)) return;
+        const count = (this.dragEnterCount.get(card) || 1) - 1;
+        this.dragEnterCount.set(card, count);
+        setTimeout(() => {
+          if ((this.dragEnterCount.get(card) || 0) <= 0) {
+            this.clearCardDropTarget(card);
+          }
+        }, 0);
+      });
       card.addEventListener("drop", (event) => {
         if (!this.canReorderCards(config)) return;
         const path = event.dataTransfer?.getData(CARD_MIME);
         const dragged = path ? this.rowByPath.get(path) : undefined;
         if (!path || !dragged) return;
+        if (path === row.file.path) return;
         event.preventDefault();
         event.stopPropagation();
-        this.clearTransientClass(card, "is-drop-target");
+        this.clearCardDropTarget(card);
         const fromGroup = event.dataTransfer?.getData(CARD_FROM_GROUP_MIME) || undefined;
         const fromSubgroup = event.dataTransfer?.getData(CARD_FROM_SUBGROUP_MIME) || undefined;
-        if (fromGroup && fromGroup !== group.key) void this.actions.updateGroup(dragged, groupField, group.key, fromGroup);
-        if (subgroupField && subgroupKey != null && fromSubgroup && fromSubgroup !== subgroupKey) {
-          void this.actions.updateGroup(dragged, subgroupField, subgroupKey, fromSubgroup);
-        }
-        this.dropCardOn(groupField, group, path, row.file.path, event, card);
+        void this.moveCardAndOrder(dragged, groupField, group.key, fromGroup, path, this.getCardDropOrder(group, path, row.file.path, event, card), subgroupField, subgroupKey, fromSubgroup);
       });
-      card.addEventListener("dragend", () => this.clearTransientClass(card, "is-dragging"));
+      card.addEventListener("dragend", () => {
+        this.clearTransientClass(card, "is-dragging");
+        this.clearCardDropTarget(card);
+        this.draggingCardPath = undefined;
+      });
     }
 
     const controls = card.createDiv({ cls: "db-board-card-controls" });
@@ -318,7 +349,7 @@ export class BoardRenderer {
       card.createDiv({ cls: "db-board-card-title", text: title, attr: { title } });
     }
     const meta = card.createDiv({ cls: "db-board-card-meta" });
-    const fields = columns.filter((col) => col.key !== titleField && col.key !== groupField && col.key !== subgroupField);
+    const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
       const empty = this.isEmptyValue(value);
@@ -329,7 +360,9 @@ export class BoardRenderer {
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
       if (col.wrap) item.addClass("db-board-card-field-wrap");
-      item.createSpan({ text: col.label });
+      const label = item.createSpan({ text: col.label });
+      this.attachColumnContextMenu(item, col);
+      this.attachColumnContextMenu(label, col);
       this.renderPreviewValue(item, row, col, displayValue, empty);
     }
   }
@@ -338,6 +371,16 @@ export class BoardRenderer {
     el.addEventListener("contextmenu", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row);
+    });
+  }
+
+  private attachColumnContextMenu(el: HTMLElement, col: ColumnDef): void {
+    el.addEventListener("contextmenu", (event) => {
+      if (!this.actions.showColumnMenu) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, a")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.actions.showColumnMenu(event, col, el);
     });
   }
 
@@ -362,22 +405,59 @@ export class BoardRenderer {
     this.actions.updateGroupOrder(groupField, order);
   }
 
-  private dropCardOn(
-    groupField: string,
+  private getCardDropOrder(
     group: BoardGroup,
     draggedPath: string,
     targetPath: string,
     event: DragEvent,
     card: HTMLElement
-  ): void {
-    if (draggedPath === targetPath) return;
+  ): string[] {
     const order = group.rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
     const target = order.indexOf(targetPath);
-    if (target < 0) return;
+    if (draggedPath === targetPath || target < 0) return order;
     const rect = card.getBoundingClientRect();
     let insertIndex = event.clientY > rect.top + rect.height / 2 ? target + 1 : target;
     order.splice(insertIndex, 0, draggedPath);
-    this.updateCardOrder(groupField, group.key, order);
+    return order;
+  }
+
+  private async moveCardAndOrder(
+    row: RowData,
+    groupField: string,
+    groupKey: string,
+    fromGroup: string | undefined,
+    draggedPath: string,
+    order: string[],
+    subgroupField?: string,
+    subgroupKey?: string,
+    fromSubgroup?: string
+  ): Promise<void> {
+    if (fromGroup && fromGroup !== groupKey) await this.actions.updateGroup(row, groupField, groupKey, fromGroup);
+    if (subgroupField && subgroupKey != null && fromSubgroup && fromSubgroup !== subgroupKey) {
+      await this.actions.updateGroup(row, subgroupField, subgroupKey, fromSubgroup);
+    }
+    if (!order.includes(draggedPath)) order = [...order, draggedPath];
+    this.updateCardOrder(groupField, groupKey, order);
+  }
+
+  private getContainerDropOrder(
+    group: BoardGroup,
+    draggedPath: string,
+    subgroupField?: string,
+    subgroup?: BoardSubgroup
+  ): string[] {
+    const paths = group.rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
+    if (!subgroupField || !subgroup) return [...paths, draggedPath];
+    const subgroupPathSet = new Set(subgroup.rows.map((row) => row.file.path));
+    let insertIndex = paths.length;
+    for (let index = paths.length - 1; index >= 0; index--) {
+      if (subgroupPathSet.has(paths[index])) {
+        insertIndex = index + 1;
+        break;
+      }
+    }
+    paths.splice(insertIndex, 0, draggedPath);
+    return paths;
   }
 
   private updateCardOrder(groupField: string, groupKey: string, paths: string[]): void {
@@ -390,6 +470,24 @@ export class BoardRenderer {
 
   private canReorderGroups(): boolean {
     return !this.actions.isReadOnly || this.actions.canReorderGroups === true;
+  }
+
+  private isCardDrag(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types || []).includes(CARD_MIME);
+  }
+
+  private isGroupDrag(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types || []).includes(GROUP_MIME);
+  }
+
+  private highlightCardDropZone(source: HTMLElement): void {
+    const zone = source.closest<HTMLElement>(".db-board-subgroup") || source.closest<HTMLElement>(".db-board-column");
+    if (zone) this.addTransientClass(zone, "is-drop-target", 900);
+  }
+
+  private clearCardDropZone(source: HTMLElement): void {
+    const zone = source.closest<HTMLElement>(".db-board-subgroup") || source.closest<HTMLElement>(".db-board-column");
+    if (zone) this.clearTransientClass(zone, "is-drop-target");
   }
 
   private addTransientClass(el: HTMLElement, className: string, timeoutMs: number): void {
@@ -414,6 +512,11 @@ export class BoardRenderer {
     if (existing) window.clearTimeout(existing);
     timers?.delete(className);
     el.removeClass(className);
+  }
+
+  private clearCardDropTarget(card: HTMLElement): void {
+    this.clearTransientClass(card, "is-drop-target");
+    card.removeClass("is-drop-before", "is-drop-after");
   }
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {

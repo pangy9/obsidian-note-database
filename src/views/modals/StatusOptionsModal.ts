@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, setIcon } from "obsidian";
 import { COLUMN_TYPE_LABELS, DEFAULT_STATUS_OPTIONS, getBuiltinStatusPresets } from "../../data/ColumnTypes";
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../data/types";
 import { t } from "../../i18n";
@@ -136,21 +136,19 @@ export class StatusOptionsModal extends Modal {
       }
 
       const controls = row.createDiv({ cls: "db-status-option-controls" });
-      controls.createEl("button", { text: "↑", attr: { title: t("modal.moveUp") } }).onclick = () => this.move(index, -1);
-      controls.createEl("button", { text: "↓", attr: { title: t("modal.moveDown") } }).onclick = () => this.move(index, 1);
-      controls.createEl("button", { text: "×", attr: { title: t("common.delete") } }).onclick = () => {
+      const deleteBtn = controls.createEl("button", {
+        cls: "db-status-delete-btn",
+        attr: { title: t("common.delete"), "aria-label": t("common.delete") },
+      });
+      setIcon(deleteBtn, "trash");
+      deleteBtn.onclick = () => {
+        if (!window.confirm(t("modal.confirmDeleteOption", { name: option.value }))) return;
         this.options.splice(index, 1);
         this.renderList();
       };
     });
   }
 
-  private move(index: number, offset: number): void {
-    const next = index + offset;
-    if (next < 0 || next >= this.options.length) return;
-    [this.options[index], this.options[next]] = [this.options[next], this.options[index]];
-    this.renderList();
-  }
 
   private startDrag(event: DragEvent, index: number, row: HTMLElement): void {
     this.draggedIndex = index;

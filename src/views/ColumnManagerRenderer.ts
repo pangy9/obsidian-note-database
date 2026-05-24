@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { ColumnDef, ViewConfig } from "../data/types";
 import { COLUMN_TYPE_LABELS } from "../data/ColumnTypes";
 import { t } from "../i18n";
@@ -14,6 +15,9 @@ export interface ColumnManagerActions {
   toggleColumnWrap(col: ColumnDef): void;
   editColumn(col: ColumnDef): void;
   addColumn(): void;
+  deleteColumn(col: ColumnDef): void;
+  /** When true, edit/delete/add buttons are hidden (used by embedded/read-only views) */
+  isReadOnly?: boolean;
 }
 
 export class ColumnManagerRenderer {
@@ -45,11 +49,13 @@ export class ColumnManagerRenderer {
       this.renderColumnRow(panel, col, config, state, actions);
     }
 
-    const addColumnBtn = panel.createEl("button", {
-      cls: "db-panel-button",
-      text: `+ ${t("panel.addColumn")}`,
-    });
-    addColumnBtn.onclick = () => actions.addColumn();
+    if (!actions.isReadOnly) {
+      const addColumnBtn = panel.createEl("button", {
+        cls: "db-panel-button",
+        text: `+ ${t("panel.addColumn")}`,
+      });
+      addColumnBtn.onclick = () => actions.addColumn();
+    }
     positionToolbarPopover(panel, anchorEl);
     this.updateToolbarButton(containerEl, state, columns);
   }
@@ -141,16 +147,25 @@ export class ColumnManagerRenderer {
     });
     renderPropertyTypeIcon(typeEl, col, "db-column-type-icon");
     typeEl.createSpan({ text: COLUMN_TYPE_LABELS()[col.type] });
-
-    row.createEl("button", { text: "↑", cls: "clickable-icon" }).onclick = () => actions.moveColumn(col.key, -1);
-    row.createEl("button", { text: "↓", cls: "clickable-icon" }).onclick = () => actions.moveColumn(col.key, 1);
     const wrapBtn = row.createEl("button", {
-      text: "↵",
       cls: `clickable-icon db-column-wrap-toggle${col.wrap ? " is-active" : ""}`,
       attr: { title: t("panel.wrap"), "aria-label": t("panel.wrap") },
     });
+    setIcon(wrapBtn, "wrap-text");
     wrapBtn.onclick = () => actions.toggleColumnWrap(col);
-    row.createEl("button", { text: "✎", cls: "clickable-icon" }).onclick = () => actions.editColumn(col);
+
+    if (!actions.isReadOnly) {
+      const editBtn = row.createEl("button", { cls: "clickable-icon" });
+      setIcon(editBtn, "edit");
+      editBtn.onclick = () => actions.editColumn(col);
+
+      const deleteBtn = row.createEl("button", {
+        cls: "clickable-icon db-column-delete-btn",
+        attr: { title: t("common.delete"), "aria-label": t("common.delete") },
+      });
+      setIcon(deleteBtn, "trash");
+      deleteBtn.onclick = () => actions.deleteColumn(col);
+    }
   }
 
   /** Returns the reason a column must stay visible, or null if it can be freely hidden. */
@@ -159,18 +174,6 @@ export class ColumnManagerRenderer {
     // Title field
     if (config.titleField && col.key === config.titleField) {
       return t("panel.titleFieldHint");
-    }
-    // Group field
-    const groupField = config.viewType === "board"
-      ? config.boardGroupField || state.groupByField
-      : state.groupByField;
-    if (groupField && col.key === groupField) {
-      return t("panel.groupFieldHint");
-    }
-    // Subgroup field (board only)
-    const subgroupField = config.viewType === "board" ? config.boardSubgroupField : undefined;
-    if (subgroupField && col.key === subgroupField) {
-      return t("panel.subgroupFieldHint");
     }
     return null;
   }

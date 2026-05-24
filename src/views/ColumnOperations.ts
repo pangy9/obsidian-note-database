@@ -14,6 +14,15 @@ import { ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { ColumnPropertySync } from "./ColumnPropertySync";
 
+export interface FrontmatterValueChange {
+  file: TFile;
+  path: string;
+  key: string;
+  oldValue: unknown;
+  oldExists: boolean;
+  newValue: unknown;
+}
+
 export interface ColumnOperationsDeps {
   dataSource: DataSource;
   propertyService: PropertyService;
@@ -30,6 +39,8 @@ export interface ColumnOperationsDeps {
   refreshAfterSave(): Promise<void>;
   markPendingColumn(key: string): void;
   refreshColumnManager(): void;
+  setPendingUndoLabel(label: string): void;
+  setPendingConfigCellChanges(changes: FrontmatterValueChange[]): void;
   getDefaultStatusOptions(): StatusOptionDef[];
 }
 
@@ -53,6 +64,7 @@ export class ColumnOperations {
       state.hiddenColumns.add(col.key);
     }
     this.deps.viewStateStore.persist(config, state);
+    this.deps.setPendingUndoLabel(t("undo.hideColumnsConfig"));
     this.deps.scheduleConfigSave();
     this.deps.refresh();
   }
@@ -107,6 +119,7 @@ export class ColumnOperations {
       normalizeColumnOrder(config);
       // Sync Obsidian property type for the new key
       await this.deps.propertyService.setObsidianPropertyType(newKey, col.type);
+      this.deps.setPendingUndoLabel(t("undo.columnRenameConfig"));
       await this.deps.saveCurrentViewConfig();
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
@@ -126,6 +139,7 @@ export class ColumnOperations {
     if (index < 0 || nextIndex < 0 || nextIndex >= config.columnOrder!.length) return;
     [config.columnOrder![index], config.columnOrder![nextIndex]] =
       [config.columnOrder![nextIndex], config.columnOrder![index]];
+    this.deps.setPendingUndoLabel(t("undo.columnOrderConfig"));
     this.deps.scheduleConfigSave();
     this.deps.refresh();
   }
@@ -142,6 +156,7 @@ export class ColumnOperations {
     let insertIndex = order.indexOf(targetKey);
     if (placement === "after") insertIndex += 1;
     order.splice(insertIndex, 0, item);
+    this.deps.setPendingUndoLabel(t("undo.columnOrderConfig"));
     this.deps.scheduleConfigSave();
     this.deps.refresh();
   }
@@ -154,6 +169,7 @@ export class ColumnOperations {
       ensureColumnOrder(config);
       this.deps.viewStateStore.persist(config, state);
     }
+    this.deps.setPendingUndoLabel(t("undo.hideColumnsConfig"));
     this.deps.scheduleConfigSave();
     this.deps.refresh();
   }
@@ -165,6 +181,9 @@ export class ColumnOperations {
     if (!config) return;
     ensureColumnOrder(config);
     const files = this.deps.getFilesForConfig(config);
+    const frontmatterChanges = col.type === "computed"
+      ? []
+      : this.getDeleteKeyChanges(config, col.key);
     const idx = config.schema.columns.findIndex((candidate) => candidate.key === col.key);
     if (idx >= 0) config.schema.columns.splice(idx, 1);
     if (col.type === "computed") {
@@ -182,6 +201,8 @@ export class ColumnOperations {
     this.deps.refreshSchemaChanged();
 
     try {
+      this.deps.setPendingUndoLabel(t("undo.deleteColumnConfig"));
+      this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       const result = col.type === "computed"
         ? { changed: 0, skipped: files.length }
@@ -296,8 +317,11 @@ export class ColumnOperations {
       });
     }
     this.deps.markPendingColumn(copyKey);
+    const frontmatterChanges = col.type === "computed" ? [] : this.getCopyKeyChanges(config, col.key, copyKey);
 
     try {
+      this.deps.setPendingUndoLabel(t("undo.duplicateColumnConfig"));
+      this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       let changed = 0;
@@ -318,13 +342,16 @@ export class ColumnOperations {
     if (!target) return;
     const previousType = target.type;
     const previousComputedKey = target.computedKey || target.key;
+    const previousOptions = target.statusOptions?.map((option) => ({ ...option }));
 
     const inferredOptions = isOptionColumnType(type)
       ? createOptionsFromValues(this.deps.dataSource.getRecordsForConfig(this.deps.getActiveDb()).map((record) => record.frontmatter[target.key]))
       : [];
     target.type = type;
     if (isOptionColumnType(type)) {
-      if (inferredOptions.length > 0) {
+      if (previousOptions?.length) {
+        target.statusOptions = previousOptions;
+      } else if (inferredOptions.length > 0) {
         target.statusOptions = inferredOptions;
       } else if (!target.statusOptions?.length) {
         target.statusOptions = type === "status" ? this.deps.getDefaultStatusOptions() : [];
@@ -351,6 +378,11 @@ export class ColumnOperations {
     }
 
     try {
+      const frontmatterChanges = type === "computed" || target.key === "file.name"
+        ? []
+        : this.getConvertKeyTypeChanges(config, target.key, type);
+      this.deps.setPendingUndoLabel(t("undo.columnTypeConfig"));
+      this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       let changed = 0;
@@ -382,6 +414,9 @@ export class ColumnOperations {
     successPrefix: string
   ): Promise<void> {
     try {
+      const frontmatterChanges = this.getEnsureKeyChanges(config, col);
+      this.deps.setPendingUndoLabel(t("undo.insertColumnConfig"));
+      this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       await this.deps.propertyService.setObsidianPropertyType(col.key, col.type);
@@ -393,5 +428,94 @@ export class ColumnOperations {
       console.error(`Note Database: failed to ${actionName}`, err);
       new Notice(t("column.actionFailed", { action: actionName, error: String(err) }));
     }
+  }
+
+  private getRecords(config: ViewConfig) {
+    const db = this.deps.getActiveDb();
+    const paths = new Set(this.deps.getFilesForConfig(config).map((file) => file.path));
+    return this.deps.dataSource.getRecordsForConfig(db).filter((record) => paths.has(record.file.path));
+  }
+
+  private getDeleteKeyChanges(config: ViewConfig, key: string): FrontmatterValueChange[] {
+    return this.getRecords(config)
+      .filter((record) => Object.prototype.hasOwnProperty.call(record.frontmatter, key))
+      .map((record) => ({
+        file: record.file,
+        path: record.file.path,
+        key,
+        oldValue: this.cloneValue(record.frontmatter[key]),
+        oldExists: true,
+        newValue: null,
+      }));
+  }
+
+  private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {
+    if (col.key === "file.name" || col.type === "computed") return [];
+    const defaultValue = this.deps.propertyService.getDefaultValue(col);
+    return this.getRecords(config)
+      .filter((record) => !Object.prototype.hasOwnProperty.call(record.frontmatter, col.key))
+      .map((record) => ({
+        file: record.file,
+        path: record.file.path,
+        key: col.key,
+        oldValue: null,
+        oldExists: false,
+        newValue: this.cloneValue(defaultValue),
+      }));
+  }
+
+  private getCopyKeyChanges(config: ViewConfig, sourceKey: string, targetKey: string): FrontmatterValueChange[] {
+    return this.getRecords(config)
+      .filter((record) => Object.prototype.hasOwnProperty.call(record.frontmatter, sourceKey))
+      .filter((record) => {
+        const targetValue = record.frontmatter[targetKey];
+        return !Object.prototype.hasOwnProperty.call(record.frontmatter, targetKey) ||
+          targetValue == null ||
+          targetValue === "";
+      })
+      .map((record) => ({
+        file: record.file,
+        path: record.file.path,
+        key: targetKey,
+        oldValue: this.cloneValue(record.frontmatter[targetKey]),
+        oldExists: Object.prototype.hasOwnProperty.call(record.frontmatter, targetKey),
+        newValue: this.cloneValue(record.frontmatter[sourceKey]),
+      }));
+  }
+
+  private getConvertKeyTypeChanges(
+    config: ViewConfig,
+    key: string,
+    type: ColumnDef["type"]
+  ): FrontmatterValueChange[] {
+    return this.getRecords(config)
+      .filter((record) => Object.prototype.hasOwnProperty.call(record.frontmatter, key))
+      .map((record) => {
+        const oldValue = record.frontmatter[key];
+        const newValue = this.deps.propertyService.convertValueForType(oldValue, type);
+        if (newValue === undefined || this.valuesEqual(oldValue, newValue)) return null;
+        return {
+          file: record.file,
+          path: record.file.path,
+          key,
+          oldValue: this.cloneValue(oldValue),
+          oldExists: true,
+          newValue: this.cloneValue(newValue),
+        };
+      })
+      .filter((change): change is FrontmatterValueChange => change != null);
+  }
+
+  private cloneValue(value: unknown): unknown {
+    if (Array.isArray(value)) return [...value];
+    if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
+    return value;
+  }
+
+  private valuesEqual(a: unknown, b: unknown): boolean {
+    if (Array.isArray(a) || Array.isArray(b) || (a && typeof a === "object") || (b && typeof b === "object")) {
+      return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    }
+    return (a ?? null) === (b ?? null);
   }
 }

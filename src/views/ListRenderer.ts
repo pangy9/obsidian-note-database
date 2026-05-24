@@ -26,6 +26,7 @@ export interface ListRendererActions {
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
+  showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   readonly isReadOnly?: boolean;
 }
 
@@ -119,7 +120,7 @@ export class ListRenderer {
       cls: "db-list-row-open",
       attr: { title: t("menu.openNote"), "aria-label": t("menu.openNote") },
     });
-    setIcon(openBtn, "chevron-right");
+    setIcon(openBtn, "maximize-2");
     openBtn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -141,7 +142,7 @@ export class ListRenderer {
     }
 
     const meta = main.createDiv({ cls: "db-list-row-meta" });
-    const fields = columns.filter((col) => col.key !== titleField && col.key !== groupField);
+    const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
       const empty = this.isEmptyValue(value);
@@ -153,7 +154,9 @@ export class ListRenderer {
       setFieldTooltip(field, displayValue, col.label);
       if (empty) field.addClass("is-empty-field");
       if (col.wrap) field.addClass("db-list-field-wrap");
-      field.createSpan({ cls: "db-list-field-label", text: col.label });
+      const label = field.createSpan({ cls: "db-list-field-label", text: col.label });
+      this.attachColumnContextMenu(field, col);
+      this.attachColumnContextMenu(label, col);
       this.renderValue(field, row, col, displayValue, empty);
     }
   }
@@ -162,6 +165,16 @@ export class ListRenderer {
     el.addEventListener("contextmenu", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row);
+    });
+  }
+
+  private attachColumnContextMenu(el: HTMLElement, col: ColumnDef): void {
+    el.addEventListener("contextmenu", (event) => {
+      if (!this.actions.showColumnMenu) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, a")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.actions.showColumnMenu(event, col, el);
     });
   }
 

@@ -52,9 +52,6 @@ export class GroupOrderModal extends Modal {
 
       row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
       row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
-      const controls = row.createDiv({ cls: "db-group-order-controls" });
-      controls.createEl("button", { text: "↑" }).onclick = () => this.move(index, -1);
-      controls.createEl("button", { text: "↓" }).onclick = () => this.move(index, 1);
     });
 
     const footer = contentEl.createDiv({ cls: "db-modal-actions" });

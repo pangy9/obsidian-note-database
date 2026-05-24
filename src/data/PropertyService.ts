@@ -14,10 +14,20 @@ export interface FrontmatterBatchResult {
 }
 
 export class PropertyService {
+  /** Serialize writes to .obsidian/types.json to prevent read-modify-write races */
+  private typesJsonWriteQueue: Promise<void> = Promise.resolve();
+
   constructor(private app: App) {}
 
   async setObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
     if (!key || key === "file.name" || type === "computed") return;
+    // Serialize writes to prevent read-modify-write races
+    const task = this.typesJsonWriteQueue.then(() => this.doSetObsidianPropertyType(key, type));
+    this.typesJsonWriteQueue = task.catch(() => {}); // keep queue alive on error
+    return task;
+  }
+
+  private async doSetObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
     const adapter = this.app.vault.adapter;
     const configPath = ".obsidian/types.json";
     let data: { types?: Record<string, string> } = {};
@@ -220,9 +230,10 @@ export class PropertyService {
         return isNaN(parsed.getTime()) ? "" : parsed.toISOString().substring(0, 10);
       }
       case "text":
+        return String(value);
       case "select":
       case "status":
-        return String(value);
+        return toMultiSelectValues(value)[0] || "";
       case "multi-select":
         return toMultiSelectValues(value);
       case "checkbox":

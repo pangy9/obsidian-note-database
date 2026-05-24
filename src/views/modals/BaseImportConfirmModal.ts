@@ -37,7 +37,7 @@ export class BaseImportConfirmModal extends Modal {
     contentEl.createEl("h3", { text: t("baseImport.title") });
     contentEl.createEl("p", {
       text: t("baseImport.desc"),
-      attr: { style: "color: var(--text-muted); font-size: 13px; margin-bottom: 12px;" },
+      cls: "db-modal-help",
     });
 
     const table = contentEl.createEl("table", {

@@ -347,6 +347,11 @@ export class ComputedFieldEngine {
   ): ComputedFieldEvaluationResult {
     const normalizedExpr = this.normalizeFormula(expr);
     if (!normalizedExpr) return { value: null, error: t("formula.error.empty") };
+
+    // Block dangerous patterns before passing to new Function
+    const securityError = this.validateFormulaSecurity(normalizedExpr);
+    if (securityError) return { value: null, error: securityError };
+
     // Only use safe identifiers as function parameters
     const varNames = Object.keys(context).filter((k) => this.isIdentifierSafe(k));
     const varValues = varNames.map((k) => context[k]);
@@ -366,6 +371,62 @@ export class ComputedFieldEngine {
         return { value: null, error: this.formatEvaluationError(statementErr || expressionError) };
       }
     }
+  }
+
+  /**
+   * Validate that the formula expression does not contain patterns
+   * that could escape the new Function sandbox or cause infinite recursion.
+   * Returns an error message string if unsafe, null if safe.
+   */
+  private validateFormulaSecurity(normalizedExpr: string): string | null {
+    // Block escape vectors through prototype chain / global access
+    const dangerousTokens: Array<{ pattern: RegExp; label: string }> = [
+      { pattern: /\bconstructor\b/, label: "constructor" },
+      { pattern: /\b__proto__\b/, label: "__proto__" },
+      { pattern: /\bprototype\b/, label: "prototype" },
+      { pattern: /\bFunction\b/, label: "Function" },
+      { pattern: /\beval\b/, label: "eval" },
+      { pattern: /\bimport\b/, label: "import" },
+      { pattern: /\brequire\b/, label: "require" },
+      { pattern: /\bsetTimeout\b/, label: "setTimeout" },
+      { pattern: /\bsetInterval\b/, label: "setInterval" },
+      { pattern: /\bsetImmediate\b/, label: "setImmediate" },
+      { pattern: /\bfetch\b/, label: "fetch" },
+      { pattern: /\bXMLHttpRequest\b/, label: "XMLHttpRequest" },
+      { pattern: /\bWorker\b/, label: "Worker" },
+      { pattern: /\bprocess\b/, label: "process" },
+      { pattern: /\bglobal\b/, label: "global" },
+      { pattern: /\bglobalThis\b/, label: "globalThis" },
+      // Loop / control-flow keywords (prevent infinite loops via statement mode)
+      { pattern: /\bwhile\b/, label: "while" },
+      { pattern: /\bfor\b/, label: "for" },
+      { pattern: /\bdo\b/, label: "do" },
+      { pattern: /\bclass\b/, label: "class" },
+      { pattern: /\bnew\b/, label: "new" },
+      { pattern: /\bthis\b/, label: "this" },
+      { pattern: /\bdebugger\b/, label: "debugger" },
+      { pattern: /\bthrow\b/, label: "throw" },
+      { pattern: /\bdelete\b/, label: "delete" },
+      { pattern: /\byield\b/, label: "yield" },
+      { pattern: /\basync\b/, label: "async" },
+      { pattern: /\bawait\b/, label: "await" },
+    ];
+
+    for (const { pattern, label } of dangerousTokens) {
+      if (pattern.test(normalizedExpr)) {
+        return t("formula.error.dangerousToken", { token: label });
+      }
+    }
+
+    // Block function declarations and arrow functions to prevent recursive self-calling
+    if (/\bfunction\b/.test(normalizedExpr)) {
+      return t("formula.error.noFunction");
+    }
+    if (/=>/.test(normalizedExpr)) {
+      return t("formula.error.noArrowFunction");
+    }
+
+    return null;
   }
 
   private formatEvaluationError(error: unknown): string {

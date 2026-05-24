@@ -27,6 +27,7 @@ export interface GalleryRendererActions {
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
+  showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   readonly isReadOnly?: boolean;
 }
 
@@ -156,7 +157,7 @@ export class GalleryRenderer {
       body.createDiv({ cls: "db-gallery-card-title", text: title, attr: { title } });
     }
     const meta = body.createDiv({ cls: "db-gallery-meta" });
-    const fields = columns.filter((col) => col.key !== titleField && col.key !== groupField);
+    const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
       const empty = this.isEmptyValue(value);
@@ -167,7 +168,9 @@ export class GalleryRenderer {
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
       if (col.wrap) item.addClass("db-gallery-field-wrap");
-      item.createSpan({ cls: "db-gallery-field-label", text: col.label });
+      const label = item.createSpan({ cls: "db-gallery-field-label", text: col.label });
+      this.attachColumnContextMenu(item, col);
+      this.attachColumnContextMenu(label, col);
       this.renderValue(item, row, col, displayValue, empty);
     }
   }
@@ -176,6 +179,16 @@ export class GalleryRenderer {
     el.addEventListener("contextmenu", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row);
+    });
+  }
+
+  private attachColumnContextMenu(el: HTMLElement, col: ColumnDef): void {
+    el.addEventListener("contextmenu", (event) => {
+      if (!this.actions.showColumnMenu) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, a")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.actions.showColumnMenu(event, col, el);
     });
   }
 

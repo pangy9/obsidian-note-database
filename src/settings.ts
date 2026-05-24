@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS = {
   databases: DEFAULT_DATABASES,
   databaseFolder: "database",
   databaseFileOrder: [] as string[],
+  dashboardInitialSource: "settings" as "settings" | "file",
   statusPresets: getBuiltinStatusPresets(),
   defaultStatusPresetId: DEFAULT_STATUS_PRESET_ID,
   language: "system" as LocaleCode,
@@ -26,6 +27,7 @@ export function createDefaultSettings(): PluginSettings {
     databases: [],
     databaseFolder: DEFAULT_SETTINGS.databaseFolder,
     databaseFileOrder: [],
+    dashboardInitialSource: DEFAULT_SETTINGS.dashboardInitialSource,
     statusPresets: getBuiltinStatusPresets(),
     defaultStatusPresetId: DEFAULT_SETTINGS.defaultStatusPresetId,
     language: DEFAULT_SETTINGS.language,
@@ -90,6 +92,21 @@ export class SettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName(t("settings.dashboardInitialSource.name"))
+      .setDesc(t("settings.dashboardInitialSource.desc"))
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("settings", t("settings.dashboardInitialSource.settings"))
+          .addOption("file", t("settings.dashboardInitialSource.file"))
+          .setValue(this.plugin.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource)
+          .onChange(async (value) => {
+            this.plugin.settings.dashboardInitialSource = value === "file" ? "file" : "settings";
+            await this.plugin.saveSettings();
+            this.plugin.notifyViewSettingsChanged();
+          })
+      );
+
+    new Setting(containerEl)
       .setName(t("settings.csvMarkdownTransfer.name"))
       .setDesc(t("settings.csvMarkdownTransfer.desc"))
       .addButton((btn) =>
@@ -108,7 +125,7 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: t("settings.databaseList.title") });
     containerEl.createEl("p", {
       text: t("settings.databaseList.desc"),
-      attr: { style: "color: var(--text-muted); font-size: 13px;" },
+      cls: "db-muted-desc",
     });
 
     if (this.plugin.settings.databases.length === 0) {
@@ -238,7 +255,7 @@ export class SettingsTab extends PluginSettingTab {
       cls: "db-settings-delete-button db-trash-button",
       attr: { type: "button", title: t("settings.deleteDatabase"), "aria-label": t("settings.deleteDatabase") },
     });
-    setIcon(deleteButton, "trash-2");
+    setIcon(deleteButton, "trash");
     deleteButton.onclick = async () => {
       await this.deleteSettingsDatabase(index);
     };

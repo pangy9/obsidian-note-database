@@ -109,6 +109,7 @@ export class TableRenderer {
       if (groupField) this.setupGroupDropTarget(tableWrap, groupField, group.key);
       const table = tableWrap.createEl("table", { cls: "db-table" });
       this.applyTableWidth(table, config, visibleColumns);
+      tableWrap.style.minWidth = `${this.getTableMinWidth(config, visibleColumns)}px`;
       this.renderColgroup(table, config, visibleColumns);
       this.renderHeader(table, config, visibleColumns, group.rows);
       const tbody = table.createEl("tbody");
@@ -276,9 +277,9 @@ export class TableRenderer {
     target.addEventListener("dragover", (event) => {
       if (!this.isRowDrag(event)) return;
       event.preventDefault();
-      target.addClass("is-drop-target");
+      this.setGroupDropTarget(target, true);
     });
-    target.addEventListener("dragleave", () => target.removeClass("is-drop-target"));
+    target.addEventListener("dragleave", () => this.setGroupDropTarget(target, false));
     target.addEventListener("drop", (event) => {
       if (!this.isRowDrag(event)) return;
       const path = event.dataTransfer?.getData(ROW_MIME) || event.dataTransfer?.getData("text/plain");
@@ -286,10 +287,16 @@ export class TableRenderer {
       if (!row) return;
       event.preventDefault();
       event.stopPropagation();
-      target.removeClass("is-drop-target");
+      this.setGroupDropTarget(target, false);
       const fromGroupKey = event.dataTransfer?.getData(ROW_FROM_GROUP_MIME) || "";
       void this.actions.moveRowsToGroup?.(row, groupField, fromGroupKey, groupKey);
     });
+  }
+
+  private setGroupDropTarget(target: HTMLElement, active: boolean): void {
+    target.toggleClass("is-drop-target", active);
+    const tableWrap = target.closest<HTMLElement>(".db-table-wrap");
+    if (tableWrap && target !== tableWrap) tableWrap.toggleClass("is-drop-target", active);
   }
 
   private isRowDrag(event: DragEvent): boolean {

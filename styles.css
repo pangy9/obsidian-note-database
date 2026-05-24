@@ -68,9 +68,11 @@
   --db-group-table-head-top: calc(var(--db-group-header-top) + var(--db-group-header-height));
   --db-board-header-top: calc(var(--db-table-header-top) - 25px);
   --db-selection-status-offset: 0px;
-  --db-selection-status-top: calc(var(--db-table-header-top) - 20px);
   --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 62%, transparent);
   --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  --db-radius-sm: 4px;
+  --db-radius-md: 6px;
+  --db-radius-lg: 8px;
   --status-color-bg-gray: rgba(120, 119, 116, 0.18);
   --status-color-fg-gray: #787774;
   --status-color-bg-brown: rgba(159, 107, 83, 0.18);
@@ -204,8 +206,15 @@
   --db-selection-status-offset: 0px;
 }
 
+.note-database-container.has-selection-status > .db-summary {
+  visibility: hidden;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
 /* 默认宽度：跟随 Obsidian 编辑器行宽 */
-.note-database-container.db-width-default:not(.note-database-file-view) {
+.note-database-container.db-width-default {
   max-width: var(--file-line-width, 760px);
   margin-left: auto;
   margin-right: auto;
@@ -257,7 +266,7 @@
   gap: 7px;
   min-width: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   font-size: 28px;
   font-family: inherit;
@@ -302,7 +311,7 @@
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -358,7 +367,7 @@
   box-sizing: border-box;
   width: min(760px, 100%);
   border: 1px solid color-mix(in srgb, var(--interactive-accent) 70%, transparent);
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 28px;
@@ -496,7 +505,7 @@
   gap: 4px;
   height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
@@ -554,7 +563,7 @@
   min-height: 0;
   max-height: 20px;
   border: 1px solid color-mix(in srgb, var(--interactive-accent) 70%, transparent);
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 12px;
@@ -570,7 +579,7 @@
   height: 28px;
   max-width: 180px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
@@ -596,7 +605,7 @@
 .note-database-container .db-new-button {
   height: 28px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -618,6 +627,16 @@
 .note-database-container .db-toolbar-icon-button.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+
+.view-header .db-view-undo-action-near-nav {
+  order: 2;
+  margin-inline: 4px 8px;
+}
+
+.view-header .db-view-undo-action.is-disabled {
+  opacity: 0.42;
+  pointer-events: none;
 }
 
 .note-database-container .db-toolbar-icon-button svg {
@@ -699,29 +718,66 @@
   padding: 0;
 }
 
+.note-database-container .db-selection-action {
+  height: 24px;
+  border: 0;
+  border-radius: var(--db-radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 6px;
+}
+
+.note-database-container .db-selection-action:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
 .note-database-container .db-selection-delete:hover {
   background: transparent;
   color: var(--text-error);
   text-decoration: underline;
 }
 
+/* 轻量状态栏 */
 .note-database-container .db-selection-status-bar {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-height: 30px;
+  height: 30px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   color: var(--text-muted);
   position: sticky;
-  top: var(--db-selection-status-top);
+  top: calc(var(--db-table-header-top) - 20px);
   left: 0px;
   z-index: 29;
-  margin: 0px 0;
+  margin: 0;
   padding: 0 7px;
   width: max-content;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.note-database-container .db-selection-fill-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.note-database-container .db-selection-fill-input {
+  width: 132px;
+  height: 24px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 12px;
+  padding: 0 8px;
 }
 
 .note-database-container .db-selection-clear-checkbox {
@@ -734,7 +790,7 @@
   align-items: center;
   gap: 4px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   color: var(--text-muted);
   padding: 0 6px;
 }
@@ -788,7 +844,7 @@
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -839,7 +895,7 @@
 
 .note-database-settings .db-settings-empty {
   border: 1px dashed var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-secondary);
   color: var(--text-muted);
   margin: 12px 0;
@@ -857,6 +913,11 @@
   line-height: 1.5;
 }
 
+.note-database-settings .db-muted-desc {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .note-database-settings > .setting-item {
   padding-top: 10px;
   padding-bottom: 10px;
@@ -867,7 +928,7 @@
 .note-database-settings > .setting-item .setting-item-control button {
   height: 30px;
   min-height: 30px;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
 }
 
 .note-database-settings .db-settings-database-list {
@@ -879,7 +940,7 @@
 
 .note-database-settings .db-settings-database-card {
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   margin: 0;
   padding: 12px;
 }
@@ -924,7 +985,7 @@
   height: 30px;
   margin-left: auto;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -949,7 +1010,7 @@
   gap: 12px;
   margin: 10px 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   padding: 10px 12px;
 }
@@ -987,7 +1048,7 @@
 .note-database-settings .db-settings-trash-danger {
   min-height: 28px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -1009,15 +1070,16 @@
 }
 
 /* ============================================================================
- *  4. 汇总统计栏（总数、使用中、总投资等）
+ *  4. 汇总统计栏（总数）
  * ============================================================================ */
 
 .note-database-container .db-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
-  margin: 8px 0 14px;
+  margin: 6px 0 6px;
   color: var(--text-muted);
+  height: 18px;
 }
 
 .note-database-container:not(.note-database-embed) > .db-summary {
@@ -1051,6 +1113,7 @@
 
 .note-database-container .db-table-wrap {
   min-width: 100%;
+  width: fit-content;
 }
 
 .note-database-container .db-table {
@@ -1165,7 +1228,7 @@
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   opacity: 0;
   background: transparent;
   color: var(--text-muted);
@@ -1197,6 +1260,16 @@
 
 .note-database-container .db-table th.is-narrow:not(:hover) .sort-indicator {
   display: none;
+}
+
+.note-database-container .db-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 1;
 }
 
 /* ============================================================================
@@ -1312,6 +1385,24 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 55%, transparent);
 }
 
+/* Cell selection highlight — covers both Dashboard and embedded tables */
+.note-database-container .db-table td.db-cell-range-selected,
+.note-database-container .db-grouped-table .db-table td.db-cell-range-selected {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 58%, transparent);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.note-database-container .db-table td.db-cell-range-selected:first-of-type {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 58%, transparent);
+}
+
+/* Embedded view: hide edit-only buttons in selection status bar */
+.note-database-embed .db-selection-status-bar .db-embed-hide {
+  display: none;
+}
+
 .note-database-container .db-table tr.is-dragging,
 .note-database-container .db-gallery-card.is-dragging,
 .note-database-container .db-list-row.is-dragging {
@@ -1325,6 +1416,18 @@
 .note-database-container .db-list-group-header.is-drop-target,
 .note-database-container .db-list.is-drop-target {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 72%, transparent);
+}
+
+.note-database-container .db-grouped-table .db-table-wrap.is-drop-target {
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+.note-database-container .db-grouped-table .db-table tbody.is-drop-target td,
+.note-database-container .db-grouped-table .db-table tr.is-drop-target td {
+  background: color-mix(in srgb, var(--interactive-accent) 9%, var(--background-primary));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--interactive-accent) 42%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--interactive-accent) 42%, transparent);
 }
 
 .note-database-container .db-formula-cell {
@@ -1377,7 +1480,7 @@
 .note-database-container .db-date-seg {
   height: 26px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   color: var(--text-normal);
   font-size: 13px;
@@ -1419,7 +1522,7 @@
   max-height: 260px;
   overflow: auto;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   padding: 6px;
@@ -1433,12 +1536,68 @@
   width: 100%;
   min-height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: transparent;
   color: var(--text-normal);
   cursor: pointer;
   padding: 4px 6px;
   text-align: left;
+  box-sizing: border-box;
+}
+
+.note-database-container .db-option-drag-handle {
+  cursor: grab;
+  margin-right: 2px;
+  color: var(--text-faint);
+  font-size: 12px;
+  user-select: none;
+}
+
+.note-database-container .db-option-drop-line {
+  height: 2px;
+  background: var(--interactive-accent);
+  border-radius: 1px;
+  margin: 1px 4px;
+  pointer-events: none;
+}
+
+.note-database-container .db-option-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-option-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.note-database-container .db-option-check {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.note-database-container .db-cell-option-add {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.note-database-container .db-cell-option-add input {
+  width: 100%;
+  height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: inherit;
+  box-sizing: border-box;
 }
 
 .note-database-container .db-cell-option-item:hover {
@@ -1455,17 +1614,29 @@
   margin-left: 4px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  box-shadow: none;
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
 }
 
 .note-database-container .db-option-delete:hover {
-  background: transparent;
   color: var(--text-error);
+}
+
+.note-database-container .db-status-delete-btn:hover {
+  color: var(--text-error);
+}
+
+.note-database-container .db-column-delete-btn:hover {
+  color: var(--text-error);
+}
+
+/* 属性面板按钮图标缩小 */
+.note-database-container .db-column-manager-row .clickable-icon {
+  width: 18px;
+  height: 18px;
+  padding: 2px;
 }
 
 /* 多选标签容器 */
@@ -1498,7 +1669,7 @@
   max-height: min(320px, 45vh);
   resize: vertical;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: var(--background-primary);
   color: var(--text-normal);
   font: inherit;
@@ -1716,6 +1887,12 @@
   text-align: center;
 }
 
+.note-database-container .db-error-display {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+}
+
 /* ============================================================================
  *  11. 分组模式（Sticky 分组标题 + 表头层级）
  *
@@ -1766,7 +1943,7 @@
   overflow: hidden;
   background: var(--background-primary);
   gap: 8px;
-  padding: 8px 12px 6px 6px;
+  padding: 8px 12px 6px 4px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1777,24 +1954,9 @@
   font-weight: 500;
 }
 
-.note-database-container .db-gallery-group-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  border: 0;
-  appearance: none;
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-faint);
-  cursor: pointer;
-  padding: 0;
-  margin-left: 2px;
-}
 
+.note-database-container .db-gallery-group-toggle,
+.note-database-container .db-list-group-toggle,
 .note-database-container .db-group-collapse-toggle,
 .note-database-container .db-board-group-toggle,
 .note-database-container .db-board-subgroup-toggle {
@@ -1812,23 +1974,7 @@
   color: var(--text-faint);
   cursor: pointer;
   padding: 0;
-}
-.note-database-container .db-list-group-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  border: 0;
-  appearance: none;
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-faint);
-  cursor: pointer;
-  padding: 0;
-  margin-left: 5px;
+  margin-left: 2px;
 }
 
 .note-database-container .db-group-collapse-toggle:hover,
@@ -1889,7 +2035,7 @@
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
 }
 
 .note-database-modal .db-group-order-row.is-dragging {
@@ -1996,7 +2142,7 @@
 .note-database-modal .base-import-table select {
   height: 26px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 13px;
@@ -2034,7 +2180,7 @@
 }
 
 .note-database-container .db-board-column.is-drop-target {
-  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 68%, transparent);
 }
 
 .note-database-container .db-board-column.is-dragging {
@@ -2056,13 +2202,13 @@
   gap: 8px;
   min-height: 32px;
   max-height: 32px;
-  margin: -10px -8px 0;
+  margin: -8px -8px 0;
   border: 1px solid transparent;
   border-radius: 8px 8px 6px 6px;
   background: var(--background-secondary);
   box-shadow: 0 2px 0 var(--background-modifier-border);
   cursor: grab;
-  padding: 6px 6px;
+  padding: 6px 3px;
 }
 
 .note-database-container .db-board-column-header::before {
@@ -2137,6 +2283,13 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  border-radius: var(--db-radius-lg);
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.note-database-container .db-board-subgroup.is-drop-target {
+  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 62%, transparent);
 }
 
 .note-database-container .db-board-subgroup-header {
@@ -2147,12 +2300,12 @@
   align-items: center;
   gap: 8px;
   min-height: 26px;
-  margin: -4px -8px 0;
+  margin: -10px -8px 0;
   /* border-radius: 7px; */
   background: var(--background-primary);
   /* box-shadow: 0 1px 0 var(--background-modifier-border); */
   color: var(--text-muted);
-  padding: 6px 7px;
+  padding: 6px 4px;
 }
 
 .note-database-container .db-board-subgroup-checkbox {
@@ -2177,8 +2330,9 @@
 
 /* 单张看板卡片 */
 .note-database-container .db-board-card {
+  position: relative;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   cursor: pointer;
   padding: 10px;
@@ -2196,7 +2350,19 @@
 }
 
 .note-database-container .db-board-card.is-drop-target {
-  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  background: var(--background-interactive-hover);
+}
+
+.note-database-container .db-board-card.is-drop-before {
+  box-shadow: inset 0 4px 0 -2px var(--interactive-accent),
+    inset 0 20px 14px -18px var(--interactive-accent);
+  transition: none;
+}
+
+.note-database-container .db-board-card.is-drop-after {
+  box-shadow: inset 0 -4px 0 -2px var(--interactive-accent),
+    inset 0 -20px 14px -18px var(--interactive-accent);
+  transition: none;
 }
 
 /* 卡片顶部：复选框 + 打开按钮 */
@@ -2221,7 +2387,7 @@
   height: 24px;
   margin: 0 0 0 auto;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -2255,7 +2421,7 @@
   grid-template-columns: minmax(64px, auto) minmax(0, var(--db-card-field-width, 1fr));
   align-items: start;
   gap: 8px;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   color: var(--text-muted);
   cursor: text;
   font-size: 12px;
@@ -2348,7 +2514,7 @@
   max-height: none;
   margin: 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-secondary);
   box-shadow: none;
   cursor: zoom-in;
@@ -2396,7 +2562,7 @@
   width: 100%;
   min-height: 30px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -2452,16 +2618,12 @@
   margin-bottom: 10px;
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
-  padding: 4px 7px;
-}
-
-.note-database-container .db-gallery-total-header {
-  margin-top: 10px;
+  padding: 4px 4px;
 }
 
 .note-database-container .db-gallery-group-checkbox {
   flex: 0 0 auto;
-  margin: 0;
+  margin: 0 4px;
 }
 
 .note-database-container .db-gallery-group-title {
@@ -2484,7 +2646,7 @@
   overflow: hidden;
   min-width: 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
@@ -2589,7 +2751,7 @@
   height: 24px;
   margin: 0 0 0 auto;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -2621,7 +2783,7 @@
   grid-template-columns: minmax(64px, auto) minmax(0, var(--db-card-field-width, 1fr));
   align-items: start;
   gap: 8px;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   color: var(--text-muted);
   cursor: text;
   font-size: 12px;
@@ -2699,7 +2861,7 @@
 .note-database-container .db-gallery-new-card {
   min-height: 44px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -2722,7 +2884,6 @@
   align-items: flex-start;
   flex-direction: column;
   gap: 4px;
-  margin-top: 10px;
   width: max-content;
   min-width: 100%;
 }
@@ -2738,10 +2899,6 @@
 
 .note-database-container .db-list-group > .db-list {
   margin-top: 0;
-}
-
-.note-database-container > .db-list {
-  margin-top: 2px;
 }
 
 .note-database-container .db-list-group-header,
@@ -2763,9 +2920,6 @@
   padding: 0px 4px;
 }
 
-.note-database-container .db-list-total-header {
-  margin-top: 10px;
-}
 
 .note-database-container .db-list-group-header-label {
   position: sticky;
@@ -2785,7 +2939,7 @@
 
 .note-database-container .db-list-group-checkbox {
   flex: 0 0 auto;
-  margin: 7px;
+  margin: 4px;
 }
 
 .note-database-container .db-list-group-count {
@@ -2809,7 +2963,7 @@
   width: max-content;
   min-width: 100%;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   cursor: pointer;
   padding: 8px 10px;
@@ -2823,6 +2977,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin: 0 -3px;
 }
 
 .note-database-container .db-list-row-main {
@@ -2845,7 +3000,6 @@
   display: flex;
   flex-wrap: nowrap;
   gap: 6px 12px;
-  margin-top: 4px;
   width: max-content;
   min-width: 0;
   overflow: visible;
@@ -2920,7 +3074,7 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -2940,7 +3094,7 @@
   width: 100%;
   min-height: 36px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   box-shadow: none;
   color: var(--text-faint);
@@ -2978,7 +3132,7 @@
   margin: 0;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
 }
@@ -3027,7 +3181,7 @@
   width: 100%;
   min-height: 30px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text-normal);
@@ -3105,7 +3259,7 @@
   width: 100%;
   min-height: 28px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text-normal);
@@ -3149,7 +3303,7 @@
   width: 100%;
   min-height: 30px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text-normal);
@@ -3221,7 +3375,7 @@
 }
 
 .note-database-container .db-view-config-readonly-note {
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: var(--background-secondary);
   color: var(--text-muted);
   font-size: 12px;
@@ -3252,7 +3406,7 @@
   box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 12px;
@@ -3346,7 +3500,7 @@
   align-items: center;
   gap: 6px;
   margin-bottom: 6px;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   padding: 2px;
 }
 
@@ -3378,7 +3532,7 @@
   height: 28px;
   min-width: 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 12px;
@@ -3400,7 +3554,7 @@
   max-width: 140px;
   height: 28px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   padding: 0 4px;
   box-sizing: border-box;
@@ -3452,10 +3606,8 @@
   height: 20px;
   margin: 0;
   border: 1px solid var(--checkbox-border-color, var(--background-modifier-border-hover));
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   outline: none;
-  appearance: none;
-  -webkit-appearance: none;
   background: var(--background-primary);
   box-shadow: none;
   cursor: pointer;
@@ -3502,7 +3654,7 @@
 .note-database-container .db-panel-button {
   height: 28px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -3534,7 +3686,7 @@
   align-items: center;
   gap: 6px;
   min-height: 30px;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   padding: 2px 4px;
 }
 
@@ -3627,7 +3779,7 @@
   width: 100%;
   margin-top: 4px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 13px;
@@ -3654,16 +3806,23 @@
 .modal.formula-workbench-modal-host {
   width: min(1240px, 96vw);
   max-width: min(1240px, 96vw);
+  height: min(820px, calc(100vh - 48px));
+  max-height: min(820px, calc(100vh - 48px));
 }
 
 .formula-workbench-modal {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  --db-formula-control-radius: 8px;
+  --db-radius-sm: 4px;
+  --db-radius-md: 6px;
+  --db-radius-lg: 8px;
+  --db-formula-control-radius: var(--db-radius-lg);
   --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 62%, transparent);
   --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 82%, transparent);
-  max-height: min(780px, calc(100vh - 96px));
-  min-height: min(680px, calc(100vh - 96px));
+  box-sizing: border-box;
+  height: 100%;
+  max-height: min(780px, calc(100vh - 80px));
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -3788,10 +3947,11 @@
 
 .note-database-modal .db-formula-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 410px);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
   gap: 16px;
   align-items: stretch;
   min-height: 0;
+  max-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
@@ -3812,7 +3972,10 @@
 .note-database-modal .db-formula-help-pane {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .note-database-modal .db-formula-section-title {
@@ -3825,11 +3988,13 @@
 .note-database-modal .db-formula-editor-shell {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
-  height: 270px;
+  flex: 0 0 clamp(190px, 32vh, 270px);
+  height: clamp(190px, 32vh, 270px);
+  min-height: 190px;
   margin-top: 8px;
   overflow: hidden;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
 }
 
@@ -3951,13 +4116,14 @@
 /* 公式预览区 */
 .note-database-modal .db-formula-preview {
   display: flex;
-  flex: 1 0 300px;
+  flex: 1 1 240px;
   flex-direction: column;
-  min-height: 300px;
+  min-height: 220px;
   margin-top: 14px;
   padding: 12px;
+  overflow: hidden;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-secondary);
 }
 
@@ -3986,7 +4152,7 @@
   min-height: 40px;
   margin-top: 6px;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--code-background, var(--background-primary));
   color: var(--code-normal, var(--text-normal));
   font-family: var(--font-monospace);
@@ -4016,11 +4182,9 @@
 }
 
 .note-database-modal .db-formula-preview-details {
-  display: flex;
+  display: block;
   flex: 1 1 auto;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 120px;
+  min-height: 0;
   margin-top: 12px;
   overflow: auto;
   padding-right: 4px;
@@ -4029,9 +4193,15 @@
 
 .note-database-modal .db-formula-preview-section {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  min-height: max-content;
+}
+
+.note-database-modal .db-formula-preview-section + .db-formula-preview-section {
+  margin-top: 10px;
 }
 
 .note-database-modal .db-formula-preview-section-title {
@@ -4060,7 +4230,7 @@
   min-width: 0;
   padding: 7px 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
 }
 
@@ -4126,7 +4296,7 @@
   max-height: 96px;
   overflow: auto;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--code-background, var(--background-primary));
   box-shadow: none;
   color: var(--code-normal, var(--text-normal));
@@ -4170,7 +4340,7 @@
   justify-content: space-between;
   gap: 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   color: var(--text-normal);
   cursor: pointer;
@@ -4203,7 +4373,7 @@
 }
 
 .note-database-modal button {
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
 }
 
 /* Modal 底部按钮行 */
@@ -4212,6 +4382,30 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 14px;
+}
+
+.note-database-modal .db-modal-label {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.note-database-modal .db-modal-input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.note-database-modal .db-modal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.note-database-modal .db-fullwidth-input {
+  width: 100%;
 }
 
 .formula-workbench-modal > .db-modal-button-row {
@@ -4228,7 +4422,18 @@
   line-height: 1.5;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
+  .modal.formula-workbench-modal-host {
+    width: min(760px, calc(100vw - 24px));
+    height: calc(100vh - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .formula-workbench-modal {
+    max-height: none;
+  }
+
   .note-database-modal .db-formula-header,
   .note-database-modal .db-formula-result-type {
     align-items: stretch;
@@ -4240,14 +4445,116 @@
 
   .note-database-modal .db-formula-workbench {
     grid-template-columns: 1fr;
+    gap: 12px;
+    align-content: start;
+    overflow-y: auto;
+  }
+
+  .note-database-modal .db-formula-editor-pane,
+  .note-database-modal .db-formula-help-pane {
+    flex: 0 0 auto;
+  }
+
+  .note-database-modal .db-formula-editor-shell {
+    flex-basis: 220px;
+    height: 220px;
+    min-height: 220px;
   }
 
   .note-database-modal .db-formula-preview {
     flex: 0 0 auto;
+    min-height: 180px;
+    max-height: 360px;
   }
 
   .note-database-modal .db-formula-preview-details {
+    max-height: 190px;
+  }
+
+  .note-database-modal .db-formula-browser {
+    max-height: 420px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(120px, 1fr) minmax(120px, auto);
+    min-height: 320px;
+    max-height: 420px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-category-list {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    gap: 4px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding: 6px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-category {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 30px;
+    padding: 6px 9px;
+    white-space: nowrap;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-function-list-compact {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-function-detail {
+    grid-column: 1;
+    grid-row: 3;
+  }
+}
+
+@media (max-height: 720px) {
+  .modal.formula-workbench-modal-host {
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .formula-workbench-modal {
+    max-height: calc(100vh - 48px);
+  }
+
+  .note-database-modal .db-formula-editor-shell {
+    flex-basis: 180px;
+    height: 180px;
+    min-height: 180px;
+  }
+
+  .note-database-modal .db-formula-preview {
+    min-height: 160px;
     max-height: 260px;
+  }
+
+  .note-database-modal .db-formula-preview-details {
+    max-height: 112px;
+  }
+
+  .note-database-modal .db-formula-preview-output {
+    min-height: 32px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .note-database-modal .db-formula-browser {
+    max-height: 280px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col {
+    min-height: 260px;
+    max-height: 300px;
+  }
+
+  .note-database-modal .db-formula-insert-example {
+    min-height: 64px;
+    max-height: 110px;
   }
 }
 
@@ -4420,7 +4727,7 @@
 }
 
 .note-database-modal .db-status-option-row.is-drop-target {
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-modifier-hover);
 }
 
@@ -4464,6 +4771,24 @@
   gap: 4px;
 }
 
+.note-database-modal .db-status-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.note-database-modal .db-status-delete-btn:hover {
+  color: var(--text-error);
+}
+
 /* 单个颜色按钮 */
 .note-database-modal .db-status-color-button {
   display: inline-flex;
@@ -4473,7 +4798,7 @@
   height: 22px;
   margin: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--db-radius-md);
   cursor: pointer;
   padding: 0;
 }
@@ -4487,7 +4812,7 @@
 .note-database-modal .db-status-color-dot {
   width: 12px;
   height: 12px;
-  border-radius: 4px;
+  border-radius: var(--db-radius-sm);
   background: currentColor;
 }
 
@@ -4498,22 +4823,24 @@
 .note-database-modal .db-formula-browser {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
-  grid-template-rows: minmax(220px, 1fr) minmax(170px, auto);
+  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
   flex: 1 1 auto;
   min-height: 0;
-  height: min(560px, calc(100vh - 230px));
+  max-height: none;
   margin-top: 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   overflow: hidden;
   background: var(--background-primary);
 }
 
 .note-database-modal .db-formula-browser-three-col {
   display: grid;
-  grid-template-columns: 150px 300px 1fr;
-  min-height: 320px;
-  max-height: 360px;
+  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(132px, auto);
+  min-height: 0;
+  max-height: none;
+  height: 100%;
 }
 
 .note-database-modal .db-formula-category-list,
@@ -4531,10 +4858,16 @@
 }
 
 .note-database-modal .db-formula-function-list-compact {
+  grid-column: 2;
+  grid-row: 1;
   min-height: 0;
 }
 
 .note-database-modal .db-formula-function-detail {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  max-height: 180px;
   border-top: 1px solid var(--background-modifier-border);
 }
 
@@ -4543,7 +4876,7 @@
   display: flex;
   width: 100%;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
@@ -4773,7 +5106,7 @@
   width: 100%;
   margin: 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
   color: var(--text-normal);
   cursor: pointer;
@@ -4808,6 +5141,566 @@
   white-space: normal;
 }
 
+/* 公式编辑器单列窗口：上半部分保留编辑/预览，下半部分改为单栏帮助面板 */
+@media (max-width: 1100px) {
+  .modal.formula-workbench-modal-host {
+    width: min(780px, calc(100vw - 24px));
+    height: calc(100vh - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .formula-workbench-modal {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    max-height: none;
+    padding: 18px 24px 16px;
+  }
+
+  .formula-workbench-modal h3 {
+    font-size: 22px;
+    line-height: 1.2;
+  }
+
+  .note-database-modal .db-formula-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 12px;
+    margin-bottom: 8px;
+    padding-right: 0;
+  }
+
+  .note-database-modal .db-formula-title-wrap {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .note-database-modal .db-formula-subtitle {
+    font-size: 11px;
+  }
+
+  .note-database-modal .db-formula-result-type {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+  }
+
+  .note-database-modal .db-formula-result-type select {
+    min-width: 88px;
+    height: 30px;
+  }
+
+  .note-database-modal .db-formula-workbench {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(240px, 0.82fr);
+    gap: 12px;
+    min-height: 0;
+    overflow: hidden;
+    padding-right: 0;
+  }
+
+  .note-database-modal .db-formula-editor-pane {
+    min-height: 0;
+    overflow: auto;
+    padding-right: 4px;
+    scrollbar-gutter: stable;
+  }
+
+  .note-database-modal .db-formula-help-pane {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .note-database-modal .db-formula-editor-shell {
+    flex: 0 0 220px;
+    height: 220px;
+    min-height: 220px;
+  }
+
+  .note-database-modal .db-formula-reference-note {
+    margin-top: 7px;
+    font-size: 11px;
+  }
+
+  .note-database-modal .db-formula-preview {
+    flex: 0 0 auto;
+    min-height: 180px;
+    max-height: none;
+    margin-top: 10px;
+  }
+
+  .note-database-modal .db-formula-preview-details {
+    max-height: 220px;
+  }
+
+  .note-database-modal .db-formula-preview-row,
+  .note-database-modal .db-formula-preview-field-item {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .note-database-modal .db-formula-help-header {
+    flex: 0 0 auto;
+  }
+
+  .note-database-modal .db-formula-help-title-row {
+    align-items: center;
+  }
+
+  .note-database-modal .db-formula-copy-ai-prompt {
+    height: 30px;
+    font-size: 11px;
+    padding: 0 9px;
+  }
+
+  .note-database-modal .db-formula-help-search {
+    flex: 0 0 auto;
+    height: 32px;
+  }
+
+  .note-database-modal .db-formula-browser {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .note-database-modal .db-formula-browser-three-col {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(116px, auto);
+    min-height: 0;
+    max-height: none;
+    height: 100%;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-category-list {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding: 6px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-category {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 30px;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-function-list-compact {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-function-detail {
+    grid-column: 1;
+    grid-row: 3;
+    max-height: 180px;
+    overflow: auto;
+    border-top: 1px solid var(--background-modifier-border);
+  }
+
+  .note-database-modal .db-formula-function-detail h4 {
+    font-size: 16px;
+  }
+
+  .note-database-modal .db-formula-insert-example {
+    min-height: 58px;
+    max-height: 120px;
+  }
+
+  .formula-workbench-modal > .db-modal-button-row {
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+}
+
+@media (max-width: 1100px) and (max-height: 720px) {
+  .formula-workbench-modal {
+    padding: 14px 20px 12px;
+  }
+
+  .formula-workbench-modal h3 {
+    font-size: 20px;
+  }
+
+  .note-database-modal .db-formula-workbench {
+    grid-template-rows: minmax(0, 1fr) minmax(210px, 0.78fr);
+    gap: 10px;
+  }
+
+  .note-database-modal .db-formula-editor-shell {
+    flex-basis: 170px;
+    height: 170px;
+    min-height: 170px;
+  }
+
+  .note-database-modal .db-formula-preview {
+    min-height: 150px;
+  }
+
+  .note-database-modal .db-formula-preview-details {
+    max-height: 120px;
+  }
+
+  .note-database-modal .db-formula-browser-three-col .db-formula-function-detail {
+    max-height: 128px;
+  }
+}
+
+@media (max-width: 620px) {
+  .note-database-modal .db-formula-header {
+    grid-template-columns: 1fr;
+  }
+
+  .note-database-modal .db-formula-result-type {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+}
+
+.formula-workbench-modal.is-formula-compact {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: none;
+  min-height: 0;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+}
+
+.formula-workbench-modal.is-formula-compact h3 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 12px;
+  margin-bottom: 2px;
+  padding-right: 0;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-title-wrap {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-subtitle {
+  font-size: 11px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-result-type {
+  grid-column: 2;
+  grid-row: 1;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  justify-self: end;
+  margin-top: 1px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-result-type select {
+  min-width: 76px;
+  height: 28px;
+  max-height: 28px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-workbench {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 4fr) minmax(0, 6fr);
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+  padding-right: 0;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-editor-pane {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-help-pane {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-editor-shell {
+  grid-template-columns: 36px minmax(0, 1fr);
+  flex: 0 0 74px;
+  height: 74px;
+  min-height: 74px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-line-numbers {
+  padding-top: 9px;
+  padding-right: 7px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-highlight,
+.formula-workbench-modal.is-formula-compact .db-formula-textarea {
+  padding: 9px 10px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-reference-note {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview {
+  flex: 0 0 auto;
+  min-height: 128px;
+  max-height: 220px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  overflow: hidden;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-row {
+  gap: 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview select {
+  height: 28px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-result-card {
+  margin-top: 6px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-output {
+  min-height: 28px;
+  margin-top: 4px;
+  padding: 4px 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-status {
+  margin-top: 6px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-details {
+  max-height: 150px;
+  min-height: 0;
+  margin-top: 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-section + .db-formula-preview-section {
+  margin-top: 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-preview-row,
+.formula-workbench-modal.is-formula-compact .db-formula-preview-field-item {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-help-header {
+  flex: 0 0 auto;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-help-title-row {
+  align-items: center;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-copy-ai-prompt {
+  min-height: 25px;
+  font-size: 11px;
+  padding: 0 9px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-help-search {
+  flex: 0 0 auto;
+  height: 25px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr) minmax(92px, auto);
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-category-list {
+  display: flex;
+  grid-column: 1;
+  grid-row: 1;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 40px;
+  max-height: 44px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-right: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 4px 5px 8px;
+  white-space: nowrap;
+  overscroll-behavior-x: contain;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 58%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-category-list::-webkit-scrollbar {
+  height: 5px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-category-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-category-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 58%, transparent);
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-category {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  min-height: 28px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-function-list-compact {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  overflow: auto;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-function-row {
+  min-height: 42px;
+  padding: 6px 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-field-row {
+  grid-template-columns: 20px minmax(0, 1fr);
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-function-row span:last-child,
+.formula-workbench-modal.is-formula-compact .db-formula-signature {
+  font-size: 10.5px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-function-desc {
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-field-options {
+  margin-top: 8px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-field-option {
+  min-height: 18px;
+  padding: 0 6px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-browser-three-col .db-formula-function-detail {
+  grid-column: 1;
+  grid-row: 3;
+  max-height: 150px;
+  overflow: auto;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-function-detail h4 {
+  font-size: 14px;
+}
+
+.formula-workbench-modal.is-formula-compact .db-formula-insert-example {
+  min-height: 48px;
+  max-height: 104px;
+  margin-top: 8px;
+  padding: 8px;
+}
+
+.formula-workbench-modal.is-formula-narrow {
+  padding: 12px 18px 12px;
+}
+
+.formula-workbench-modal.is-formula-narrow h3 {
+  font-size: 18px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-result-type {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-result-type span {
+  display: none;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-workbench {
+  grid-template-rows: minmax(0, 4fr) minmax(0, 6fr);
+  gap: 10px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-editor-shell {
+  flex-basis: 68px;
+  height: 68px;
+  min-height: 68px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-preview {
+  min-height: 104px;
+  max-height: 190px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-preview-details {
+  max-height: 124px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-browser-three-col {
+  grid-template-rows: auto minmax(0, 1fr) minmax(80px, auto);
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-browser-three-col .db-formula-function-list-compact {
+  min-height: 0;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-category {
+  min-height: 26px;
+  padding: 3px 8px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-function-row {
+  min-height: 38px;
+  padding: 5px 7px;
+}
+
+.formula-workbench-modal.is-formula-narrow .db-formula-browser-three-col .db-formula-function-detail {
+  max-height: 104px;
+}
+
 /* ============================================================================
  *  21. 列头拖拽排序（drag & drop 视觉反馈）
  * ============================================================================ */
@@ -4830,23 +5723,6 @@
 }
 
 /* ============================================================================
- *  22. 数据库文件标签页/标题栏图标
- * ============================================================================ */
-
-.workspace-tab-header.note-database-file-tab .workspace-tab-header-inner-title::before,
-.workspace-leaf-content.note-database-file-leaf .view-header-title::before,
-.workspace-leaf-content.note-database-file-leaf .inline-title::before {
-  display: inline-flex;
-  align-items: center;
-  margin-right: 6px;
-  color: var(--text-accent);
-  content: "🗄️";
-  font-size: 0.95em;
-  line-height: 1;
-  vertical-align: -0.08em;
-}
-
-/* ============================================================================
  *  23. 数据库文件列表 Modal（查看/打开/删除数据库文件）
  * ============================================================================ */
 
@@ -4864,7 +5740,7 @@
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--db-radius-lg);
 }
 
 .note-database-modal .db-file-list-row.is-dragging {
@@ -5019,6 +5895,13 @@
   white-space: nowrap;
 }
 
+.note-database-embed.note-database-container table.db-table td.db-cell-range-selected {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 58%, transparent);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .note-database-embed.note-database-container table.db-table th:last-child,
 .note-database-embed.note-database-container table.db-table td:last-child {
   border-right: 0;
@@ -5083,33 +5966,16 @@
   margin-right: 0;
 }
 
+/* 内嵌轻量状态栏的 sticky 位置 */
+.note-database-embed.note-database-container .db-selection-status-bar {
+  top: var(--db-table-header-top);
+}
+
 /* ============================================================================
  *  25. 数据库文件视图（db_view: true 的 frontmatter 文件）
  *  在阅读视图中以全宽表格形式渲染
  * ============================================================================ */
 
-/* 宽屏模式：突破阅读视图行宽限制 */
-.markdown-preview-view.note-database-file-view-wide .markdown-preview-sizer,
-.markdown-preview-view.note-database-file-view-wide .markdown-preview-section {
-  max-width: none;
-  width: 100%;
-}
-
-.note-database-file-view.db-width-wide {
-  width: min(100%, calc(100vw - 64px));
-}
-
-.note-database-file-view.db-width-default {
-  max-width: var(--file-line-width, 760px);
-}
-
-/* 文件视图中的内嵌容器去掉边框（避免双重边框） */
-.note-database-file-view .note-database-embed {
-  border: 0;
-  border-radius: 0;
-  padding-left: 0;
-  padding-right: 0;
-}
 
 /* ============================================================================
  *  26. 响应式适配（窄屏/移动端）
@@ -5147,5 +6013,22 @@
     top: var(--db-table-header-top);
     width: auto;
     max-width: none;
+    max-height: min(560px, calc(100vh - 200px));
   }
+}
+
+/* 手机端隐藏宽度切换按钮 */
+.is-phone .note-database-container .db-width-toggle-btn {
+  display: none;
+}
+
+/* 手机端 popover 底部额外留空，防止被 Obsidian 底部导航栏遮挡 */
+.is-phone .note-database-container .db-filter-panel,
+.is-phone .note-database-container .db-view-config-panel,
+.is-phone .note-database-container .db-column-manager,
+.is-phone .note-database-container .db-database-popover,
+.is-phone .note-database-container .db-group-popover,
+.is-phone .note-database-container .db-export-popover,
+.is-phone .note-database-container .db-view-tab-popover {
+  max-height: min(560px, calc(100vh - 210px));
 }

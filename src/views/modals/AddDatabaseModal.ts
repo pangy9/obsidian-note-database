@@ -38,7 +38,7 @@ export class AddDatabaseModal extends Modal {
       .setName(t("settings.databaseName"))
       .addText((text) => {
         text.setValue(this.name);
-        text.inputEl.style.width = "100%";
+        text.inputEl.addClass("db-fullwidth-input");
         text.onChange((v) => { this.name = v.trim() || t("defaults.newDatabase"); });
       });
 
@@ -48,7 +48,7 @@ export class AddDatabaseModal extends Modal {
       .addText((text) => {
         text.setValue(this.sourceFolder);
         text.setPlaceholder(t("settings.sourceFolder.placeholder"));
-        text.inputEl.style.width = "100%";
+        text.inputEl.addClass("db-fullwidth-input");
         text.onChange((v) => { this.sourceFolder = v.trim(); });
       });
 
@@ -58,7 +58,7 @@ export class AddDatabaseModal extends Modal {
       .addText((text) => {
         text.setValue(this.typeFilter);
         text.setPlaceholder(t("settings.typeFilter.placeholder"));
-        text.inputEl.style.width = "100%";
+        text.inputEl.addClass("db-fullwidth-input");
         text.onChange((v) => { this.typeFilter = v.trim(); });
       });
 

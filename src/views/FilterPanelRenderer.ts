@@ -219,27 +219,53 @@ export class FilterPanelRenderer {
         placeholder: t("panel.value"),
       },
     });
-    inp.value = rule.value || "";
+    let committedValue = rule.value || "";
+    inp.value = committedValue;
     inp.oninput = () => {
       rule.value = inp.value;
-      actions.saveState();
       this.scheduleRefresh(actions);
+    };
+    inp.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.commitDraftValue(rule, inp.value, committedValue, actions, (value) => {
+          committedValue = value;
+        });
+        inp.blur();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        rule.value = committedValue;
+        inp.value = committedValue;
+        this.clearPendingRefresh();
+        actions.refresh();
+        inp.blur();
+      }
+    };
+    inp.onblur = () => {
+      this.commitDraftValue(rule, inp.value, committedValue, actions, (value) => {
+        committedValue = value;
+      });
     };
   }
 
   private renderDateInput(row: HTMLElement, rule: FilterRule, actions: FilterPanelActions): void {
-    const parts = String(rule.value || "").substring(0, 10).split("-");
     const wrap = row.createDiv({ cls: "db-date-segments db-filter-date-segments" });
     const yearInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "4", placeholder: "YYYY" } });
     wrap.createSpan({ cls: "db-date-sep", text: "-" });
     const monthInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "MM" } });
     wrap.createSpan({ cls: "db-date-sep", text: "-" });
     const dayInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
-    yearInp.value = parts[0] || "";
-    monthInp.value = parts[1] || "";
-    dayInp.value = parts[2] || "";
-
+    let committedValue = String(rule.value || "").substring(0, 10);
     const inputs = [yearInp, monthInp, dayInp];
+    const setInputsFromValue = (value: string) => {
+      const parts = value.split("-");
+      yearInp.value = parts[0] || "";
+      monthInp.value = parts[1] || "";
+      dayInp.value = parts[2] || "";
+    };
+    setInputsFromValue(committedValue);
     const updateValue = () => {
       const y = yearInp.value.replace(/\D/g, "");
       const m = monthInp.value.replace(/\D/g, "");
@@ -248,13 +274,35 @@ export class FilterPanelRenderer {
       monthInp.value = m;
       dayInp.value = d;
       rule.value = y && m && d ? `${y}-${this.pad2(m)}-${this.pad2(d)}` : "";
-      actions.saveState();
       this.scheduleRefresh(actions);
+    };
+    const commitValue = () => {
+      this.commitDraftValue(rule, String(rule.value || ""), committedValue, actions, (value) => {
+        committedValue = value;
+      });
+    };
+    const restoreValue = () => {
+      rule.value = committedValue;
+      setInputsFromValue(committedValue);
+      this.clearPendingRefresh();
+      actions.refresh();
     };
     const keyHandler = (event: KeyboardEvent, input: HTMLInputElement, prev?: HTMLInputElement) => {
       if (event.key === "Backspace" && input.value === "" && prev) {
         event.preventDefault();
         prev.focus();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitValue();
+        input.blur();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        restoreValue();
+        input.blur();
         return;
       }
       if (["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -278,9 +326,27 @@ export class FilterPanelRenderer {
       if (dayInp.value.length === 1 && /^[4-9]$/.test(dayInp.value)) dayInp.value = `0${dayInp.value}`;
       updateValue();
     };
-    inputs.forEach((input) => {
-      input.onblur = () => updateValue();
+    wrap.addEventListener("focusout", (event) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && wrap.contains(next)) return;
+      commitValue();
     });
+  }
+
+  private commitDraftValue(
+    rule: FilterRule,
+    nextValue: string,
+    committedValue: string,
+    actions: FilterPanelActions,
+    onCommitted: (value: string) => void
+  ): void {
+    this.clearPendingRefresh();
+    rule.value = nextValue;
+    if (nextValue !== committedValue) {
+      actions.saveState();
+      onCommitted(nextValue);
+    }
+    actions.refresh();
   }
 
   private pad2(value: string): string {

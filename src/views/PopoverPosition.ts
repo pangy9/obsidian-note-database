@@ -95,7 +95,14 @@ export function getVisiblePopoverBounds(container: HTMLElement | null): DOMRect 
   const left = Math.max(viewport.left, appRect.left, containerRect.left);
   const top = Math.max(viewport.top, appRect.top, containerRect.top);
   const right = Math.min(viewport.right, appRect.right, containerRect.right);
-  const bottom = Math.min(viewport.bottom, appRect.bottom, containerRect.bottom);
+  let bottom = Math.min(viewport.bottom, appRect.bottom, containerRect.bottom);
+  // 移动端底部导航栏留空：手机 Obsidian 有固定底部 tab bar，popover 底部按钮需避让
+  if (document.body.classList.contains("is-phone")) {
+    const navbar = document.querySelector(".mobile-navbar");
+    const navbarHeight = navbar instanceof HTMLElement ? navbar.getBoundingClientRect().height : 50;
+    const safeBottom = parseFloat(getComputedStyle(document.body).getPropertyValue("--safe-area-inset-bottom") || "0");
+    bottom = Math.min(bottom, viewport.bottom - navbarHeight - safeBottom);
+  }
   if (right <= left || bottom <= top) return viewport;
   return new DOMRect(left, top, right - left, bottom - top);
 }

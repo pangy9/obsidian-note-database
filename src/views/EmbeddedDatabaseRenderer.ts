@@ -8,6 +8,9 @@ import { ColumnDef, DatabaseConfig, GroupOrderMode, RowData, ViewConfig, generat
 import { isOptionColumnType, toBooleanValue } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder } from "../data/GroupOrder";
 import { getEffectiveFilterRules } from "../data/FilterRules";
+import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
+import { createCsvMarkdownZip, CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
+import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { CellRenderer } from "./CellRenderer";
 import { ColumnHeaderController } from "./ColumnHeaderController";
@@ -24,6 +27,8 @@ import { ToolbarRenderer } from "./ToolbarRenderer";
 import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
 import { GroupOrderModal } from "./modals/GroupOrderModal";
+import { installPopoverAutoClose } from "./PopoverAutoClose";
+import { estimateAutoColumnWidth } from "./ColumnWidth";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
@@ -64,13 +69,17 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private showViewConfigPanel = false;
   private activeHeaderPopover?: HeaderPopoverKind;
   private headerPopoverAnchorEl?: HTMLElement;
+  private removeHeaderPopoverAutoClose?: () => void;
   private config?: ViewConfig;
   private currentDbConfig?: DatabaseConfig;
   private currentSourcePath: string | null = null;
   private currentViewIndex = 0;
   private viewIndexOverride: number | null = null;
   private selectedRows = new Set<string>();
+  private cellSelection: { anchor: CellAddress; focus: CellAddress } | null = null;
+  private isSelectingCells = false;
   private syncingComputed = false;
+  private pendingDataChange = false;
   private suppressDataReloadUntil = 0;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
   private readonly handleWindowFocusBound = () => this.refreshOnActivation();
@@ -80,6 +89,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private pendingDatabaseOverride?: EmbeddedDatabaseEntry;
   private unsubscribe?: () => void;
   private unsubscribeViewConfig?: () => void;
+  private configHistoryStack: DatabaseConfig[] = [];
 
   constructor(
     private app: App,
@@ -94,11 +104,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     private defaultRecordFolder = ""
   ) {
     super(containerEl);
-    this.cellRenderer = new CellRenderer(this.dataSource, () => this.refreshAfterSave(), undefined, undefined, undefined, true);
+    const isCodeBlock = persistMode === "codeblock";
+    this.cellRenderer = new CellRenderer(this.dataSource, () => this.refreshAfterSave(), undefined, undefined, undefined, isCodeBlock);
     this.rowMenu = new RowMenu({
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
-      isReadOnly: true,
+      isReadOnly: isCodeBlock,
     });
     this.columnHeaderController = new ColumnHeaderController({
       getConfig: () => this.config,
@@ -106,6 +117,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showContextMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl),
       sortByColumn: (col) => this.sortByColumn(col),
       saveConfig: () => this.persistEmbeddedConfigToSource(),
+      setUndoLabel: (_label: string) => { /* no-op in embed mode */ },
       refresh: () => { if (this.config) this.renderResults(this.config); },
     });
     this.tableRenderer = new TableRenderer({
@@ -116,16 +128,21 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       setupColumnHeader: (th, col) => this.columnHeaderController.setup(th, col),
       setupRow: (tr, row) => this.rowMenu.attachToRow(tr, row),
-      renderCell: (td, row, col) => this.renderReadOnlyCell(td, row, col),
-      createEntry: () => {},
+      renderCell: (td, row, col) => {
+        if (isCodeBlock) this.renderReadOnlyCell(td, row, col);
+        else this.cellRenderer.renderCell(td, row, col);
+        td.toggleClass("db-cell-range-selected", this.isEmbedCellSelected(row.file.path, col.key));
+        this.setupEmbedCellSelection(td, row, col);
+      },
+      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
-      hideCreateEntry: true,
-      isReadOnly: true,
+      hideCreateEntry: isCodeBlock,
+      isReadOnly: isCodeBlock,
     });
     this.boardRenderer = new BoardRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults) => { void this.createBlankEntry(defaults); },
+      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       updateGroup: (row, field, value) => this.updateBoardGroup(row, field, value),
       updateGroupOrder: (field, order) => this.updateBoardGroupOrder(field, order),
       updateCardOrder: (field, groupKey, paths) => this.updateBoardCardOrder(field, groupKey, paths),
@@ -139,12 +156,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
-      isReadOnly: true,
+      showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      isReadOnly: isCodeBlock,
       canReorderGroups: true,
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: () => {},
+      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -155,11 +173,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
-      isReadOnly: true,
+      showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      isReadOnly: isCodeBlock,
     });
     this.listRenderer = new ListRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: () => {},
+      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -169,9 +188,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
-      isReadOnly: true,
+      showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      isReadOnly: isCodeBlock,
     });
   }
+
+  private readonly handleEmbedKeydownBound = (event: KeyboardEvent) => this.handleEmbedKeydown(event);
+  private readonly handleMouseUpBound = () => { this.isSelectingCells = false; };
 
   onload(): void {
     this.containerEl.addClass("note-database-container");
@@ -179,16 +202,22 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.unsubscribe = this.dataSource.onDataChanged(() => this.handleDataChanged());
     this.unsubscribeViewConfig = this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation));
     document.addEventListener("mousedown", this.handleOutsideClickBound, true);
+    document.addEventListener("mouseup", this.handleMouseUpBound);
     window.addEventListener("focus", this.handleWindowFocusBound);
+    this.containerEl.addEventListener("keydown", this.handleEmbedKeydownBound);
     this.observeVisibility();
     this.render();
   }
 
   onunload(): void {
+    this.removeHeaderPopoverAutoClose?.();
+    this.removeHeaderPopoverAutoClose = undefined;
     this.unsubscribe?.();
     this.unsubscribeViewConfig?.();
     document.removeEventListener("mousedown", this.handleOutsideClickBound, true);
+    document.removeEventListener("mouseup", this.handleMouseUpBound);
     window.removeEventListener("focus", this.handleWindowFocusBound);
+    this.containerEl.removeEventListener("keydown", this.handleEmbedKeydownBound);
     this.intersectionObserver?.disconnect();
     this.clearFileViewWidthClass();
   }
@@ -218,6 +247,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.showColumnManager = false;
     this.showViewConfigPanel = false;
     this.clearHeaderPopover();
+    this.cellSelection = null;
+    this.isSelectingCells = false;
     this.render(scroll);
     this.pendingDatabaseOverride = undefined;
   }
@@ -250,7 +281,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private handleDataChanged(): void {
-    if (this.syncingComputed) return;
+    if (this.syncingComputed) {
+      this.pendingDataChange = true;
+      return;
+    }
     if (this.config && Date.now() < this.suppressDataReloadUntil) {
       return;
     }
@@ -282,8 +316,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private closePopovers(): void {
+    this.toolbarRenderer.closePopovers();
     if (!this.config) return;
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
+    this.removeHeaderPopoverAutoClose?.();
+    this.removeHeaderPopoverAutoClose = undefined;
     this.showFilterPanel = false;
     this.showSortPanel = false;
     this.showColumnManager = false;
@@ -318,6 +355,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     };
   }
 
+  /** Suppress data reload for at least `ms` milliseconds, never shortening existing suppression */
+  private suppressDataReload(ms: number): void {
+    this.suppressDataReloadUntil = Math.max(this.suppressDataReloadUntil, Date.now() + ms);
+  }
+
   private handlePeerViewConfigChanged(mutation: ViewConfigMutation): void {
     if (mutation.sourceInstanceId === this.instanceId) return;
     if (!this.matchesCurrentView(mutation)) return;
@@ -327,7 +369,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         sourcePath: mutation.dbPath || this.currentSourcePath,
       };
     }
-    this.suppressDataReloadUntil = Date.now() + 1000;
+    this.suppressDataReload(1000);
     this.hardRefreshFromSource();
   }
 
@@ -495,13 +537,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       openFullView: () => { void this.openFullDatabaseView(config); },
       copyViewCode: () => { void this.copyEmbeddedViewCode(config); },
       exportData: (format) => this.exportData(config, format),
-      createEntry: () => {},
-      isReadOnly: true,
+      exportCsvMarkdownZip: () => { void this.exportCsvMarkdownZip(); },
+      createEntry: (defaults) => { if (this.persistMode !== "codeblock") void this.createBlankEntry(defaults); },
+      isReadOnly: this.persistMode === "codeblock",
       addDatabase: () => {},
       deleteDatabase: () => {},
       openDatabaseFile: () => {},
       isReadOnlyViews: true,
       hideWidthSelect: true,
+      showDatabaseChrome: this.persistMode === "frontmatter",
+      hideDatabaseActions: this.persistMode === "frontmatter",
     });
     this.updateStickyOffsets();
   }
@@ -534,6 +579,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.renderSortPanel(config);
     this.renderColumnManager(config);
     this.renderViewConfigPanel(config);
+    if (shouldOpen) this.installHeaderPopoverAutoClose(kind);
+    else {
+      this.removeHeaderPopoverAutoClose?.();
+      this.removeHeaderPopoverAutoClose = undefined;
+    }
     if (wasClosingActivePopover) {
       this.updateToolbarIndicators(config);
       this.renderResults(config);
@@ -551,6 +601,25 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private clearHeaderPopover(): void {
     this.activeHeaderPopover = undefined;
     this.headerPopoverAnchorEl = undefined;
+  }
+
+  private installHeaderPopoverAutoClose(kind: HeaderPopoverKind): void {
+    this.removeHeaderPopoverAutoClose?.();
+    this.removeHeaderPopoverAutoClose = undefined;
+    const panelSelector = kind === "filter"
+      ? ".db-filter-panel"
+      : kind === "sort"
+        ? ".db-sort-panel"
+        : kind === "view"
+          ? ".db-view-config-panel"
+          : ".db-column-manager";
+    const panel = this.containerEl.querySelector<HTMLElement>(panelSelector);
+    if (!panel) return;
+    this.removeHeaderPopoverAutoClose = installPopoverAutoClose({
+      panel,
+      anchorEl: this.headerPopoverAnchorEl,
+      close: () => this.closePopovers(),
+    });
   }
 
   private getHeaderPopoverAnchor(kind: HeaderPopoverKind): HTMLElement | undefined {
@@ -682,6 +751,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       },
       editColumn: () => new Notice(t("notice.editInFullView", { action: t("notice.editProperty") })),
       addColumn: () => new Notice(t("notice.editInFullView", { action: t("panel.addColumn") })),
+      deleteColumn: () => new Notice(t("notice.editInFullView", { action: t("common.delete") })),
+      isReadOnly: true,
     }, this.getHeaderPopoverAnchor("columns"));
   }
 
@@ -869,8 +940,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   /** Limited column context menu for embedded view: hide, wrap, sort only */
-  private showColumnContextMenu(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void {
+  private showColumnContextMenu(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement, includeWidthActions = true): void {
     event.preventDefault();
+    event.stopPropagation();
     const config = this.config;
     if (!config) return;
     const menu = new Menu().setUseNativeMenu(false);
@@ -896,16 +968,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         void this.saveEmbeddedConfigToSource();
       })
     );
-    menu.addItem((item) => item
-      .setTitle(t("menu.autoFitColumn"))
-      .setIcon("scan-text")
-      .onClick(() => this.autoFitColumn(config, col))
-    );
-    menu.addItem((item) => item
-      .setTitle(t("menu.autoFitAllColumns"))
-      .setIcon("scan-line")
-      .onClick(() => this.autoFitAllColumns(config))
-    );
+    if (includeWidthActions) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.autoFitColumn"))
+        .setIcon("ruler-dimension-line")
+        .onClick(() => this.autoFitColumn(config, col))
+      );
+      menu.addItem((item) => item
+        .setTitle(t("menu.autoFitAllColumns"))
+        .setIcon("scan-line")
+        .onClick(() => this.autoFitAllColumns(config))
+      );
+    }
     menu.addItem((item) => item
       .setTitle(t("menu.sortBy", { name: col.label }))
       .setIcon("arrow-up-down")
@@ -944,13 +1018,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
-    const labelLength = (col.label || col.key).length;
-    const longestValue = rows.reduce((max, row) => {
-      const text = this.getColumnDisplayText(row, col);
-      return Math.max(max, text.length);
-    }, labelLength);
-    const base = col.type === "checkbox" ? Math.max(54, labelLength * 7.2 + 32) : Math.ceil(longestValue * 7.2 + 48);
-    return Math.max(36, Math.min(base, 800));
+    return estimateAutoColumnWidth(col, rows, (row, column) => this.getColumnDisplayText(row, column));
   }
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
@@ -1321,14 +1389,25 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (notify) new Notice(t("notice.syncedFormulas", { count: changed }));
     } finally {
       this.syncingComputed = false;
-      this.suppressDataReloadUntil = Date.now() + 500;
+      this.suppressDataReload(500);
+      if (this.pendingDataChange) {
+        this.pendingDataChange = false;
+        this.render();
+      }
     }
   }
 
   private persistEmbeddedConfigLocally(config = this.config): void {
     if (!config) return;
+    const before = this.persistMode === "frontmatter" && this.currentDbConfig
+      ? this.cloneDatabaseConfig(this.currentDbConfig)
+      : undefined;
     this.stateStore.persist(config, this.vs(config));
     this.copyConfigToSourceView();
+    if (before && this.currentDbConfig && JSON.stringify(before) !== JSON.stringify(this.currentDbConfig)) {
+      this.configHistoryStack.unshift(before);
+      if (this.configHistoryStack.length > 15) this.configHistoryStack.length = 15;
+    }
   }
 
   private updateToolbarIndicators(config = this.config): void {
@@ -1382,6 +1461,26 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
   }
 
+  async undoLastConfigEdit(): Promise<void> {
+    const previous = this.configHistoryStack.shift();
+    if (!previous || !this.currentSourcePath) {
+      new Notice(t("notice.nothingToUndo"));
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(this.currentSourcePath);
+    if (!(file instanceof TFile)) return;
+    this.pendingDatabaseOverride = { config: previous, sourcePath: this.currentSourcePath };
+    this.currentDbConfig = previous;
+    this.config = undefined;
+    this.state = undefined;
+    this.stateStore.clear();
+    await this.dataSource.updateViewDefFile(file, previous, this.getCurrentDatabaseMutationTarget());
+    const nextConfig = this.getEmbeddedConfig();
+    if (nextConfig) this.render(undefined);
+    this.containerEl.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
+    new Notice(t("notice.undone", { action: t("undo.viewConfig") }));
+  }
+
   private async saveCodeBlockReference(config: ViewConfig): Promise<void> {
     if (this.persistMode !== "codeblock") return;
     const file = this.app.vault.getAbstractFileByPath(this.sourcePath);
@@ -1393,7 +1492,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const content = await this.app.vault.read(file);
     const lines = content.split("\n");
     lines.splice(section.lineStart, section.lineEnd - section.lineStart + 1, replacement);
-    this.suppressDataReloadUntil = Date.now() + 2500;
+    this.suppressDataReload(2500);
     await this.app.vault.modify(file, lines.join("\n"));
   }
 
@@ -1474,6 +1573,33 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     });
   }
 
+  private async exportCsvMarkdownZip(): Promise<void> {
+    const config = this.config || this.getEmbeddedConfig();
+    if (!config || !this.currentDbConfig) return;
+    const options = await new CsvMarkdownExportModal(this.app).open();
+    if (!options) return;
+    const getExportCellValue = (row: RowData, col: ColumnDef): string => {
+      if (col.key === "file.name") return row.file.basename;
+      const value = col.type === "computed" && col.computedKey
+        ? row.computed[col.computedKey]
+        : row.frontmatter[col.key];
+      if (value == null || value === "") return "";
+      if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
+      return String(value);
+    };
+    await createCsvMarkdownZip(
+      this.app,
+      this.currentDbConfig,
+      config,
+      this.rows,
+      (_index) => this.rows,
+      (view) => getVisibleColumns(view, this.rows, this.vs(view), this.pendingShowColumns),
+      getExportCellValue,
+      "",
+      options,
+    );
+  }
+
   private moveView(fromIndex: number, toIndex: number): void {
     if (!this.currentDbConfig || fromIndex === toIndex) return;
     const views = this.currentDbConfig.views;
@@ -1500,7 +1626,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private async saveResolvedDatabaseConfig(file: TFile, mutationOverride?: ViewConfigMutation): Promise<void> {
     if (!this.config || !this.currentDbConfig) return;
-    this.suppressDataReloadUntil = Date.now() + 2500;
+    this.suppressDataReload(2500);
     this.copyConfigToSourceView();
     await this.dataSource.updateViewDefFile(file, this.currentDbConfig, mutationOverride || this.getCurrentMutationTarget());
   }
@@ -1529,6 +1655,189 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.groupByField = this.config.groupByField;
     origView.viewStates = this.config.viewStates;
     this.stateStore.persist(origView, this.vs(this.config));
+  }
+
+  // ── Cell selection & clipboard (embedded views) ──
+
+  private handleEmbedKeydown(event: KeyboardEvent): void {
+    if (!this.containerEl.isConnected) return;
+    const target = event.target;
+    const eventTarget = target instanceof HTMLElement ? target : null;
+    const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
+    if (isEditing) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && this.cellSelection) {
+      event.preventDefault();
+      void this.copySelectedEmbedCells("tsv");
+      return;
+    }
+    if (event.key === "Escape" && this.cellSelection) {
+      event.preventDefault();
+      this.clearEmbedCellSelection();
+    }
+  }
+
+  private async copySelectedEmbedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
+    const selected = this.getSelectedEmbedCellAddresses();
+    if (selected.length === 0) return;
+    if (!this.config) return;
+    // Derive row/column order from the actual table DOM for accuracy
+    const rowPaths = this.getEmbedTableRowPaths();
+    const colKeys = this.getEmbedTableColKeys();
+    const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
+    const colByKey = new Map(this.config.schema.columns.map((col) => [col.key, col]));
+    const content = serializeSelectedCells(format, selected, rowPaths, colKeys, rowByPath, colByKey, getCellDisplayText);
+    await navigator.clipboard.writeText(content);
+    new Notice(t("notice.copiedCells", { count: selected.length }));
+  }
+
+  /** Get row paths in the order they appear in the rendered table DOM */
+  private getEmbedTableRowPaths(): string[] {
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    this.containerEl.querySelectorAll<HTMLElement>("tr[data-note-database-row-path]").forEach((tr) => {
+      const path = tr.dataset.noteDatabaseRowPath;
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      paths.push(path);
+    });
+    return paths.length > 0 ? paths : this.rows.map((row) => row.file.path);
+  }
+
+  /** Get column keys in the order they appear in the rendered table thead */
+  private getEmbedTableColKeys(): string[] {
+    const firstRow = this.containerEl.querySelector<HTMLElement>(".db-table tbody tr[data-note-database-row-path]");
+    if (firstRow) {
+      const seen = new Set<string>();
+      return Array.from(firstRow.children)
+        .filter((cell): cell is HTMLElement => cell instanceof HTMLElement && cell.matches("td[data-note-database-column-key]"))
+        .map((cell) => cell.dataset.noteDatabaseColumnKey)
+        .filter((key): key is string => {
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    }
+    if (!this.config) return [];
+    return getVisibleColumns(this.config, this.rows, this.vs(this.config), this.pendingShowColumns).map((col) => col.key);
+  }
+
+  private setupEmbedCellSelection(td: HTMLElement, row: RowData, col: ColumnDef): void {
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      if (!this.config) return;
+      event.preventDefault(); // prevent browser text selection during drag
+      const addr: CellAddress = { rowPath: row.file.path, colKey: col.key };
+      if (event.shiftKey && this.cellSelection) {
+        this.cellSelection = { anchor: this.cellSelection.anchor, focus: addr };
+      } else {
+        this.cellSelection = { anchor: addr, focus: addr };
+      }
+      this.isSelectingCells = true;
+      this.renderEmbedSelectionStatusBar();
+      this.renderEmbedCellSelectionClasses();
+    };
+
+    const handleMouseEnter = () => {
+      if (!this.isSelectingCells || !this.cellSelection) return;
+      const addr: CellAddress = { rowPath: row.file.path, colKey: col.key };
+      this.cellSelection = { anchor: this.cellSelection.anchor, focus: addr };
+      this.renderEmbedSelectionStatusBar();
+      this.renderEmbedCellSelectionClasses();
+    };
+
+    td.addEventListener("mousedown", handleMouseDown);
+    td.addEventListener("mouseenter", handleMouseEnter);
+  }
+
+  private getSelectedEmbedCellAddresses(): CellAddress[] {
+    if (!this.cellSelection || !this.config) return [];
+    const rowPaths = this.getEmbedTableRowPaths();
+    const colKeys = this.getEmbedTableColKeys();
+    const { anchor, focus } = this.cellSelection;
+    const anchorRow = rowPaths.indexOf(anchor.rowPath);
+    const anchorCol = colKeys.indexOf(anchor.colKey);
+    const focusRow = rowPaths.indexOf(focus.rowPath);
+    const focusCol = colKeys.indexOf(focus.colKey);
+    if (anchorRow < 0 || anchorCol < 0 || focusRow < 0 || focusCol < 0) return [];
+    const rowStart = Math.min(anchorRow, focusRow);
+    const rowEnd = Math.max(anchorRow, focusRow);
+    const colStart = Math.min(anchorCol, focusCol);
+    const colEnd = Math.max(anchorCol, focusCol);
+    const addrs: CellAddress[] = [];
+    for (let r = rowStart; r <= rowEnd; r++) {
+      for (let c = colStart; c <= colEnd; c++) {
+        addrs.push({ rowPath: rowPaths[r], colKey: colKeys[c] });
+      }
+    }
+    return addrs;
+  }
+
+  private isEmbedCellSelected(rowPath: string, colKey: string): boolean {
+    if (!this.cellSelection) return false;
+    const addrs = this.getSelectedEmbedCellAddresses();
+    return addrs.some((addr) => addr.rowPath === rowPath && addr.colKey === colKey);
+  }
+
+  private clearEmbedCellSelection(): void {
+    this.cellSelection = null;
+    this.isSelectingCells = false;
+    this.renderEmbedCellSelectionClasses();
+    this.renderEmbedSelectionStatusBar();
+  }
+
+  private renderEmbedCellSelectionClasses(): void {
+    const selected = new Set(this.getSelectedEmbedCellAddresses().map((addr) => `${addr.rowPath}\u0000${addr.colKey}`));
+    this.containerEl.querySelectorAll<HTMLElement>("td[data-note-database-row-path][data-note-database-column-key]").forEach((cell) => {
+      const rowPath = cell.dataset.noteDatabaseRowPath;
+      const colKey = cell.dataset.noteDatabaseColumnKey;
+      cell.toggleClass("db-cell-range-selected", Boolean(rowPath && colKey && selected.has(`${rowPath}\u0000${colKey}`)));
+    });
+  }
+
+  /** Render a full Dashboard-style selection status bar.
+   *  Paste/fill/clear/undo buttons are rendered but hidden via CSS (.note-database-embed .db-embed-hide).
+   *  Only copy actions are wired up. */
+  private renderEmbedSelectionStatusBar(): void {
+    this.containerEl.querySelectorAll(".db-selection-status-bar").forEach((el) => el.remove());
+    this.containerEl.toggleClass("has-selection-status", !!this.cellSelection);
+    if (!this.cellSelection) return;
+    const config = this.config || this.getEmbeddedConfig();
+    if (!config || config.viewType !== "table") return;
+    const cellCount = this.getSelectedEmbedCellAddresses().length;
+    if (cellCount === 0) return;
+    const bar = this.containerEl.createDiv({ cls: "db-selection-status-bar" });
+
+    // Clear selection checkbox (matches Dashboard)
+    const checkbox = bar.createEl("input", {
+      cls: "db-selection-clear-checkbox",
+      attr: { type: "checkbox", title: t("toolbar.selectedCells", { count: cellCount }) },
+    });
+    checkbox.checked = true;
+    checkbox.onchange = () => { if (!checkbox.checked) this.clearEmbedCellSelection(); };
+
+    // Count text
+    bar.createSpan({ cls: "db-selection-count", text: t("toolbar.selectedCells", { count: cellCount }) });
+
+    // Copy buttons (same structure as Dashboard)
+    const copyTsvBtn = bar.createEl("button", { cls: "db-selection-action", text: t("selection.copyTsv"), attr: { type: "button" } });
+    copyTsvBtn.onclick = () => { void this.copySelectedEmbedCells("tsv"); };
+    const copyMdBtn = bar.createEl("button", { cls: "db-selection-action", text: t("selection.copyMarkdown"), attr: { type: "button" } });
+    copyMdBtn.onclick = () => { void this.copySelectedEmbedCells("markdown"); };
+    const copyCsvBtn = bar.createEl("button", { cls: "db-selection-action", text: t("selection.copyCsv"), attr: { type: "button" } });
+    copyCsvBtn.onclick = () => { void this.copySelectedEmbedCells("csv"); };
+
+    // Edit-only buttons — rendered but hidden in embedded view via CSS
+    const pasteBtn = bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.pasteCells"), attr: { type: "button" } });
+    const fillBtn = bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.fillValue"), attr: { type: "button" } });
+    const clearBtn = bar.createEl("button", { cls: "db-selection-delete db-embed-hide", text: t("selection.clearCells"), attr: { type: "button" } });
+
+    const summary = this.containerEl.querySelector(".db-summary");
+    if (summary) {
+      summary.before(bar);
+    } else {
+      const tableWrap = this.containerEl.querySelector(".db-table-wrap");
+      if (tableWrap) tableWrap.before(bar);
+    }
   }
 
 }

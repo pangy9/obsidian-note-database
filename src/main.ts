@@ -1,8 +1,9 @@
-import { App, FuzzySuggestModal, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries, moveDatabaseFilePath } from "./data/DatabaseFileOrder";
 import { ComputedFieldEngine } from "./data/ComputedField";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
+import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
 import { ColumnDef, DatabaseConfig, PluginSettings, SortRule, StatusOptionDef, ViewConfig, generateId } from "./data/types";
 import { createOptionsFromValues, getStatusPresetOptions, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
@@ -38,6 +39,9 @@ export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
   dataSource!: DataSource;
   private dbView: DatabaseView | null = null;
+  private switchingDatabaseFileView = false;
+  private markdownDatabaseFileBypass = new Map<string, number>();
+  private databaseFileConfigCache = new Map<string, DatabaseConfig>();
   private readonly commandNameKeys: Record<string, string> = {
     "open-dashboard": "command.openDashboard",
     "create-database-file-from-settings": "command.createDatabaseFile",
@@ -46,6 +50,7 @@ export default class NoteDatabasePlugin extends Plugin {
     "add-active-database-file-to-settings": "command.importDatabaseFile",
     "import-csv-markdown": "command.importCsvMarkdown",
     "export-current-view-as-csv-markdown-zip": "command.exportCsvMarkdown",
+    "undo-last-database-edit": "command.undoDatabaseEdit",
   };
 
   async onload(): Promise<void> {
@@ -69,7 +74,7 @@ export default class NoteDatabasePlugin extends Plugin {
             if (v.filters != null && !Array.isArray(v.filters)) v.filters = undefined;
             if (v.filterLogic !== "or") v.filterLogic = "and";
             if (!v.name) v.name = `${t("common.database")} ${i + 1}`;
-            if (!v.viewType) v.viewType = "table";
+            if (v.viewType !== "board" && v.viewType !== "gallery" && v.viewType !== "list") v.viewType = "table";
             // Wrap as DatabaseConfig with one ViewConfig child
             const viewCopy = { ...v, id: v.id || generateId() };
             return {
@@ -99,6 +104,10 @@ export default class NoteDatabasePlugin extends Plugin {
               db.views = [this.createDefaultView(db)];
             }
             if (!db.schema) db.schema = db.views[0]?.schema || { columns: [], computedFields: [] };
+            for (const view of db.views) {
+              if (!view || typeof view !== "object") continue;
+              if (view.viewType !== "board" && view.viewType !== "gallery" && view.viewType !== "list") view.viewType = "table";
+            }
             return db;
           });
         }
@@ -111,6 +120,7 @@ export default class NoteDatabasePlugin extends Plugin {
 
         if (!rawSettings.databaseFolder) rawSettings.databaseFolder = DEFAULT_SETTINGS.databaseFolder;
         if (!Array.isArray(rawSettings.databaseFileOrder)) rawSettings.databaseFileOrder = [];
+        if (rawSettings.dashboardInitialSource !== "file") rawSettings.dashboardInitialSource = DEFAULT_SETTINGS.dashboardInitialSource;
         rawSettings.statusPresets = normalizeStatusPresets(rawSettings.statusPresets);
         rawSettings.defaultStatusPresetId = resolveDefaultStatusPresetId(rawSettings.statusPresets, rawSettings.defaultStatusPresetId);
         if (Array.isArray(rawSettings.databases)) {
@@ -147,10 +157,30 @@ export default class NoteDatabasePlugin extends Plugin {
     this.dataSource = new DataSource(this.app);
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
-      if (file instanceof TFile) void this.syncComputedForOpenedFile(file);
+      if (file instanceof TFile) this.syncComputedForOpenedFile(file).catch(console.error);
+      if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFileTabs();
     }));
-    this.registerEvent(this.app.workspace.on("layout-change", () => this.markDatabaseFileTabs()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      const file = this.getLeafFile(leaf) || this.app.workspace.getActiveFile();
+      if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file, leaf || undefined);
+    }));
+    this.registerEvent(this.app.workspace.on("layout-change", () => {
+      this.markDatabaseFileTabs();
+      const file = this.app.workspace.getActiveFile();
+      if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      this.databaseFileConfigCache.delete(file.path);
+      const activeFile = this.app.workspace.getActiveFile();
+      if (activeFile instanceof TFile && activeFile.path === file.path) {
+        this.scheduleDatabaseFileViewOpen(file);
+      }
+    }));
+    this.app.workspace.onLayoutReady(() => {
+      const file = this.app.workspace.getActiveFile();
+      if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
+    });
 
     // Register database view
     this.registerView(
@@ -164,9 +194,34 @@ export default class NoteDatabasePlugin extends Plugin {
           this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
           this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
           this.settings.defaultStatusPresetId,
-          () => this.saveSettings()
+          () => this.saveSettings(),
+          [],
+          this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
         );
         return this.dbView;
+      }
+    );
+    this.registerView(
+      DATABASE_FILE_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => {
+        const state = leaf.getViewState();
+        const filePath = (state.state as any)?.file as string || "";
+        const file = filePath ? this.app.vault.getAbstractFileByPath(filePath) : null;
+        let configs: DatabaseConfig[] = [];
+        if (file instanceof TFile) {
+          const config = this.getDatabaseFileConfig(file);
+          if (config) configs = [config];
+        }
+        return new DatabaseFileDashboardView(
+          leaf,
+          this.dataSource,
+          configs,
+          filePath,
+          this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+          this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
+          this.settings.defaultStatusPresetId,
+          () => this.saveSettings(),
+        );
       }
     );
 
@@ -223,6 +278,13 @@ export default class NoteDatabasePlugin extends Plugin {
         await this.exportCurrentViewAsCsvMarkdownZip();
       },
     });
+    this.addCommand({
+      id: "undo-last-database-edit",
+      name: t("command.undoDatabaseEdit"),
+      callback: async () => {
+        await this.dbView?.undoLastEdit();
+      },
+    });
 
     this.registerMarkdownCodeBlockProcessor("note-database", (source, el, ctx) => {
       ctx.addChild(new EmbeddedDatabaseRenderer(
@@ -252,31 +314,84 @@ export default class NoteDatabasePlugin extends Plugin {
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
       ));
     });
-    this.registerMarkdownPostProcessor((el, ctx) => {
-      if (ctx.frontmatter?.db_view !== true) return;
-      const parent = el.parentElement || el;
-      if (parent.querySelector(".note-database-file-view")) return;
-      const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-      if (!(file instanceof TFile)) return;
-      const entry = this.dataSource.getViewDefFiles().find((candidate) => candidate.file.path === file.path);
-      if (!entry) return;
-      const host = parent.createDiv({ cls: "note-database-file-view" });
-      parent.insertBefore(host, parent.firstChild);
-      ctx.addChild(new EmbeddedDatabaseRenderer(
-        this.app,
-        host,
-        this.dataSource,
-        () => this.getEmbeddedDatabaseEntries().filter((candidate) => candidate.sourcePath === entry.file.path),
-        `dbPath: ${entry.file.path}`,
-        ctx.sourcePath,
-        () => ctx.getSectionInfo(host) || ctx.getSectionInfo(el),
-        () => this.saveSettings(),
-        "frontmatter",
-        this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
-      ));
-    });
-
     setTimeout(() => this.markDatabaseFileTabs(), 1000);
+  }
+
+  private scheduleDatabaseFileViewOpen(file: TFile, leaf?: WorkspaceLeaf, delay = 0): void {
+    window.setTimeout(() => {
+      void this.openDatabaseFileViewIfNeeded(file, leaf);
+    }, delay);
+  }
+
+  private async openDatabaseFileViewIfNeeded(file: TFile, targetLeaf?: WorkspaceLeaf): Promise<void> {
+    if (this.switchingDatabaseFileView || file.extension !== "md") return;
+    const bypassUntil = this.markdownDatabaseFileBypass.get(file.path) || 0;
+    if (Date.now() < bypassUntil) return;
+    if (!(await this.isDatabaseViewFile(file))) return;
+    const leaf = targetLeaf || this.app.workspace.activeLeaf;
+    if (!leaf || leaf.view.getViewType() === DATABASE_FILE_VIEW_TYPE) return;
+    const leafFile = this.getLeafFile(leaf);
+    if (leafFile instanceof TFile && leafFile.path !== file.path) return;
+    if (!(leaf.view instanceof MarkdownView) && leaf.view.getViewType() !== "markdown") return;
+    this.switchingDatabaseFileView = true;
+    try {
+      await leaf.setViewState({
+        type: DATABASE_FILE_VIEW_TYPE,
+        state: { file: file.path },
+        active: true,
+      });
+    } finally {
+      this.switchingDatabaseFileView = false;
+    }
+  }
+
+  private async isDatabaseViewFile(file: TFile): Promise<boolean> {
+    if (this.getDatabaseFileConfig(file)) return true;
+    const fm = await this.readFileFrontmatter(file);
+    if (fm?.db_view !== true) return false;
+    const config = this.dataSource.parseDatabaseConfig(fm);
+    if (config) this.databaseFileConfigCache.set(file.path, config);
+    return true;
+  }
+
+  private getDatabaseFileConfig(file: TFile): DatabaseConfig | null {
+    const cached = this.databaseFileConfigCache.get(file.path);
+    if (cached) return cached;
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
+    if (fm?.db_view !== true) return null;
+    const config = this.dataSource.parseDatabaseConfig(fm);
+    if (config) this.databaseFileConfigCache.set(file.path, config);
+    return config;
+  }
+
+  private async readFileFrontmatter(file: TFile): Promise<Record<string, unknown> | null> {
+    try {
+      const content = await this.app.vault.cachedRead(file);
+      const match = content.match(/^\uFEFF?---\s*\n([\s\S]*?)\n---(?:\n|$)/);
+      if (!match) return null;
+      const parsed = parseYaml(match[1]);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch (error) {
+      console.error("Note Database: failed to read database file frontmatter", error);
+      return null;
+    }
+  }
+
+  private getLeafFile(leaf: WorkspaceLeaf | null | undefined): TFile | null {
+    const file = (leaf?.view as { file?: unknown } | undefined)?.file;
+    return file instanceof TFile ? file : null;
+  }
+
+  private async openDatabaseFileAsMarkdown(file: TFile): Promise<void> {
+    this.markdownDatabaseFileBypass.set(file.path, Date.now() + 1000);
+    const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({
+      type: "markdown",
+      state: { file: file.path, mode: "source" },
+      active: true,
+    });
   }
 
   /** Open the dashboard view in the main content area as a new tab */
@@ -304,7 +419,8 @@ export default class NoteDatabasePlugin extends Plugin {
         this.settings.databases,
         this.settings.databaseFileOrder || [],
         this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-        this.settings.defaultStatusPresetId
+        this.settings.defaultStatusPresetId,
+        this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
       );
     }
   }
@@ -333,7 +449,8 @@ export default class NoteDatabasePlugin extends Plugin {
         this.settings.databases,
         this.settings.databaseFileOrder || [],
         this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-        this.settings.defaultStatusPresetId
+        this.settings.defaultStatusPresetId,
+        this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
       )
     ).open();
   }
@@ -1587,6 +1704,8 @@ export default class NoteDatabasePlugin extends Plugin {
       ...this.settings.databases,
       ...this.dataSource.getViewDefFiles().map((entry) => entry.config),
     ];
+    // Collect computed updates from all matching databases and merge into a single write
+    const mergedUpdates: Record<string, unknown> = {};
     for (const db of allDatabases) {
       const view = db.views[0];
       if (!view) continue;
@@ -1596,13 +1715,14 @@ export default class NoteDatabasePlugin extends Plugin {
       if (!fm) continue;
       if (db.typeFilter && fm["type"] !== db.typeFilter) continue;
       const computed = new ComputedFieldEngine(db.schema.computedFields, db.schema.columns).evaluate(fm);
-      const updates: Record<string, unknown> = {};
       for (const col of db.schema.columns.filter((candidate) => candidate.type === "computed")) {
         const value = computed[col.computedKey || col.key];
         const next = value == null ? "" : value;
-        if (String(fm[col.key] ?? "") !== String(next ?? "")) updates[col.key] = next;
+        if (String(fm[col.key] ?? "") !== String(next ?? "")) mergedUpdates[col.key] = next;
       }
-      if (Object.keys(updates).length > 0) await this.dataSource.updateFrontmatter(file, updates);
+    }
+    if (Object.keys(mergedUpdates).length > 0) {
+      await this.dataSource.updateFrontmatter(file, mergedUpdates);
     }
   }
 

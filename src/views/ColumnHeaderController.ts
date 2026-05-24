@@ -7,6 +7,7 @@ export interface ColumnHeaderActions {
   showContextMenu(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   sortByColumn(col: ColumnDef): void;
   saveConfig(): void;
+  setUndoLabel(label: string): void;
   refresh(): void;
 }
 
@@ -42,10 +43,7 @@ export class ColumnHeaderController {
   }
 
   private setupResizeHandle(th: HTMLElement, col: ColumnDef): void {
-    const handle = th.createEl("div", {
-      cls: "db-resize-handle",
-      attr: { style: "position: absolute; right: 0; top: 0; bottom: 0; width: 4px; cursor: col-resize; z-index: 1;" },
-    });
+    const handle = th.createEl("div", { cls: "db-resize-handle" });
     let startX = 0;
     let startWidth = 0;
 
@@ -65,6 +63,7 @@ export class ColumnHeaderController {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
         this.suppressSortUntil = Date.now() + 300;
+        this.actions.setUndoLabel(t("undo.columnWidthConfig"));
         this.actions.saveConfig();
       };
       document.addEventListener("mousemove", onMouseMove);
@@ -167,6 +166,7 @@ export class ColumnHeaderController {
       const [removed] = config.columnOrder!.splice(fromIdx, 1);
       const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx;
       config.columnOrder!.splice(adjustedTo, 0, removed);
+      this.actions.setUndoLabel(t("undo.columnOrderConfig"));
       this.actions.saveConfig();
       this.actions.refresh();
     });

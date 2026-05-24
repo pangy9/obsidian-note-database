@@ -1,4 +1,4 @@
-import { Notice, normalizePath } from "obsidian";
+import { Notice, normalizePath, setIcon } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { DataSource } from "../data/DataSource";
 import { ColumnDef, RowData, StatusOptionDef } from "../data/types";
@@ -30,6 +30,15 @@ const OPTION_COLOR_HEX: Record<string, string> = {
   rose: "#e11d48",
 };
 
+export interface CellOptionTransaction {
+  previousOptions?: StatusOptionDef[];
+  nextOptions?: StatusOptionDef[];
+  cleanupRemovedValues?: string[];
+  renameValues?: Array<{ from: string; to: string }>;
+  setValue?: boolean;
+  value?: unknown;
+}
+
 export class CellRenderer {
   private transientTimers = new WeakMap<HTMLElement, Map<string, number>>();
 
@@ -40,7 +49,8 @@ export class CellRenderer {
     private manageOptions?: (col: ColumnDef) => void,
     private editFormula?: (col: ColumnDef) => void,
     private isReadOnly = false,
-    private onColumnOptionsChanged?: () => void
+    private commitCellOptionTransaction?: (row: RowData, col: ColumnDef, transaction: CellOptionTransaction) => Promise<void>,
+    private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -314,6 +324,8 @@ export class CellRenderer {
 
     const close = () => {
       popover.remove();
+      // Clean up any leaked color picker popups on document.body
+      document.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
       document.removeEventListener("mousedown", onOutside, true);
       document.removeEventListener("keydown", onKeydown, true);
     };
@@ -336,12 +348,32 @@ export class CellRenderer {
       }
     }
 
-    const saveValueNow = async (value: unknown) => {
-      await this.saveValue(row, col, value);
+    const cloneOptions = (options: StatusOptionDef[]) => options.map((option) => ({ ...option }));
+    const getCommittedOptions = () => cloneOptions(col.statusOptions || []);
+    const getDraftOptions = () => cloneOptions(optionDefs);
+    const commitOptionTransaction = async (transaction: CellOptionTransaction) => {
+      try {
+        if (this.commitCellOptionTransaction) {
+          await this.commitCellOptionTransaction(row, col, transaction);
+          return;
+        }
+        if (transaction.nextOptions) col.statusOptions = cloneOptions(transaction.nextOptions);
+        if (transaction.setValue) await this.saveValue(row, col, transaction.value);
+        else await this.refreshAfterSave();
+      } catch (err) {
+        console.error("Note Database: failed to commit option edit", err);
+        new Notice(t("errors.updateFailed", { error: String(err) }));
+      }
     };
-    const persistOptions = () => {
-      col.statusOptions = optionDefs.map(o => ({ ...o }));
-      this.onColumnOptionsChanged?.();
+    const commitValue = (value: unknown) => {
+      void commitOptionTransaction({ setValue: true, value });
+    };
+    const commitOptions = (transaction: Omit<CellOptionTransaction, "previousOptions" | "nextOptions"> = {}) => {
+      void commitOptionTransaction({
+        previousOptions: getCommittedOptions(),
+        nextOptions: getDraftOptions(),
+        ...transaction,
+      });
     };
 
     const renderOptionList = () => {
@@ -357,7 +389,6 @@ export class CellRenderer {
 
         // Drag handle for reorder
         const handle = item.createSpan({ cls: "db-option-drag-handle", text: "⠿" });
-        handle.style.cssText = "cursor:grab;margin-right:2px;color:var(--text-faint);font-size:12px;user-select:none;";
         handle.onmousedown = (e) => {
           e.stopPropagation();
           e.preventDefault();
@@ -386,7 +417,6 @@ export class CellRenderer {
             if (target !== idx) {
               removeDropLine();
               dropLine = popover.createDiv({ cls: "db-option-drop-line" });
-              dropLine.style.cssText = "height:2px;background:var(--interactive-accent);border-radius:1px;margin:1px 4px;pointer-events:none;";
               const ref = items[insertBefore];
               if (ref) popover.insertBefore(dropLine, ref);
               else popover.insertBefore(dropLine, popover.querySelector(".db-cell-option-add"));
@@ -403,7 +433,7 @@ export class CellRenderer {
             if (lastTarget !== idx && lastTarget >= 0 && lastTarget < optionDefs.length) {
               const [moved] = optionDefs.splice(idx, 1);
               optionDefs.splice(lastTarget, 0, moved);
-              persistOptions();
+              commitOptions();
               renderOptionList();
             }
             document.removeEventListener("mousemove", onMove);
@@ -423,19 +453,18 @@ export class CellRenderer {
         dot.onclick = (e) => {
           e.stopPropagation();
           e.preventDefault();
-          showColorPicker(dot, opt, () => { persistOptions(); updateDot(); });
+          showColorPicker(dot, opt, () => { commitOptions(); updateDot(); });
         };
 
         // Label — double-click to rename
         const label = item.createSpan({ text: opt.value, cls: "db-option-label" });
-        label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
         label.ondblclick = (e) => {
           e.stopPropagation();
           e.preventDefault();
           const input = document.createElement("input");
           input.type = "text";
           input.value = opt.value;
-          input.style.cssText = "flex:1;min-width:0;height:20px;border:1px solid var(--interactive-accent);border-radius:3px;padding:0 4px;font-size:12px;";
+          input.className = "db-option-rename-input";
           label.replaceWith(input);
           input.focus();
           input.select();
@@ -451,7 +480,7 @@ export class CellRenderer {
                 selected.delete(oldValue);
                 selected.add(name);
               }
-              persistOptions();
+              commitOptions({ renameValues: [{ from: oldValue, to: name }] });
             }
             input.replaceWith(label);
             label.textContent = opt.value;
@@ -465,22 +494,24 @@ export class CellRenderer {
 
         // Check mark
         const mark = item.createSpan({ text: selected.has(opt.value) ? "✓" : "", cls: "db-option-check" });
-        mark.style.cssText = "margin-left:4px;font-size:12px;";
-        const deleteButton = item.createSpan({
+        const deleteButton = item.createEl("button", {
           cls: "db-option-delete",
-          text: "×",
-          attr: { role: "button", tabindex: "0", title: t("common.delete"), "aria-label": t("common.delete") },
+          attr: { title: t("common.delete"), "aria-label": t("common.delete") },
         });
+        setIcon(deleteButton, "trash");
         deleteButton.onmousedown = (event) => event.preventDefault();
         deleteButton.onclick = (event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (!window.confirm(t("modal.confirmDeleteOption", { name: opt.value }))) return;
           const removed = opt.value;
           optionDefs.splice(idx, 1);
-          if (selected.delete(removed)) {
-            void saveValueNow(multiple ? Array.from(selected) : "");
-          }
-          persistOptions();
+          const wasSelected = selected.delete(removed);
+          commitOptions({
+            cleanupRemovedValues: [removed],
+            setValue: wasSelected,
+            value: multiple ? Array.from(selected) : null,
+          });
           renderOptionList();
         };
         deleteButton.onkeydown = (event) => {
@@ -492,8 +523,9 @@ export class CellRenderer {
         item.onmousedown = (event) => event.preventDefault();
         item.onclick = () => {
           if (!multiple) {
-            persistOptions();
-            void saveValueNow(opt.value);
+            selected.clear();
+            selected.add(opt.value);
+            commitValue(opt.value);
             // Update check marks
             popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
             mark.textContent = "✓";
@@ -502,8 +534,7 @@ export class CellRenderer {
           if (selected.has(opt.value)) selected.delete(opt.value);
           else selected.add(opt.value);
           mark.textContent = selected.has(opt.value) ? "✓" : "";
-          persistOptions();
-          void saveValueNow(Array.from(selected));
+          commitValue(Array.from(selected));
         };
       });
     };
@@ -560,14 +591,15 @@ export class CellRenderer {
         return;
       }
       optionDefs.push({ value: name, color: OPTION_COLORS[optionDefs.length % OPTION_COLORS.length] });
-      persistOptions();
       addInput.value = "";
       if (!multiple) {
-        void saveValueNow(name);
+        selected.clear();
+        selected.add(name);
         popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
+        commitOptions({ setValue: true, value: name });
       } else {
         selected.add(name);
-        void saveValueNow(Array.from(selected));
+        commitOptions({ setValue: true, value: Array.from(selected) });
       }
       renderOptionList();
     };
@@ -577,13 +609,13 @@ export class CellRenderer {
     const clearBtn = actions.createEl("button", { cls: "db-panel-button", text: t("cell.clear") });
     clearBtn.onmousedown = (event) => event.preventDefault();
     clearBtn.onclick = () => {
-      col.statusOptions = optionDefs.map(o => ({ ...o }));
       if (multiple) {
         selected.clear();
-        void saveValueNow([]);
+        commitValue([]);
         popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
       } else {
-        void saveValueNow("");
+        selected.clear();
+        commitValue(null);
         popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
       }
     };
@@ -928,6 +960,10 @@ export class CellRenderer {
 
   private async saveValue(row: RowData, col: ColumnDef, value: unknown): Promise<void> {
     try {
+      if (this.saveCellValue) {
+        await this.saveCellValue(row, col, value);
+        return;
+      }
       await this.dataSource.updateFrontmatter(row.file, { [col.key]: value });
       await this.refreshAfterSave();
     } catch (err) {

@@ -112,6 +112,7 @@ export class FormulaModal extends Modal {
   private originalExpression = "";
   private originalResultType: ComputedFieldDef["type"] = "text";
   private saved = false;
+  private resizeObserver?: ResizeObserver;
 
   constructor(
     app: App,
@@ -145,6 +146,19 @@ export class FormulaModal extends Modal {
 
     this.updateEditorChrome();
     this.updatePreview();
+    this.setupResponsiveLayout();
+  }
+
+  private setupResponsiveLayout(): void {
+    const update = () => {
+      const width = this.modalEl.getBoundingClientRect().width || this.contentEl.getBoundingClientRect().width;
+      this.contentEl.toggleClass("is-formula-compact", width > 0 && width < 1040);
+      this.contentEl.toggleClass("is-formula-narrow", width > 0 && width < 760);
+    };
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(update);
+    this.resizeObserver.observe(this.modalEl);
+    update();
   }
 
   private renderHeader(): void {
@@ -327,8 +341,16 @@ export class FormulaModal extends Modal {
       this.renderHelpBrowserContent();
     };
 
-    const browser = parent.createDiv({ cls: "db-formula-browser" });
+    const browser = parent.createDiv({ cls: "db-formula-browser db-formula-browser-three-col" });
     this.categoryListEl = browser.createDiv({ cls: "db-formula-category-list" });
+    this.categoryListEl.addEventListener("wheel", (event) => {
+      if (!this.categoryListEl) return;
+      if (this.categoryListEl.scrollWidth <= this.categoryListEl.clientWidth) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (delta === 0) return;
+      event.preventDefault();
+      this.categoryListEl.scrollLeft += delta;
+    }, { passive: false });
     this.helpListEl = browser.createDiv({ cls: "db-formula-function-list-compact" });
     this.helpDetailEl = browser.createDiv({ cls: "db-formula-function-detail" });
     this.renderHelpBrowserContent();
@@ -1378,6 +1400,8 @@ export class FormulaModal extends Modal {
         return;
       }
     }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
     this.modalEl.removeClass("formula-workbench-modal-host");
     this.contentEl.empty();
   }

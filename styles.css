@@ -119,6 +119,9 @@
 }
 
 .note-database-modal {
+  --db-radius-sm: 4px;
+  --db-radius-md: 6px;
+  --db-radius-lg: 8px;
   --status-color-fg-gray: #787774;
   --status-color-fg-brown: #8f5d45;
   --status-color-fg-orange: #b65f00;
@@ -378,12 +381,31 @@
 }
 
 .note-database-container .db-heading-edit-description {
-  min-height: 58px;
-  color: var(--text-normal);
+  min-height: 22px;
+  max-height: 200px;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.5;
-  resize: vertical;
+  margin-left: 6px;
+  margin-top: -6px;
+  padding: 0;
+  overflow-y: hidden;
+  resize: none;
+}
+
+.note-database-container .db-heading-edit-description:focus {
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.note-database-container .db-heading-edit-description::selection {
+  background: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
 }
 
 /* 标题行：左标题 + 右按钮 */
@@ -425,7 +447,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 34px;
+  min-height: 36px;
   border-bottom: 1px solid var(--background-modifier-border);
   flex-wrap: nowrap;
 }
@@ -503,7 +525,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: 28px;
   border: 0;
   border-radius: var(--db-radius-md);
   background: transparent;
@@ -511,18 +533,19 @@
   color: var(--text-muted);
   cursor: pointer;
   font-size: 12px;
+  line-height: 28px;
   padding: 0 8px;
   transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
   white-space: nowrap;
 }
 .note-database-container .db-view-tab:hover {
   background: var(--background-modifier-hover);
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  box-shadow: none;
   color: var(--text-normal);
 }
 .note-database-container .db-view-tab.is-active {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border), 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: color-mix(in srgb, var(--background-modifier-hover) 72%, transparent);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
   color: var(--text-normal);
   font-weight: 500;
 }
@@ -537,7 +560,7 @@
 
 .note-database-container .db-view-tab.is-drop-target {
   background: var(--background-modifier-hover);
-  box-shadow: inset 0 0 0 1px var(--interactive-accent), 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 65%, transparent);
 }
 
 .note-database-container .db-view-tab-icon {
@@ -551,7 +574,15 @@
 .note-database-container .db-view-tab-add,
 .note-database-container .db-view-tab-more {
   color: var(--text-faint);
-  padding: 0 6px;
+  height: 24px;
+  min-width: 24px;
+  line-height: 24px;
+  padding: 0 4px;
+}
+
+.note-database-container .db-view-tab-add svg {
+  width: 17px;
+  height: 17px;
 }
 .note-database-container .db-view-tab-add:hover,
 .note-database-container .db-view-tab-more:hover {
@@ -577,12 +608,15 @@
 .note-database-container .db-toolbar select,
 .note-database-container .db-toolbar input {
   height: 28px;
-  max-width: 180px;
+  max-width: none;
   border: 0;
-  border-radius: var(--db-radius-lg);
+  border-radius: var(--db-radius-sm);
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
+  line-height: 22px;
+  margin-right: 5px;
+  padding: 0 6px;
 }
 
 .note-database-container .db-view-switcher select {
@@ -622,6 +656,7 @@
   width: 28px;
   position: relative;
   padding: 0;
+  overflow: visible;
 }
 
 .note-database-container .db-toolbar-icon-button.is-active {
@@ -736,6 +771,45 @@
   color: var(--text-normal);
 }
 
+.note-database-container .db-mobile-reorder-controls,
+.note-database-modal .db-mobile-reorder-controls,
+.note-database-settings .db-mobile-reorder-controls {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.note-database-container .db-mobile-reorder-controls button,
+.note-database-modal .db-mobile-reorder-controls button,
+.note-database-settings .db-mobile-reorder-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  border: 0;
+  border-radius: var(--db-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+.note-database-container .db-mobile-reorder-controls button:disabled,
+.note-database-modal .db-mobile-reorder-controls button:disabled,
+.note-database-settings .db-mobile-reorder-controls button:disabled {
+  color: var(--text-faint);
+  opacity: 0.45;
+}
+
+.note-database-container .db-mobile-reorder-controls button svg,
+.note-database-modal .db-mobile-reorder-controls button svg,
+.note-database-settings .db-mobile-reorder-controls button svg {
+  width: 14px;
+  height: 14px;
+}
+
 .note-database-container .db-selection-delete:hover {
   background: transparent;
   color: var(--text-error);
@@ -798,7 +872,6 @@
 .note-database-container .db-select-control:hover,
 .note-database-container .db-search-control:hover,
 .note-database-container .db-search-control:focus-within {
-  background: var(--background-modifier-hover);
   color: var(--text-normal);
 }
 
@@ -831,11 +904,18 @@
   width: 28px;
   overflow: hidden;
   padding: 0;
-  transition: width 120ms ease;
+  transition: width 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.note-database-container .db-search-control:hover {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
 }
 
 .note-database-container .db-search-control:focus-within,
 .note-database-container .db-search-control.is-active {
+  background: var(--background-secondary);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
   width: 150px;
 }
 
@@ -858,12 +938,27 @@
 }
 
 .note-database-container .db-search-input {
+  box-shadow: none;
+  caret-color: var(--interactive-accent);
+  color: var(--text-normal);
   min-width: 0;
+  outline: 0;
   width: 0;
   opacity: 0;
   pointer-events: none;
   padding: 0;
   transition: opacity 120ms ease, width 120ms ease;
+}
+
+.note-database-container .db-search-input:focus {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.note-database-container .db-search-control .db-search-input:hover {
+  background: transparent;
+  box-shadow: none;
 }
 
 .note-database-container .db-search-control:focus-within .db-search-input,
@@ -1454,13 +1549,14 @@
 
 /* 编辑态输入框 */
 .note-database-container .db-cell-input {
-  height: 28px;
+  height: 24px;
   width: 100%;
   border: 0;
   border-radius: 5px;
   background: transparent;
   color: var(--text-normal);
   font-size: 13px;
+  line-height: 22px;
   outline: 0;
   padding: 0 6px;
 }
@@ -1474,11 +1570,11 @@
   align-items: center;
   gap: 1px;
   width: 100%;
-  height: 28px;
+  height: 24px;
 }
 
 .note-database-container .db-date-seg {
-  height: 26px;
+  height: 22px;
   border: 0;
   border-radius: var(--db-radius-sm);
   background: transparent;
@@ -1517,6 +1613,9 @@
 .note-database-container .db-cell-option-popover {
   position: absolute;
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   min-width: 140px;
   max-width: 260px;
   max-height: 260px;
@@ -1534,15 +1633,17 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
+  min-height: 34px;
   border: 0;
   border-radius: var(--db-radius-md);
   background: transparent;
+  box-shadow: none;
   color: var(--text-normal);
   cursor: pointer;
   padding: 4px 6px;
   text-align: left;
   box-sizing: border-box;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .note-database-container .db-option-drag-handle {
@@ -1590,8 +1691,8 @@
 
 .note-database-container .db-cell-option-add input {
   width: 100%;
-  height: 28px;
-  padding: 4px 6px;
+  height: 34px;
+  padding: 4px 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--db-radius-md);
   background: var(--background-primary);
@@ -1600,8 +1701,18 @@
   box-sizing: border-box;
 }
 
-.note-database-container .db-cell-option-item:hover {
+.note-database-container .db-cell-option-add input:focus,
+.note-database-container .db-cell-option-add input:focus-visible {
+  border-color: var(--background-modifier-border);
+  box-shadow: none;
+  outline: none;
+}
+
+.note-database-container .db-cell-option-item:hover,
+.note-database-container .db-cell-option-item:focus-visible {
   background: var(--background-modifier-hover);
+  box-shadow: none;
+  outline: none;
 }
 
 .note-database-container .db-option-delete {
@@ -1666,8 +1777,8 @@
   width: 100%;
   min-width: 0;
   min-height: 24px;
-  max-height: min(320px, 45vh);
-  resize: vertical;
+  max-height: 260px;
+  resize: none;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--db-radius-md);
   background: var(--background-primary);
@@ -1675,6 +1786,80 @@
   font: inherit;
   line-height: 1.45;
   padding: 6px 8px;
+  overflow-y: hidden;
+}
+
+.note-database-container .db-cell-edit-popover,
+.db-cell-edit-popover {
+  position: absolute;
+  z-index: 1000;
+  max-width: calc(100vw - 16px);
+  border-radius: var(--db-radius-lg);
+  background: var(--background-primary);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  padding: 0;
+}
+
+.note-database-container .db-cell-edit-popover .db-cell-textarea,
+.db-cell-edit-popover .db-cell-textarea {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  max-height: 260px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  outline: none;
+  overflow-y: hidden;
+  padding: 8px 10px;
+}
+
+.db-cell-edit-popover.is-mobile {
+  position: fixed;
+  z-index: 1002;
+  max-width: none;
+  border-radius: var(--db-radius-lg) var(--db-radius-lg) 0 0;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  padding: 8px 44px 8px 8px;
+}
+
+.db-cell-edit-popover.is-mobile .db-cell-textarea {
+  min-height: 44px;
+  max-height: min(320px, 45vh);
+  font-size: 16px;
+  padding: 10px 8px;
+}
+
+.db-cell-edit-popover .db-cell-edit-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--db-radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+.db-cell-edit-popover .db-cell-edit-close:hover,
+.db-cell-edit-popover .db-cell-edit-close:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.db-cell-edit-popover .db-cell-edit-close svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* ============================================================================
@@ -3608,6 +3793,8 @@
   border: 1px solid var(--checkbox-border-color, var(--background-modifier-border-hover));
   border-radius: var(--db-radius-sm);
   outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   background: var(--background-primary);
   box-shadow: none;
   cursor: pointer;
@@ -3776,8 +3963,9 @@
 .note-database-modal input,
 .note-database-modal select,
 .note-database-modal textarea {
-  width: 100%;
-  margin-top: 4px;
+  box-sizing: border-box;
+  /* width: 100%; */
+  margin-top: 0px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--db-radius-lg);
   background: var(--background-primary);
@@ -3785,10 +3973,6 @@
   font-size: 13px;
 }
 
-.note-database-modal input,
-.note-database-modal select {
-  height: 32px;
-}
 
 .note-database-modal textarea {
   min-height: 140px;
@@ -6022,6 +6206,158 @@
   display: none;
 }
 
+.is-phone .note-database-container .db-toolbar {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.is-phone .note-database-container .db-toolbar-left,
+.is-phone .note-database-container .db-toolbar-right {
+  width: 100%;
+}
+
+.is-phone .note-database-container .db-toolbar-left {
+  display: flex;
+  overflow: visible;
+}
+
+.is-phone .note-database-container .db-view-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.is-phone .note-database-container .db-toolbar-left .db-search-control {
+  flex: 0 0 min(42vw, 168px);
+  width: min(42vw, 168px);
+  background: var(--background-secondary);
+  padding: 0 6px 0 0;
+}
+
+.is-phone .note-database-container .db-toolbar-left .db-search-input {
+  width: 100%;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.is-phone .note-database-container .db-toolbar-right {
+  justify-content: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 2px 2px;
+  scrollbar-width: none;
+}
+
+.is-phone .note-database-container .db-toolbar-right .db-toolbar-badge {
+  top: -3px;
+  right: -3px;
+}
+
+.is-phone .note-database-container .db-toolbar-right::-webkit-scrollbar {
+  display: none;
+}
+
+.is-phone .note-database-container .db-mobile-reorder-controls,
+.is-phone .note-database-modal .db-mobile-reorder-controls,
+.is-phone .note-database-settings .db-mobile-reorder-controls {
+  display: inline-flex;
+}
+
+.is-phone .note-database-container .db-panel-drag,
+.is-phone .note-database-container .db-column-drag,
+.is-phone .note-database-container .db-database-popover-drag,
+.is-phone .note-database-container .db-option-drag-handle,
+.is-phone .note-database-container .db-resize-handle,
+.is-phone .note-database-container .db-cell-fill-handle,
+.is-phone .note-database-container .db-board-column-resize-handle,
+.is-phone .note-database-container .db-gallery-card-resize-handle,
+.is-phone .note-database-modal .db-status-option-drag,
+.is-phone .note-database-modal .db-group-order-drag,
+.is-phone .note-database-modal .db-file-list-drag,
+.is-phone .note-database-settings .db-settings-database-drag {
+  display: none;
+}
+
+.is-phone .note-database-container .db-database-popover-row {
+  grid-template-columns: auto minmax(0, 1fr) 16px;
+}
+
+.is-phone .note-database-container .db-database-popover-row.has-source {
+  grid-template-columns: auto minmax(0, 1fr) minmax(96px, 0.7fr) 16px;
+}
+
+.is-phone .note-database-container .db-column-manager-row {
+  grid-template-columns: auto 20px minmax(96px, 1fr) auto auto auto auto auto;
+}
+
+.is-phone .note-database-modal .db-status-option-row {
+  grid-template-areas:
+    "mobile preview controls"
+    "mobile input input"
+    "mobile palette palette";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.is-phone .note-database-modal .db-status-option-mobile-controls {
+  grid-area: mobile;
+}
+
+.is-phone .note-database-modal .db-file-list-row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.is-phone .note-database-modal .db-group-order-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.is-phone .note-database-modal .db-group-order-mobile-controls {
+  justify-self: end;
+}
+
+.note-database-container .db-card-mobile-move-btn,
+.note-database-container .db-list-mobile-move-btn {
+  display: none;
+}
+
+.is-phone .note-database-container .db-card-mobile-move-btn,
+.is-phone .note-database-container .db-list-mobile-move-btn {
+  display: inline-flex;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  color: var(--text-muted);
+  background: var(--background-primary);
+}
+
+.is-phone .note-database-container .db-card-mobile-move-btn:active,
+.is-phone .note-database-container .db-list-mobile-move-btn:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.is-phone .note-database-container .db-board-card,
+.is-phone .note-database-container .db-gallery-card,
+.is-phone .note-database-container .db-list-row {
+  position: relative;
+}
+
+.is-phone .note-database-container .db-board-card-controls,
+.is-phone .note-database-container .db-gallery-card-controls,
+.is-phone .note-database-container .db-list-row-controls {
+  padding-right: 34px;
+}
+
 /* 手机端 popover 底部额外留空，防止被 Obsidian 底部导航栏遮挡 */
 .is-phone .note-database-container .db-filter-panel,
 .is-phone .note-database-container .db-view-config-panel,
@@ -6031,4 +6367,41 @@
 .is-phone .note-database-container .db-export-popover,
 .is-phone .note-database-container .db-view-tab-popover {
   max-height: min(560px, calc(100vh - 210px));
+}
+
+/* 移动端内联编辑器覆盖层 */
+.db-cell-edit-popover.is-mobile.is-inline-overlay {
+  position: absolute;        /* 非 fixed，跟随文档流 */
+  left: 0;
+  right: 0;
+  top: auto;                  /* 由 JS 动态计算 */
+  bottom: auto;
+  z-index: 1000;
+  max-width: none;
+  border-radius: var(--db-radius-lg) var(--db-radius-lg) 0 0;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.12);
+  background: var(--background-primary);
+  padding: 8px;
+  margin: 0;
+}
+
+/* 移动端文本输入区 */
+.db-cell-edit-popover.is-mobile.is-inline-overlay .db-mobile-textarea {
+  width: 100%;
+  min-height: 80px;
+  max-height: 200px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 16px;            /* iOS 防止自动缩放 */
+  line-height: 1.5;
+  padding: 10px;
+  resize: vertical;
+}
+
+/* 确保容器有相对定位，让 absolute 子元素正确锚定 */
+.note-database-container,
+.markdown-preview-view {
+  position: relative;
 }

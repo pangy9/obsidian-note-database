@@ -258,6 +258,7 @@ export class TableRenderer {
 
   private setupGroupedRowDrag(tr: HTMLElement, row: RowData, groupField: string, groupKey: string): void {
     if (this.actions.isReadOnly || !this.actions.moveRowsToGroup) return;
+    if (this.isPhoneLayout()) return;
     tr.draggable = true;
     tr.addEventListener("dragstart", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-cell-fill-handle")) {
@@ -301,6 +302,10 @@ export class TableRenderer {
 
   private isRowDrag(event: DragEvent): boolean {
     return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private getGroupDefaults(config: ViewConfig, groupField: string, groupKey: string): Record<string, unknown> {

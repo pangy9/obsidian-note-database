@@ -1,4 +1,4 @@
-import { App, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
@@ -77,7 +77,7 @@ export class ListRenderer {
       if (collapsed) continue;
       const list = section.createDiv({ cls: "db-list" });
       this.setupGroupDropTarget(list, groupField, group.key);
-      for (const row of group.rows) this.renderRow(list, config, row, groupField, group.key);
+      for (const row of group.rows) this.renderRow(list, config, row, groupField, group.key, groups);
       this.renderNewRow(list, { [groupField]: group.key || "" });
     }
   }
@@ -99,13 +99,16 @@ export class ListRenderer {
     checkbox.onchange = () => this.actions.toggleRowsSelected(rows, checkbox.checked);
   }
 
-  private renderRow(list: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string): void {
+  private renderRow(list: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: ListGroup[]): void {
     const item = list.createDiv({
       cls: "db-list-row",
       attr: { "data-note-database-row-path": row.file.path },
     });
     this.attachRowContextMenu(item, row);
     this.setupGroupedRowDrag(item, row, groupField, groupKey);
+    if (!this.actions.isReadOnly && this.isPhoneLayout() && groupField && groupKey != null && groups?.length) {
+      this.renderMobileMoveButton(item, row, groupField, groupKey, groups);
+    }
 
     const controls = item.createDiv({ cls: "db-list-row-controls" });
     if (!this.actions.isReadOnly) {
@@ -178,8 +181,31 @@ export class ListRenderer {
     });
   }
 
+  private renderMobileMoveButton(item: HTMLElement, row: RowData, groupField: string, groupKey: string, groups: ListGroup[]): void {
+    if (!this.actions.moveRowsToGroup) return;
+    const button = item.createEl("button", {
+      cls: "db-list-mobile-move-btn",
+      attr: { type: "button", title: t("mobile.moveToGroup"), "aria-label": t("mobile.moveToGroup") },
+    });
+    setIcon(button, "folder-input");
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menu = new Menu();
+      for (const group of groups) {
+        if (group.key === groupKey) continue;
+        menu.addItem((menuItem) => menuItem
+          .setTitle(group.key || t("common.uncategorized"))
+          .setIcon("folder-input")
+          .onClick(() => void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key)));
+      }
+      menu.showAtMouseEvent(event);
+    };
+  }
+
   private setupGroupedRowDrag(item: HTMLElement, row: RowData, groupField?: string, groupKey?: string): void {
     if (!groupField || groupKey == null || this.actions.isReadOnly || !this.actions.moveRowsToGroup) return;
+    if (this.isPhoneLayout()) return;
     item.draggable = true;
     item.addEventListener("dragstart", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) {
@@ -217,6 +243,10 @@ export class ListRenderer {
 
   private isRowDrag(event: DragEvent): boolean {
     return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private renderNewRow(list: HTMLElement, defaults?: Record<string, unknown>): void {

@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { ColumnDef, SortRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
@@ -78,6 +79,28 @@ export class SortPanelRenderer {
     drag.draggable = true;
     drag.title = t("panel.dragToSort");
     drag.ondragstart = (event) => this.startDrag(event, index, row);
+
+    const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+    const upBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+    });
+    setIcon(upBtn, "arrow-up");
+    upBtn.disabled = index === 0;
+    upBtn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveRule(panel, config, state, actions, index, index - 1);
+    };
+    const downBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+    });
+    setIcon(downBtn, "arrow-down");
+    downBtn.disabled = index >= (state.sortRules || []).length - 1;
+    downBtn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.moveRule(panel, config, state, actions, index, index + 1);
+    };
 
     const fieldSel = row.createEl("select");
     for (const col of this.getSortColumns(config)) fieldSel.createEl("option", { value: col.key, text: col.label });

@@ -45,9 +45,9 @@ export class ColumnManagerRenderer {
     }
 
     this.renderHeader(panel, columns, config, state, actions);
-    for (const col of columns) {
-      this.renderColumnRow(panel, col, config, state, actions);
-    }
+    columns.forEach((col, index) => {
+      this.renderColumnRow(panel, col, config, state, actions, index, columns.length);
+    });
 
     if (!actions.isReadOnly) {
       const addColumnBtn = panel.createEl("button", {
@@ -84,7 +84,9 @@ export class ColumnManagerRenderer {
     col: ColumnDef,
     config: ViewConfig,
     state: DatabaseViewState,
-    actions: ColumnManagerActions
+    actions: ColumnManagerActions,
+    index: number,
+    total: number
   ): void {
     const row = panel.createDiv({ cls: "db-column-manager-row" });
     row.ondragover = (event) => {
@@ -116,6 +118,28 @@ export class ColumnManagerRenderer {
       this.draggedKey = null;
       row.removeClass("is-dragging");
       panel.querySelectorAll(".db-column-manager-row").forEach((el) => el.removeClass("is-drop-target"));
+    };
+
+    const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+    const upBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+    });
+    setIcon(upBtn, "arrow-up");
+    upBtn.disabled = index === 0;
+    upBtn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actions.moveColumn(col.key, -1);
+    };
+    const downBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+    });
+    setIcon(downBtn, "arrow-down");
+    downBtn.disabled = index >= total - 1;
+    downBtn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actions.moveColumn(col.key, 1);
     };
 
     const requiredReason = this.getRequiredColumnReason(config, state, col);

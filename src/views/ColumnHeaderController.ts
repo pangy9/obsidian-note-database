@@ -25,8 +25,10 @@ export class ColumnHeaderController {
     });
     th.addEventListener("contextmenu", (e) => this.actions.showContextMenu(e, col, th));
     this.setupMenuTrigger(th, col);
-    this.setupResizeHandle(th, col);
-    this.setupDragToReorder(th, col);
+    if (!this.isPhoneLayout()) {
+      this.setupResizeHandle(th, col);
+      this.setupDragToReorder(th, col);
+    }
   }
 
   private setupMenuTrigger(th: HTMLElement, col: ColumnDef): void {
@@ -174,5 +176,9 @@ export class ColumnHeaderController {
       th.removeClass("db-dragging");
       document.querySelectorAll(".db-drop-target").forEach((el) => el.classList.remove("db-drop-target"));
     });
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 }

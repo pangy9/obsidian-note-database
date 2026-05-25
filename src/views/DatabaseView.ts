@@ -950,15 +950,27 @@ export class DatabaseView extends ItemView {
   }
 
   private handleOutsideClick(event: MouseEvent): void {
-    if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     const target = event.target as HTMLElement | null;
     if (!target) return;
+    if (this.cellSelection && this.shouldClearCellSelectionFromPointer(target)) {
+      this.clearCellSelection();
+    }
+    if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     if (this.containerEl_?.contains(target)) {
       if (target.closest(".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-toolbar, .db-header")) {
         return;
       }
     }
     this.closeHeaderPopovers();
+  }
+
+  private shouldClearCellSelectionFromPointer(target: HTMLElement): boolean {
+    if (!this.containerEl_?.contains(target)) return !target.closest(".modal");
+    return !target.closest(
+      "td[data-note-database-row-path][data-note-database-column-key], " +
+      ".db-selection-status-bar, .db-cell-editing, input, textarea, select, button, a, " +
+      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .menu"
+    );
   }
 
   private closeHeaderPopovers(): void {
@@ -1781,8 +1793,10 @@ export class DatabaseView extends ItemView {
 
   private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
     const path = row.file.path;
-    if (event?.shiftKey && this.lastSelectedRowPath && this.lastSelectedRowPath !== path) {
-      const range = this.getSelectionRangeRows(this.lastSelectedRowPath, path);
+    const rangeAnchor = this.lastSelectedRowPath;
+    const useRangeSelection = Boolean((event?.shiftKey || this.isPhoneLayout()) && rangeAnchor && rangeAnchor !== path);
+    if (useRangeSelection && rangeAnchor) {
+      const range = this.getSelectionRangeRows(rangeAnchor, path);
       if (range.length > 0) {
         for (const item of range) {
           if (selected) this.selectedRows.add(item.file.path);
@@ -1871,6 +1885,17 @@ export class DatabaseView extends ItemView {
       event.preventDefault();
       event.stopPropagation();
       const address = { rowPath: row.file.path, colKey: col.key };
+      if (this.isPhoneLayout()) {
+        if (this.cellSelection) {
+          this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
+        } else {
+          this.cellSelection = { anchor: address, focus: address };
+        }
+        this.isSelectingCells = false;
+        this.renderCellSelectionClasses();
+        this.renderSelectionStatusBar();
+        return;
+      }
       if (event.shiftKey && this.cellSelection) {
         this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
       } else {
@@ -1894,6 +1919,10 @@ export class DatabaseView extends ItemView {
       this.renderCellSelectionClasses();
       this.renderSelectionStatusBar();
     });
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private isInteractiveCellTarget(target: EventTarget | null): boolean {
@@ -2928,6 +2957,7 @@ export class DatabaseView extends ItemView {
   }
 
   private setupTableFillHandle(td: HTMLElement, row: RowData, col: ColumnDef): void {
+    if (this.isPhoneLayout()) return;
     if (!this.canFillColumn(col)) return;
     td.addClass("db-fillable-cell");
     const handle = td.createSpan({

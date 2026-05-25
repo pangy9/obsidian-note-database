@@ -1,4 +1,4 @@
-import { Notice, normalizePath, setIcon } from "obsidian";
+import { Notice, Platform, normalizePath, setIcon } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { DataSource } from "../data/DataSource";
 import { ColumnDef, RowData, StatusOptionDef } from "../data/types";
@@ -41,6 +41,7 @@ export interface CellOptionTransaction {
 
 export class CellRenderer {
   private transientTimers = new WeakMap<HTMLElement, Map<string, number>>();
+  private activeTextEditClose?: () => void;
 
   constructor(
     private dataSource: DataSource,
@@ -321,6 +322,7 @@ export class CellRenderer {
     const originalValues = toMultiSelectValues(currentValue);
     const selected = new Set(multiple ? toMultiSelectValues(currentValue) : [String(currentValue ?? "")]);
     const popover = host.createDiv({ cls: "db-cell-option-popover" });
+    let activeOptionIndex = 0;
 
     const close = () => {
       popover.remove();
@@ -336,9 +338,20 @@ export class CellRenderer {
       close();
     };
     const onKeydown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+      const items = Array.from(popover.querySelectorAll<HTMLButtonElement>(".db-cell-option-item"));
+      if (!items.length) return;
       event.preventDefault();
-      close();
+      if (event.key === "ArrowDown") activeOptionIndex = Math.min(items.length - 1, activeOptionIndex + 1);
+      if (event.key === "ArrowUp") activeOptionIndex = Math.max(0, activeOptionIndex - 1);
+      const item = items[activeOptionIndex];
+      if (event.key === "Enter") item.click();
+      else item.focus();
     };
     // Build option objects from column config (mutable copies)
     const optionDefs: StatusOptionDef[] = getColumnOptions(col).map(o => ({ ...o }));
@@ -384,6 +397,7 @@ export class CellRenderer {
         popover.insertBefore(empty, popover.querySelector(".db-cell-option-add"));
       }
       optionDefs.forEach((opt, idx) => {
+        if (selected.has(opt.value)) activeOptionIndex = idx;
         const item = popover.createEl("button", { cls: "db-cell-option-item" });
         popover.insertBefore(item, popover.querySelector(".db-cell-option-add"));
 
@@ -442,6 +456,34 @@ export class CellRenderer {
 
           document.addEventListener("mousemove", onMove);
           document.addEventListener("mouseup", onUp);
+        };
+
+        const moveControls = item.createSpan({ cls: "db-mobile-reorder-controls" });
+        const upBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+        });
+        setIcon(upBtn, "arrow-up");
+        upBtn.disabled = idx === 0;
+        upBtn.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const [moved] = optionDefs.splice(idx, 1);
+          optionDefs.splice(idx - 1, 0, moved);
+          commitOptions();
+          renderOptionList();
+        };
+        const downBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+        });
+        setIcon(downBtn, "arrow-down");
+        downBtn.disabled = idx >= optionDefs.length - 1;
+        downBtn.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const [moved] = optionDefs.splice(idx, 1);
+          optionDefs.splice(idx + 1, 0, moved);
+          commitOptions();
+          renderOptionList();
         };
 
         // Color dot — opens color picker
@@ -820,8 +862,8 @@ export class CellRenderer {
     origText: string
   ): void {
     const valueText = String(currentValue ?? "");
-    if (this.shouldUseTextarea(td, col, valueText)) {
-      this.editLongText(td, row, col, valueText, origText);
+    if (this.shouldUsePopoverEditor(td, col, valueText)) {
+      this.editTextPopover(td, row, col, valueText);
       return;
     }
     const inp = document.createElement("input");
@@ -852,19 +894,83 @@ export class CellRenderer {
     });
   }
 
-  private editLongText(
+  private editTextPopover(
     td: HTMLElement,
     row: RowData,
     col: ColumnDef,
-    currentValue: string,
-    origText: string
+    currentValue: string
   ): void {
-    const textarea = document.createElement("textarea");
-    textarea.className = "db-cell-textarea";
-    textarea.value = currentValue;
-    this.mountTextarea(td, textarea);
+    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const isMobile = Platform.isMobile || document.body.classList.contains("is-phone");
+    const host = isMobile ? null : (container || document.body);
+    const scrollContainer = td.closest('.note-database-container') as HTMLElement
+      || td.closest('.markdown-preview-view') as HTMLElement
+      || document.body;
+
+    // 清理之前的编辑器
+    this.activeTextEditClose?.();
+    td.addClass("db-cell-editing");
+
+    let popover: HTMLElement;
+    let textarea: HTMLTextAreaElement;
+    let closeBtn: HTMLButtonElement | undefined;
+
+    if (isMobile) {
+      // ========== 移动端：Inline Overlay 方案 ==========
+      // 在单元格所在的滚动容器内直接插入编辑器，不脱离文档流
+      
+      // 创建内联编辑器包装器
+      popover = scrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay" });
+      
+      // 计算相对于滚动容器的位置
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const tdRect = td.getBoundingClientRect();
+      const scrollTop = scrollContainer.scrollTop || 0;
+      
+      // 相对位置 = 单元格顶部 - 容器顶部 + 容器滚动偏移
+      const relativeTop = tdRect.top - containerRect.top + scrollTop;
+      
+      // 定位在单元格正下方
+      popover.style.position = "absolute";
+      popover.style.left = "0";
+      popover.style.right = "0";
+      popover.style.top = `${relativeTop + tdRect.height + 2}px`;
+      popover.style.zIndex = "1000";
+      
+      // 关闭按钮
+      closeBtn = popover.createEl("button", {
+        cls: "db-cell-edit-close",
+        attr: { type: "button", title: t("common.cancel"), "aria-label": t("common.cancel") },
+      });
+      setIcon(closeBtn, "x");
+      
+      // 文本输入区
+      textarea = document.createElement("textarea");
+      textarea.className = "db-cell-textarea db-mobile-textarea";
+      textarea.value = currentValue;
+      popover.appendChild(textarea);
+      
+    } else {
+      // ========== 桌面端：原有 Fixed Popover 方案 ==========
+      popover = (host as HTMLElement).createDiv({ cls: "db-cell-edit-popover" });
+      
+      textarea = document.createElement("textarea");
+      textarea.className = "db-cell-textarea";
+      textarea.value = currentValue;
+      textarea.rows = 1;
+      popover.appendChild(textarea);
+    }
 
     let committed = false;
+
+    const close = () => {
+      popover.remove();
+      td.removeClass("db-cell-editing");
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("keydown", onDocumentKeydown, true);
+      if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
+    };
+    this.activeTextEditClose = close;
 
     const save = async () => {
       if (committed) return;
@@ -872,37 +978,108 @@ export class CellRenderer {
       const newVal = textarea.value;
       if (newVal !== currentValue) {
         await this.saveValue(row, col, newVal);
-      } else {
-        this.restoreTextDisplay(td, currentValue, origText);
       }
-      this.clearTransientClass(td, "db-cell-editing");
+      close();
     };
 
-    textarea.onblur = save;
-    textarea.onkeydown = (event) => {
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    const cancel = () => {
+      if (committed) return;
+      committed = true;
+      close();
+    };
+
+    const onOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || td.contains(target))) return;
+      void save();
+    };
+    
+    const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancel();
+    };
+    
+    const resize = () => {
+      this.autoGrowTextarea(textarea, isMobile ? 320 : 260);
+      if (!isMobile) {
+        this.positionTextEditPopover(popover, td, container, false);
+      }
+    };
+
+    if (closeBtn) {
+      closeBtn.onmousedown = (event) => event.preventDefault();
+      closeBtn.onclick = cancel;
+    }
+    
+    textarea.addEventListener("input", resize);
+    textarea.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         void save();
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        committed = true;
-        this.restoreTextDisplay(td, currentValue, origText);
-        this.clearTransientClass(td, "db-cell-editing");
+        cancel();
       }
-    };
+    });
+
+    // 移动端特殊处理：确保键盘弹出后编辑器可见
+    if (isMobile) {
+      // 自动增长高度
+      this.autoGrowTextarea(textarea, 320);
+      
+      // 延迟聚焦，等待 DOM 稳定
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        
+        // 关键：键盘弹出后，滚动编辑器到可视区域中心
+        setTimeout(() => {
+          // 重新计算位置（因为聚焦可能导致布局变化）
+          const newTdRect = td.getBoundingClientRect();
+          const viewportHeight = window.visualViewport?.height || window.innerHeight;
+          const keyboardHeight = window.innerHeight - viewportHeight;
+          
+          if (keyboardHeight > 100) {
+            // 键盘已弹出，确保编辑器在可视区域内
+            const popoverRect = popover.getBoundingClientRect();
+            const visibleTop = window.visualViewport?.pageTop || window.scrollY;
+            const visibleBottom = visibleTop + viewportHeight;
+            
+            // 如果编辑器底部被键盘遮挡，向上滚动容器
+            if (popoverRect.bottom > visibleBottom - 20) {
+              const scrollNeeded = popoverRect.bottom - visibleBottom + 60; // 60px 缓冲
+              scrollContainer.scrollBy({ top: scrollNeeded, behavior: "smooth" });
+            }
+            
+            // 同时确保单元格也在可视区域
+            if (newTdRect.top < visibleTop + 50) {
+              td.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          }
+        }, 350); // 等待键盘弹出动画完成（iOS 约 300ms）
+      }, 50);
+      
+    } else {
+      // 桌面端原有逻辑
+      resize();
+      window.requestAnimationFrame(resize);
+    }
+
+    // 绑定全局关闭事件
+    window.setTimeout(() => {
+      document.addEventListener("mousedown", onOutside, true);
+      document.addEventListener("keydown", onDocumentKeydown, true);
+    }, 0);
   }
 
   private restoreTextDisplay(td: HTMLElement, currentValue: unknown, origText: string): void {
     td.textContent = origText || String(currentValue ?? "");
   }
 
-  private shouldUseTextarea(target: HTMLElement, col: ColumnDef, value: string): boolean {
-    if (col.type !== "text") return false;
-    return col.wrap ||
-      value.includes("\n") ||
-      value.length > 80 ||
-      target.closest(".db-board-card, .db-gallery-card") != null;
+  private shouldUsePopoverEditor(_target: HTMLElement, col: ColumnDef, _value: string): boolean {
+    return col.type === "text";
   }
 
   private mountInput(td: HTMLElement, input: HTMLInputElement): void {
@@ -914,15 +1091,44 @@ export class CellRenderer {
     input.select();
   }
 
-  private mountTextarea(td: HTMLElement, textarea: HTMLTextAreaElement): void {
+  private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  private positionTextEditPopover(popover: HTMLElement, td: HTMLElement, container: HTMLElement | null, isMobile = false): void {
+    if (isMobile) {
+      popover.style.left = "10px";
+      popover.style.right = "10px";
+      popover.style.bottom = "calc(10px + env(safe-area-inset-bottom, 0px))";
+      popover.style.top = "";
+      popover.style.width = "auto";
+      return;
+    }
+    const margin = 8;
     const rect = td.getBoundingClientRect();
-    this.addTransientClass(td, "db-cell-editing", 1600);
-    td.textContent = "";
-    if (rect.width > 0) textarea.style.width = `${Math.ceil(rect.width)}px`;
-    if (rect.height > 0) textarea.style.height = `${Math.max(24, Math.ceil(rect.height))}px`;
-    td.appendChild(textarea);
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    const popoverRect = popover.getBoundingClientRect();
+    const bounds = getVisiblePopoverBounds(container);
+    const width = Math.min(Math.max(rect.width, popoverRect.width || 0, 220), Math.min(520, bounds.width - margin * 2));
+    const left = clamp(rect.left, bounds.left + margin, bounds.right - width - margin);
+    const below = bounds.bottom - rect.top - margin;
+    const above = rect.bottom - bounds.top - margin;
+    const height = Math.min(popover.scrollHeight || popoverRect.height || 0, bounds.height - margin * 2);
+    const useAbove = above > below && below < height;
+    const top = useAbove ? rect.bottom - height : rect.top;
+    const clampedTop = clamp(top, bounds.top + margin, bounds.bottom - height - margin);
+
+    popover.style.width = `${width}px`;
+    setPosition(
+      popover,
+      left,
+      clampedTop,
+      container?.getBoundingClientRect(),
+      container?.scrollLeft || 0,
+      container?.scrollTop || 0
+    );
   }
 
   private handleEditKey(

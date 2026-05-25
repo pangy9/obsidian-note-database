@@ -249,6 +249,25 @@ export class SettingsTab extends PluginSettingTab {
       section.removeClass("is-dragging");
       parent.querySelectorAll(".db-settings-database-card.is-drop-target").forEach((el) => el.removeClass("is-drop-target"));
     };
+    const moveControls = heading.createSpan({ cls: "db-mobile-reorder-controls" });
+    const upBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+    });
+    setIcon(upBtn, "arrow-up");
+    upBtn.disabled = index === 0;
+    upBtn.onclick = (event) => {
+      event.preventDefault();
+      void this.moveSettingsDatabase(index, index - 1);
+    };
+    const downBtn = moveControls.createEl("button", {
+      attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+    });
+    setIcon(downBtn, "arrow-down");
+    downBtn.disabled = index >= this.plugin.settings.databases.length - 1;
+    downBtn.onclick = (event) => {
+      event.preventDefault();
+      void this.moveSettingsDatabase(index, index + 1);
+    };
     const title = heading.createDiv({ cls: "db-settings-database-title" });
     title.createEl("h4", { text: db.name || t("common.untitledDatabase") });
     const deleteButton = heading.createEl("button", {

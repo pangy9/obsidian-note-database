@@ -154,6 +154,7 @@ export class FormulaModal extends Modal {
       const width = this.modalEl.getBoundingClientRect().width || this.contentEl.getBoundingClientRect().width;
       this.contentEl.toggleClass("is-formula-compact", width > 0 && width < 1040);
       this.contentEl.toggleClass("is-formula-narrow", width > 0 && width < 760);
+      if (this.shouldDisableInlineSuggestions()) this.hideSuggestions();
     };
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(update);
@@ -652,8 +653,9 @@ export class FormulaModal extends Modal {
   private updatePreview(): void {
     if (!this.previewOutput || !this.previewStatus) return;
     const state = this.validateFormula();
-    this.previewOutput.textContent = state.output;
-    this.previewOutput.title = state.output;
+    const previewOutput = state.severity === "error" ? "ERROR" : state.output;
+    this.previewOutput.textContent = previewOutput;
+    this.previewOutput.title = state.severity === "error" ? state.message : state.output;
     this.previewOutput.toggleClass("is-error", state.severity === "error");
     this.previewOutput.toggleClass("is-warning", state.severity === "warning");
     this.previewStatus.textContent = state.message;
@@ -1093,6 +1095,10 @@ export class FormulaModal extends Modal {
 
   private updateSuggestions(): void {
     if (!this.textarea || !this.propertySuggestEl) return;
+    if (this.shouldDisableInlineSuggestions()) {
+      this.hideSuggestions();
+      return;
+    }
     const cursor = this.textarea.selectionStart;
     const before = this.textarea.value.slice(0, cursor);
     const openIndex = before.lastIndexOf("[");
@@ -1144,6 +1150,10 @@ export class FormulaModal extends Modal {
 
   private showSuggestionBox(): void {
     if (!this.textarea || !this.propertySuggestEl) return;
+    if (this.shouldDisableInlineSuggestions()) {
+      this.hideSuggestions();
+      return;
+    }
     const pos = this.estimateCaretPosition();
     this.propertySuggestEl.style.left = `${pos.left}px`;
     this.propertySuggestEl.style.top = `${pos.top}px`;
@@ -1154,6 +1164,12 @@ export class FormulaModal extends Modal {
   private hideSuggestions(): void {
     this.suggestionIndex = -1;
     this.propertySuggestEl?.removeClass("is-visible");
+  }
+
+  private shouldDisableInlineSuggestions(): boolean {
+    if (document.body.classList.contains("is-phone")) return true;
+    const width = this.modalEl?.getBoundingClientRect().width || this.contentEl?.getBoundingClientRect().width || 0;
+    return width > 0 && width < 760;
   }
 
   private highlightSuggestion(items: HTMLButtonElement[]): void {

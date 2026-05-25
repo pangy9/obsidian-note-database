@@ -1,4 +1,4 @@
-import { App, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
@@ -121,7 +121,7 @@ export class BoardRenderer {
     const header = column.createDiv({ cls: "db-board-column-header" });
     const columnCollapsed = Boolean(this.actions.isGroupCollapsed?.(groupField, group.key));
     column.toggleClass("is-collapsed", columnCollapsed);
-    if (this.canReorderGroups()) {
+    if (this.canReorderGroups() && !this.isPhoneLayout()) {
       header.draggable = true;
       header.addEventListener("dragstart", (event) => {
         event.dataTransfer?.setData(GROUP_MIME, group.key);
@@ -149,21 +149,23 @@ export class BoardRenderer {
     }
     header.createSpan({ cls: "db-board-column-title", text: group.key || t("common.uncategorized") });
     header.createSpan({ cls: "db-board-count", text: String(group.count) });
-    const resizeHandle = column.createDiv({ cls: "db-board-column-resize-handle" });
-    resizeHandle.addEventListener("mousedown", (event) => this.startColumnResize(event, board, config));
+    if (!this.isPhoneLayout()) {
+      const resizeHandle = column.createDiv({ cls: "db-board-column-resize-handle" });
+      resizeHandle.addEventListener("mousedown", (event) => this.startColumnResize(event, board, config));
+    }
     if (columnCollapsed) return;
 
     if (subgroupField && group.subgroups?.length) {
       const subgroups = column.createDiv({ cls: "db-board-subgroups" });
       for (const subgroup of group.subgroups) {
-        this.renderSubgroup(subgroups, config, group, subgroup, groupField, subgroupField);
+        this.renderSubgroup(subgroups, config, groups, group, subgroup, groupField, subgroupField);
       }
       return;
     }
 
     const cards = this.createCardsContainer(column, config, group, groupField);
     for (const row of group.rows) {
-      this.renderCard(cards, config, group, row, groupField);
+      this.renderCard(cards, config, groups, group, row, groupField);
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
@@ -174,6 +176,7 @@ export class BoardRenderer {
   private renderSubgroup(
     parent: HTMLElement,
     config: ViewConfig,
+    groups: BoardGroup[],
     group: BoardGroup,
     subgroup: BoardSubgroup,
     groupField: string,
@@ -206,7 +209,7 @@ export class BoardRenderer {
 
     const cards = this.createCardsContainer(section, config, group, groupField, subgroupField, subgroup);
     for (const row of subgroup.rows) {
-      this.renderCard(cards, config, group, row, groupField, subgroupField, subgroup.key);
+      this.renderCard(cards, config, groups, group, row, groupField, subgroupField, subgroup.key);
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
@@ -250,6 +253,7 @@ export class BoardRenderer {
   private renderCard(
     cards: HTMLElement,
     config: ViewConfig,
+    groups: BoardGroup[],
     group: BoardGroup,
     row: RowData,
     groupField: string,
@@ -261,7 +265,7 @@ export class BoardRenderer {
       attr: { "data-note-database-row-path": row.file.path },
     });
     this.attachRowContextMenu(card, row);
-    if (!this.actions.isReadOnly) {
+    if (!this.actions.isReadOnly && !this.isPhoneLayout()) {
       card.draggable = true;
       card.addEventListener("dragstart", (event) => {
         if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) {
@@ -332,6 +336,9 @@ export class BoardRenderer {
         this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
       };
     }
+    if (!this.actions.isReadOnly && this.isPhoneLayout()) {
+      this.renderMobileMoveButton(card, config, groups, group, row, groupField, subgroupField, subgroupKey);
+    }
     const openBtn = controls.createEl("button", {
       cls: "db-board-card-open",
       attr: { "aria-label": t("menu.openNote"), title: t("menu.openNote") },
@@ -382,6 +389,126 @@ export class BoardRenderer {
       event.stopPropagation();
       this.actions.showColumnMenu(event, col, el);
     });
+  }
+
+  private renderMobileMoveButton(
+    card: HTMLElement,
+    config: ViewConfig,
+    groups: BoardGroup[],
+    currentGroup: BoardGroup,
+    row: RowData,
+    groupField: string,
+    subgroupField?: string,
+    subgroupKey?: string
+  ): void {
+    if (!this.canReorderCards(config) && !subgroupField) return;
+    const button = card.createEl("button", {
+      cls: "db-card-mobile-move-btn",
+      attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
+    });
+    setIcon(button, "move");
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.showMobileBoardMoveMenu(event, config, groups, currentGroup, row, groupField, subgroupField, subgroupKey);
+    };
+  }
+
+  private showMobileBoardMoveMenu(
+    event: MouseEvent,
+    config: ViewConfig,
+    groups: BoardGroup[],
+    currentGroup: BoardGroup,
+    row: RowData,
+    groupField: string,
+    subgroupField?: string,
+    subgroupKey?: string
+  ): void {
+    const menu = new Menu();
+    const currentRows = subgroupField
+      ? currentGroup.subgroups?.find((subgroup) => subgroup.key === subgroupKey)?.rows || []
+      : currentGroup.rows;
+    const applyOrder = (targetGroup: BoardGroup, targetSubgroupKey: string | undefined, placement: "top" | "bottom" | "before" | "after", targetPath?: string) => {
+      void this.moveCardAndOrder(
+        row,
+        groupField,
+        targetGroup.key,
+        currentGroup.key,
+        row.file.path,
+        this.getMobileTargetOrder(targetGroup, row.file.path, placement, targetPath, subgroupField, targetSubgroupKey),
+        subgroupField,
+        targetSubgroupKey,
+        subgroupKey
+      );
+    };
+
+    menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").onClick(() => applyOrder(currentGroup, subgroupKey, "top")));
+    menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").onClick(() => applyOrder(currentGroup, subgroupKey, "bottom")));
+    for (const target of currentRows.filter((candidate) => candidate.file.path !== row.file.path)) {
+      const label = this.getMobileRowLabel(config, target);
+      menu.addItem((item) => item
+        .setTitle(`${t("mobile.moveBefore")} ${label}`)
+        .setIcon("corner-up-left")
+        .onClick(() => applyOrder(currentGroup, subgroupKey, "before", target.file.path)));
+      menu.addItem((item) => item
+        .setTitle(`${t("mobile.moveAfter")} ${label}`)
+        .setIcon("corner-down-left")
+        .onClick(() => applyOrder(currentGroup, subgroupKey, "after", target.file.path)));
+    }
+
+    const targetGroups = subgroupField
+      ? groups.flatMap((group) => (group.subgroups || []).map((subgroup) => ({ group, subgroupKey: subgroup.key })))
+      : groups.map((group) => ({ group, subgroupKey: undefined as string | undefined }));
+    if (targetGroups.length) menu.addSeparator();
+    for (const target of targetGroups) {
+      const isCurrent = target.group.key === currentGroup.key && target.subgroupKey === subgroupKey;
+      if (isCurrent) continue;
+      const label = subgroupField
+        ? `${target.group.key || t("common.uncategorized")} / ${target.subgroupKey || t("common.uncategorized")}`
+        : target.group.key || t("common.uncategorized");
+      menu.addItem((item) => item
+        .setTitle(`${t("mobile.moveTo")} ${label}`)
+        .setIcon("folder-input")
+        .onClick(() => applyOrder(target.group, target.subgroupKey, "bottom")));
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private getMobileTargetOrder(
+    group: BoardGroup,
+    draggedPath: string,
+    placement: "top" | "bottom" | "before" | "after",
+    targetPath?: string,
+    subgroupField?: string,
+    subgroupKey?: string
+  ): string[] {
+    const order = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== draggedPath);
+    if (subgroupField && subgroupKey != null && !targetPath) {
+      const subgroupPaths = new Set((group.subgroups?.find((subgroup) => subgroup.key === subgroupKey)?.rows || [])
+        .map((candidate) => candidate.file.path)
+        .filter((path) => path !== draggedPath));
+      const subgroupIndexes = order
+        .map((path, index) => subgroupPaths.has(path) ? index : -1)
+        .filter((index) => index >= 0);
+      const insertIndex = placement === "top"
+        ? (subgroupIndexes[0] ?? order.length)
+        : ((subgroupIndexes[subgroupIndexes.length - 1] ?? (order.length - 1)) + 1);
+      order.splice(insertIndex, 0, draggedPath);
+      return order;
+    }
+    if (placement === "top") return [draggedPath, ...order];
+    if (placement === "bottom" || !targetPath) return [...order, draggedPath];
+    const targetIndex = order.indexOf(targetPath);
+    if (targetIndex < 0) return [...order, draggedPath];
+    order.splice(placement === "after" ? targetIndex + 1 : targetIndex, 0, draggedPath);
+    return order;
+  }
+
+  private getMobileRowLabel(config: ViewConfig, row: RowData): string {
+    const columns = this.actions.getColumns(config);
+    const titleField = this.getTitleField(config, columns);
+    const value = titleField ? this.getTitleText(config, row, titleField) : "";
+    return value || row.file.name.replace(/\.md$/, "");
   }
 
   private dropGroup(
@@ -478,6 +605,10 @@ export class BoardRenderer {
 
   private isGroupDrag(event: DragEvent): boolean {
     return Array.from(event.dataTransfer?.types || []).includes(GROUP_MIME);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private highlightCardDropZone(source: HTMLElement): void {

@@ -84,6 +84,7 @@ export class ToolbarRenderer {
     const currentEntry = viewEntries[currentDbIndex];
     const currentDb = currentEntry?.config;
     const currentView = currentDb?.views[currentViewIndex] || currentDb?.views[0];
+    const phoneLayout = this.isPhoneLayout();
 
     const header = containerEl.createDiv({ cls: "db-header" });
     containerEl.insertBefore(header, containerEl.firstChild);
@@ -181,6 +182,7 @@ export class ToolbarRenderer {
       // Show view tabs for multi-view databases even without database chrome
       this.renderViewTabs(left, currentDb, currentViewIndex, actions);
     }
+    if (phoneLayout) this.renderSearch(left, state, actions);
 
     if (!actions.hideWidthSelect) this.renderWidthSelect(right, currentEntry, currentView, actions);
     this.renderFilterButton(right, state, actions);
@@ -191,8 +193,12 @@ export class ToolbarRenderer {
     this.renderColumnButton(right, currentView, state, actions);
     this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
-    this.renderSearch(right, state, actions);
+    if (!phoneLayout) this.renderSearch(right, state, actions);
     if (!actions.isReadOnly) this.renderNewButton(right, actions);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   // ── Database selector popover ──
@@ -286,6 +292,34 @@ export class ToolbarRenderer {
       attr: { type: "button" },
     });
     const drag = row.createSpan({ cls: "db-database-popover-drag", text: canMove && actions.moveDatabase ? "⋮⋮" : "" });
+    if (canMove && actions.moveDatabase) {
+      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+      const sameSourceIndexes = viewEntries
+        .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
+        .filter(({ candidate }) => Boolean(candidate.sourcePath) === Boolean(entry.sourcePath))
+        .map(({ candidateIndex }) => candidateIndex);
+      const sourcePosition = sameSourceIndexes.indexOf(index);
+      const upBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      });
+      setIcon(upBtn, "arrow-up");
+      upBtn.disabled = sourcePosition <= 0;
+      upBtn.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.moveDatabasePopoverEntry(panel, anchorEl, viewEntries, currentDbIndex, actions, updateState, index, sameSourceIndexes[sourcePosition - 1]);
+      };
+      const downBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      });
+      setIcon(downBtn, "arrow-down");
+      downBtn.disabled = sourcePosition < 0 || sourcePosition >= sameSourceIndexes.length - 1;
+      downBtn.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.moveDatabasePopoverEntry(panel, anchorEl, viewEntries, currentDbIndex, actions, updateState, index, sameSourceIndexes[sourcePosition + 1]);
+      };
+    }
     const label = entry.config.name || (entry.sourcePath ? t("common.untitled") : `${t("common.database")} ${index + 1}`);
     row.createSpan({ cls: "db-database-popover-label", text: label });
     if (entry.sourcePath) row.createSpan({ cls: "db-database-popover-source", text: entry.sourcePath });
@@ -328,6 +362,30 @@ export class ToolbarRenderer {
       this.populateDatabasePopover(panel, anchorEl, nextEntries, nextActiveIndex, actions, updateState);
     };
     row.ondragend = () => this.clearDatabaseDragState(panel);
+  }
+
+  private moveDatabasePopoverEntry(
+    panel: HTMLElement,
+    anchorEl: HTMLElement,
+    viewEntries: ToolbarViewEntry[],
+    currentDbIndex: number,
+    actions: ToolbarActions,
+    updateState: (entries: ToolbarViewEntry[], currentIndex: number) => void,
+    from: number,
+    to: number | undefined
+  ): void {
+    if (to == null || from === to || from < 0 || to < 0) return;
+    const fromEntry = viewEntries[from];
+    const toEntry = viewEntries[to];
+    if (!fromEntry || !toEntry || Boolean(fromEntry.sourcePath) !== Boolean(toEntry.sourcePath)) return;
+    const activeEntry = viewEntries[currentDbIndex];
+    const nextEntries = [...viewEntries];
+    const [moved] = nextEntries.splice(from, 1);
+    nextEntries.splice(to, 0, moved);
+    const nextActiveIndex = Math.max(0, nextEntries.indexOf(activeEntry));
+    actions.moveDatabase?.(from, to);
+    updateState(nextEntries, nextActiveIndex);
+    this.populateDatabasePopover(panel, anchorEl, nextEntries, nextActiveIndex, actions, updateState);
   }
 
   private clearDatabaseDragState(panel: HTMLElement): void {
@@ -419,7 +477,7 @@ export class ToolbarRenderer {
   ): void {
     const tabs = left.createDiv({ cls: "db-view-tabs" });
     const readOnly = actions.isReadOnlyViews;
-    const canReorder = Boolean(actions.moveView && db.views.length > 1);
+    const canReorder = Boolean(actions.moveView && db.views.length > 1 && !this.isPhoneLayout());
     const tabEls: { el: HTMLElement; index: number }[] = [];
 
     db.views.forEach((view, i) => {
@@ -515,34 +573,38 @@ export class ToolbarRenderer {
   ): void {
     const toolbar = tabs.closest(".db-toolbar") as HTMLElement | null;
     const right = toolbar?.querySelector(".db-toolbar-right") as HTMLElement | null;
-    const boundary = right ? right.getBoundingClientRect().left - 12 : tabs.getBoundingClientRect().right;
+    const phoneSearch = toolbar?.querySelector(".db-toolbar-left .db-search-control") as HTMLElement | null;
+    const boundary = this.isPhoneLayout()
+      ? (phoneSearch ? phoneSearch.getBoundingClientRect().left - 4 : toolbar?.getBoundingClientRect().right || tabs.getBoundingClientRect().right)
+      : right ? right.getBoundingClientRect().left - 6 : tabs.getBoundingClientRect().right;
     const containerWidth = boundary - tabs.getBoundingClientRect().left;
+    const gap = parseFloat(getComputedStyle(tabs).columnGap || getComputedStyle(tabs).gap || "3") || 3;
 
     const addBtn = tabs.querySelector(".db-view-tab-add") as HTMLElement | null;
-    const addBtnWidth = addBtn ? addBtn.offsetWidth + 4 : 0;
-    const moreBtnWidth = 40;
+    const addBtnWidth = addBtn ? addBtn.offsetWidth + gap : 0;
+    const moreBtnWidth = 24 + gap;
 
     // Calculate total width of all tabs
     let totalWidth = addBtnWidth;
-    for (const t of tabEls) totalWidth += t.el.offsetWidth + 4;
+    for (const t of tabEls) totalWidth += t.el.offsetWidth + gap;
 
     if (totalWidth <= containerWidth) return; // No overflow
 
     // Always keep active tab visible; fill remaining space from left to right
-    const availableSpace = containerWidth - addBtnWidth - moreBtnWidth - 8;
+    const availableSpace = containerWidth - addBtnWidth - moreBtnWidth;
     const visibleSet = new Set<number>();
     visibleSet.add(currentViewIndex);
 
     // Measure active tab
     const activeEl = tabEls.find(t => t.index === currentViewIndex);
-    let usedWidth = activeEl ? activeEl.el.offsetWidth + 4 : 0;
+    let usedWidth = activeEl ? activeEl.el.offsetWidth + gap : 0;
 
     // Add remaining tabs from left to right until out of space
     for (const t of tabEls) {
       if (visibleSet.has(t.index)) continue;
-      if (usedWidth + t.el.offsetWidth + 4 > availableSpace) break;
+      if (usedWidth + t.el.offsetWidth + gap > availableSpace) break;
       visibleSet.add(t.index);
-      usedWidth += t.el.offsetWidth + 4;
+      usedWidth += t.el.offsetWidth + gap;
     }
 
     // Hide non-visible tabs
@@ -602,6 +664,16 @@ export class ToolbarRenderer {
     }
     if (actions.copyViewCode) {
       this.renderViewTabPopoverRow(panel, t("toolbar.copyViewCode"), "code-xml", () => actions.copyViewCode?.(viewIndex));
+    }
+    if (this.isPhoneLayout() && actions.moveView && totalViews > 1) {
+      if (viewIndex > 0) {
+        this.renderViewTabPopoverRow(panel, t("toolbar.moveViewFirst"), "chevrons-left", () => actions.moveView?.(viewIndex, 0));
+        this.renderViewTabPopoverRow(panel, t("menu.moveUp"), "arrow-left", () => actions.moveView?.(viewIndex, viewIndex - 1));
+      }
+      if (viewIndex < totalViews - 1) {
+        this.renderViewTabPopoverRow(panel, t("menu.moveDown"), "arrow-right", () => actions.moveView?.(viewIndex, viewIndex + 1));
+        this.renderViewTabPopoverRow(panel, t("toolbar.moveViewLast"), "chevrons-right", () => actions.moveView?.(viewIndex, totalViews - 1));
+      }
     }
     if (totalViews > 1) {
       this.renderViewTabPopoverRow(panel, t("toolbar.deleteView"), "trash", () => {
@@ -727,6 +799,11 @@ export class ToolbarRenderer {
     if (!multiline) (input as HTMLInputElement).type = "text";
     input.value = value;
     el.replaceWith(input);
+    if (multiline && input instanceof HTMLTextAreaElement) {
+      this.autoGrowTextarea(input, 200);
+      input.addEventListener("input", () => this.autoGrowTextarea(input, 200));
+      window.requestAnimationFrame(() => this.autoGrowTextarea(input, 200));
+    }
     input.focus();
     input.select();
     let done = false;
@@ -745,6 +822,13 @@ export class ToolbarRenderer {
         finish(true);
       }
     };
+  }
+
+  private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }
 
   // ── Row 2: Toolbar buttons ──

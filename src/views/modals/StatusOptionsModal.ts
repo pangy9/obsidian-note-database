@@ -109,6 +109,19 @@ export class StatusOptionsModal extends Modal {
       drag.draggable = true;
       drag.title = t("panel.dragToSort");
       drag.ondragstart = (event) => this.startDrag(event, index, row);
+      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls db-status-option-mobile-controls" });
+      const upBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      });
+      setIcon(upBtn, "arrow-up");
+      upBtn.disabled = index === 0;
+      upBtn.onclick = () => this.moveOption(index, index - 1);
+      const downBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      });
+      setIcon(downBtn, "arrow-down");
+      downBtn.disabled = index >= this.options.length - 1;
+      downBtn.onclick = () => this.moveOption(index, index + 1);
       row.createSpan({ cls: `db-status-option-preview status-badge status-color-${option.color}`, text: option.value || t("modal.untitled") });
       const input = row.createEl("input", {
         cls: "db-status-option-input",
@@ -157,6 +170,13 @@ export class StatusOptionsModal extends Modal {
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
     }
+  }
+
+  private moveOption(from: number, to: number): void {
+    if (from < 0 || from >= this.options.length || to < 0 || to >= this.options.length) return;
+    const [item] = this.options.splice(from, 1);
+    this.options.splice(to, 0, item);
+    this.renderList();
   }
 
   private dropOn(event: DragEvent, targetIndex: number, row: HTMLElement): void {

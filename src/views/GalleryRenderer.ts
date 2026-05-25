@@ -1,4 +1,4 @@
-import { App, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
@@ -86,7 +86,7 @@ export class GalleryRenderer {
       if (collapsed) continue;
       const gallery = this.createGallery(section, config);
       this.setupGroupDropTarget(gallery, groupField, group.key);
-      for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key);
+      for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key, groups);
       this.renderNewCard(gallery, { [groupField]: group.key || "" });
     }
   }
@@ -114,19 +114,24 @@ export class GalleryRenderer {
     return gallery;
   }
 
-  private renderCard(gallery: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string): void {
+  private renderCard(gallery: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: GalleryGroup[]): void {
     const card = gallery.createDiv({
       cls: "db-gallery-card",
       attr: { "data-note-database-row-path": row.file.path },
     });
     this.attachRowContextMenu(card, row);
     this.setupGroupedCardDrag(card, row, groupField, groupKey);
-    const resizeHandle = card.createDiv({ cls: "db-gallery-card-resize-handle" });
-    resizeHandle.addEventListener("mousedown", (event) => this.startCardResize(event, gallery, config));
-    resizeHandle.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
+    if (!this.actions.isReadOnly && this.isPhoneLayout() && groupField && groupKey != null && groups?.length) {
+      this.renderMobileMoveButton(card, config, row, groupField, groupKey, groups);
+    }
+    if (!this.isPhoneLayout()) {
+      const resizeHandle = card.createDiv({ cls: "db-gallery-card-resize-handle" });
+      resizeHandle.addEventListener("mousedown", (event) => this.startCardResize(event, gallery, config));
+      resizeHandle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    }
     if (config.galleryImageField) this.renderCover(card, config, row);
 
     const body = card.createDiv({ cls: "db-gallery-card-body" });
@@ -192,8 +197,31 @@ export class GalleryRenderer {
     });
   }
 
+  private renderMobileMoveButton(card: HTMLElement, config: ViewConfig, row: RowData, groupField: string, groupKey: string, groups: GalleryGroup[]): void {
+    if (!this.actions.moveRowsToGroup) return;
+    const button = card.createEl("button", {
+      cls: "db-card-mobile-move-btn",
+      attr: { type: "button", title: t("mobile.moveToGroup"), "aria-label": t("mobile.moveToGroup") },
+    });
+    setIcon(button, "folder-input");
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menu = new Menu();
+      for (const group of groups) {
+        if (group.key === groupKey) continue;
+        menu.addItem((item) => item
+          .setTitle(group.key || t("common.uncategorized"))
+          .setIcon("folder-input")
+          .onClick(() => void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key)));
+      }
+      menu.showAtMouseEvent(event);
+    };
+  }
+
   private setupGroupedCardDrag(card: HTMLElement, row: RowData, groupField?: string, groupKey?: string): void {
     if (!groupField || groupKey == null || this.actions.isReadOnly || !this.actions.moveRowsToGroup) return;
+    if (this.isPhoneLayout()) return;
     card.draggable = true;
     card.addEventListener("dragstart", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
@@ -231,6 +259,10 @@ export class GalleryRenderer {
 
   private isRowDrag(event: DragEvent): boolean {
     return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private renderCover(card: HTMLElement, config: ViewConfig, row: RowData): void {

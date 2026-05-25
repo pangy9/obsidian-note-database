@@ -1,4 +1,4 @@
-import { App, Modal } from "obsidian";
+import { App, Modal, setIcon } from "obsidian";
 import { mergeGroupOrder } from "../../data/GroupOrder";
 import { t } from "../../i18n";
 
@@ -52,6 +52,19 @@ export class GroupOrderModal extends Modal {
 
       row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
       row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
+      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+      const upBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      });
+      setIcon(upBtn, "arrow-up");
+      upBtn.disabled = index === 0;
+      upBtn.onclick = () => this.move(index, -1);
+      const downBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      });
+      setIcon(downBtn, "arrow-down");
+      downBtn.disabled = index >= this.order.length - 1;
+      downBtn.onclick = () => this.move(index, 1);
     });
 
     const footer = contentEl.createDiv({ cls: "db-modal-actions" });

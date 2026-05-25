@@ -8,6 +8,20 @@ It is useful for project tracking, reading plans, subscription lists, content li
 
 ![Table view](assets/screenshots/en-table-view.png)
 
+## What's New In 1.0.4 (Compared To 1.0.3)
+
+- **Mobile adaptation**: the toolbar, views, property panels, cell editing, and formula editor are now fully usable on phones and tablets.
+- **Mobile-friendly reordering**: drag-only lists (property columns, sort rules, database lists, status options, cell options, group order) now include up/down move buttons for touch, while drag handles are hidden on mobile.
+- **Mobile table selection**: Dashboard and embedded tables use tap-to-select mode on mobile — tap a cell to set the anchor, tap another to extend the selection; row checkboxes use the last-selected row as the range anchor.
+- **Mobile card move**: board cards get a touch-friendly move menu (top/bottom, before/after another card, move to another group/subgroup) instead of drag-and-drop.
+- **Disabled unreliable mobile drag**: column-header drag sort, column resize, row group drag, cell fill handle, board column drag/resize, and gallery width drag are hidden on mobile.
+- **Mobile toolbar**: search box moves to the view-tab row; toolbar buttons wrap to a second scrollable row; view tabs disable drag reorder and use a menu with move-to-top/move-up/move-down/move-to-bottom.
+- **Mobile formula editor**: inline autocomplete popup is disabled on mobile to avoid keyboard overlap; the bottom field/function panel remains available for search and tap-to-insert.
+- **Refined cell text editing**: on desktop, text cell editing is now a contextual floating layer that appears at the cell position, instead of a modal card with title bar and Cancel/Save buttons.
+- **Improved adaptive column width**: auto-fit now uses `canvas.measureText()` for lightweight measurement, with separate estimates for headers, text, and option badges — producing more compact and accurate results.
+- **Visual polish**: cell option popovers use flat, pill-shaped items with better spacing; toolbar search focus no longer shows a highlighted background block; database description editor auto-grows with content height.
+- **Bug fixes**: mobile floating editor positioning; property edit window element misalignment; formula error preview duplication.
+
 ## What's New In 1.0.3 (Compared To 1.0.1)
 
 - **More reliable writes and refresh**: frontmatter writes are serialized per file to reduce race conditions; computed sync and embedded refresh are more consistent.

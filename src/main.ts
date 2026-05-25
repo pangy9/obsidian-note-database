@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, setIcon, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries, moveDatabaseFilePath } from "./data/DatabaseFileOrder";
 import { ComputedFieldEngine } from "./data/ComputedField";
@@ -1970,6 +1970,25 @@ class DatabaseFilesModal extends Modal {
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
       };
       drag.ondragend = () => this.finishDrag();
+      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+      const upBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      });
+      setIcon(upBtn, "arrow-up");
+      upBtn.disabled = index === 0;
+      upBtn.onclick = (event) => {
+        event.preventDefault();
+        void this.moveFile(index, index - 1);
+      };
+      const downBtn = moveControls.createEl("button", {
+        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      });
+      setIcon(downBtn, "arrow-down");
+      downBtn.disabled = index >= files.length - 1;
+      downBtn.onclick = (event) => {
+        event.preventDefault();
+        void this.moveFile(index, index + 1);
+      };
       const info = row.createDiv({ cls: "db-file-list-info" });
       info.createDiv({ cls: "db-file-list-title", text: entry.config.name || entry.file.basename });
       info.createDiv({ cls: "db-file-list-path", text: entry.file.path });

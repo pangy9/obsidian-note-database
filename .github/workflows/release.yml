@@ -41,7 +41,7 @@ jobs:
           gh release create "$TAG_NAME" \
             main.js manifest.json styles.css \
             --title "$TAG_NAME" \
-            --notes "Release $TAG_NAME"
+            --notes "$(git tag -l --format='%(contents)' "$TAG_NAME")"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@v2

@@ -304,15 +304,27 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private handleOutsideClick(event: MouseEvent): void {
-    if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     const target = event.target as HTMLElement | null;
     if (!target) return;
+    if (this.cellSelection && this.shouldClearCellSelectionFromPointer(target)) {
+      this.clearEmbedCellSelection();
+    }
+    if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     if (!this.containerEl.contains(target)) {
       this.closePopovers();
       return;
     }
     if (target.closest(".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-toolbar, .db-header")) return;
     this.closePopovers();
+  }
+
+  private shouldClearCellSelectionFromPointer(target: HTMLElement): boolean {
+    if (!this.containerEl.contains(target)) return !target.closest(".modal");
+    return !target.closest(
+      "td[data-note-database-row-path][data-note-database-column-key], " +
+      ".db-selection-status-bar, .db-cell-editing, input, textarea, select, button, a, " +
+      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .menu"
+    );
   }
 
   private closePopovers(): void {
@@ -1727,6 +1739,17 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (!this.config) return;
       event.preventDefault(); // prevent browser text selection during drag
       const addr: CellAddress = { rowPath: row.file.path, colKey: col.key };
+      if (this.isPhoneLayout()) {
+        if (this.cellSelection) {
+          this.cellSelection = { anchor: this.cellSelection.anchor, focus: addr };
+        } else {
+          this.cellSelection = { anchor: addr, focus: addr };
+        }
+        this.isSelectingCells = false;
+        this.renderEmbedSelectionStatusBar();
+        this.renderEmbedCellSelectionClasses();
+        return;
+      }
       if (event.shiftKey && this.cellSelection) {
         this.cellSelection = { anchor: this.cellSelection.anchor, focus: addr };
       } else {
@@ -1747,6 +1770,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
     td.addEventListener("mousedown", handleMouseDown);
     td.addEventListener("mouseenter", handleMouseEnter);
+  }
+
+  private isPhoneLayout(): boolean {
+    return document.body.classList.contains("is-phone");
   }
 
   private getSelectedEmbedCellAddresses(): CellAddress[] {

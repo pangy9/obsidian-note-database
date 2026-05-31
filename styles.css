@@ -2648,6 +2648,24 @@
   text-align: center;
 }
 
+.note-database-container .db-empty-dashboard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: calc(100% - 64px);
+  padding-block: 64px;
+}
+
+.note-database-container .db-empty-title {
+  font-size: var(--font-ui-medium);
+}
+
+.note-database-container .db-empty-action {
+  width: fit-content;
+}
+
 .note-database-container .db-error-display {
   white-space: pre-wrap;
   font-family: monospace;

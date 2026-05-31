@@ -14,23 +14,31 @@ import { setLocale, t } from "./i18n";
 
 /**
  * After JSON deserialization, db.schema and each view.schema are independent
- * objects.  Merge any columns that only exist in a view's copy back into
- * db.schema, then point every view at the single shared schema so that column
- * changes in one view are visible in all others.
+ * objects.  The database-level schema is the canonical source because deleted
+ * columns must not be resurrected from stale per-view schema copies.
  */
 function linkDatabaseSchemas(databases: DatabaseConfig[]): void {
   for (const db of databases) {
-    if (!db.schema) continue;
-    const colKeys = new Set(db.schema.columns.map((c) => c.key));
-    const cfKeys = new Set((db.schema.computedFields || []).map((c) => c.key));
-    for (const view of db.views) {
-      if (!view.schema || view.schema === db.schema) continue;
-      for (const col of view.schema.columns) {
-        if (!colKeys.has(col.key)) { db.schema.columns.push(col); colKeys.add(col.key); }
+    if (!db.schema || !Array.isArray(db.schema.columns)) {
+      db.schema = db.views?.find((view) => Array.isArray(view.schema?.columns))?.schema || {
+        columns: [],
+        computedFields: [],
+      };
+    }
+    if (!Array.isArray(db.schema.computedFields)) db.schema.computedFields = [];
+
+    const hasCanonicalColumns = db.schema.columns.length > 0;
+    if (!hasCanonicalColumns) {
+      const firstViewSchema = db.views?.find((view) => Array.isArray(view.schema?.columns) && view.schema.columns.length > 0)?.schema;
+      if (firstViewSchema) {
+        db.schema = {
+          columns: firstViewSchema.columns || [],
+          computedFields: firstViewSchema.computedFields || [],
+        };
       }
-      for (const cf of view.schema.computedFields || []) {
-        if (!cfKeys.has(cf.key)) { db.schema.computedFields.push(cf); cfKeys.add(cf.key); }
-      }
+    }
+
+    for (const view of db.views || []) {
       view.schema = db.schema;
     }
   }
@@ -1495,15 +1503,15 @@ export default class NoteDatabasePlugin extends Plugin {
     // Collect computed updates from all matching databases and merge into a single write
     const mergedUpdates: Record<string, unknown> = {};
     for (const db of allDatabases) {
-      const view = db.views[0];
-      if (!view) continue;
-      if (db.schema.computedFields.length === 0) continue;
-      if (!this.dataSource.getRecordsForConfig(db).some((record) => record.file.path === file.path)) continue;
+      const scopedDb = this.getComputedSyncScope(db);
+      if (!scopedDb) continue;
+      if ((scopedDb.schema.computedFields || []).length === 0) continue;
+      if (!this.dataSource.getRecordsForConfig(scopedDb).some((record) => record.file.path === file.path)) continue;
       const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
       if (!fm) continue;
-      if (db.typeFilter && fm["type"] !== db.typeFilter) continue;
-      const computed = new ComputedFieldEngine(db.schema.computedFields, db.schema.columns).evaluate(fm);
-      for (const col of db.schema.columns.filter((candidate) => candidate.type === "computed")) {
+      if (scopedDb.typeFilter && fm["type"] !== scopedDb.typeFilter) continue;
+      const computed = new ComputedFieldEngine(scopedDb.schema.computedFields, scopedDb.schema.columns).evaluate(fm);
+      for (const col of scopedDb.schema.columns.filter((candidate) => candidate.type === "computed")) {
         const value = computed[col.computedKey || col.key];
         const next = value == null ? "" : value;
         if (String(fm[col.key] ?? "") !== String(next ?? "")) mergedUpdates[col.key] = next;
@@ -1512,6 +1520,32 @@ export default class NoteDatabasePlugin extends Plugin {
     if (Object.keys(mergedUpdates).length > 0) {
       await this.dataSource.updateFrontmatter(file, mergedUpdates);
     }
+  }
+
+  private getComputedSyncScope(db: DatabaseConfig): DatabaseConfig | null {
+    // Opening any Markdown file is a global event. Only databases with an
+    // explicit source boundary should write computed fields in that background
+    // path; unscoped databases still sync from their own rendered rows.
+    if (this.hasExplicitRecordScope(db)) return db;
+    const firstView = db.views?.[0];
+    if (!firstView || !this.hasExplicitRecordScope(firstView)) return null;
+    return {
+      ...db,
+      sourceFolder: firstView.sourceFolder || "",
+      sourceRules: firstView.sourceRules,
+      sourceLogic: firstView.sourceLogic || "and",
+      newRecordFolder: firstView.newRecordFolder,
+      typeFilter: firstView.typeFilter,
+    };
+  }
+
+  private hasExplicitRecordScope(scope: Pick<DatabaseConfig, "sourceFolder" | "sourceRules" | "typeFilter">): boolean {
+    const sourceFolder = normalizePath(scope.sourceFolder || "").replace(/^\/+/, "");
+    return Boolean(
+      sourceFolder ||
+      scope.typeFilter ||
+      (Array.isArray(scope.sourceRules) && scope.sourceRules.length > 0)
+    );
   }
 
   /** Migrate legacy settings-based databases to vault files. */

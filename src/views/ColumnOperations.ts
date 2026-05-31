@@ -184,13 +184,8 @@ export class ColumnOperations {
     const frontmatterChanges = col.type === "computed"
       ? []
       : this.getDeleteKeyChanges(config, col.key);
-    const idx = config.schema.columns.findIndex((candidate) => candidate.key === col.key);
-    if (idx >= 0) config.schema.columns.splice(idx, 1);
-    if (col.type === "computed") {
-      const computedKey = col.computedKey || col.key;
-      config.schema.computedFields = config.schema.computedFields.filter((field) => field.key !== computedKey);
-    }
     const db = this.deps.getActiveDb();
+    this.removeColumnFromSchemas(db, config, col);
     const state = this.deps.getState();
     for (const view of db.views || [config]) {
       this.removeColumnReferences(view, col.key);
@@ -213,6 +208,21 @@ export class ColumnOperations {
     } catch (err) {
       console.error("Note Database: failed to delete column", err);
       new Notice(t("column.deleteFailed", { error: String(err) }));
+    }
+  }
+
+  private removeColumnFromSchemas(db: DatabaseConfig, config: ViewConfig, col: ColumnDef): void {
+    const computedKey = col.computedKey || col.key;
+    const schemas = new Set([db.schema, config.schema, ...(db.views || []).map((view) => view.schema)]);
+    for (const schema of schemas) {
+      if (!schema) continue;
+      schema.columns = (schema.columns || []).filter((candidate) => candidate.key !== col.key);
+      if (col.type === "computed") {
+        schema.computedFields = (schema.computedFields || []).filter((field) => field.key !== computedKey);
+      }
+    }
+    for (const view of db.views || []) {
+      view.schema = db.schema;
     }
   }
 

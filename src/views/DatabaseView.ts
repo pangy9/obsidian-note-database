@@ -53,6 +53,7 @@ import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
 import { t } from "../i18n";
 import { createStoredZip, ZipEntry } from "../data/ZipExport";
+import { saveZipWithPicker } from "../data/ExportSaveTarget";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
@@ -360,11 +361,28 @@ export class DatabaseView extends ItemView {
 
   /** Get the current view's transient state (always non-null) */
   private vs(): DatabaseViewState {
-    const state = this.viewStateStore.get(this.currentDbIndex, this.currentViewIndex, this.getActiveView());
+    if (!this.hasActiveDatabase()) {
+      return this.viewState || {
+        hiddenColumns: new Set<string>(),
+        filters: [],
+        filterLogic: "and",
+        sortRules: [],
+        sortDirection: "asc",
+        groupByField: "",
+        statusFilter: "",
+        searchText: "",
+      };
+    }
+    const config = this.getConfig();
+    const state = this.viewStateStore.get(this.currentDbIndex, this.currentViewIndex, config);
     if (this.viewState !== state) {
       this.viewState = state;
     }
     return this.viewState;
+  }
+
+  private hasActiveDatabase(): boolean {
+    return Boolean(this.viewEntries[this.currentDbIndex]?.config?.views?.length);
   }
 
   /** Get the active database config */
@@ -528,15 +546,8 @@ export class DatabaseView extends ItemView {
     });
 
     const zip = createStoredZip(zipEntries);
-    const folder = this.databaseFolder || "";
-    const path = this.getAvailableExportPath(folder, `${baseName}.zip`);
-    const adapter = this.app.vault.adapter;
-    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-    if (parent) await this.ensureFolder(parent);
-    await adapter.writeBinary(path, zip);
-    const file = this.app.vault.getAbstractFileByPath(path);
-    new Notice(t("notice.exportedCsvMarkdownZip", { path }));
-    return file instanceof TFile ? file : null;
+    const result = await saveZipWithPicker(this.app, zip, `${baseName}.zip`, this.databaseFolder || "");
+    return result?.file || null;
   }
 
   private addAllViewCsvEntries(entries: ZipEntry[], db: DatabaseConfig, baseName: string): void {
@@ -640,7 +651,9 @@ export class DatabaseView extends ItemView {
       this.suppressNextSettingsUpdate = false;
       return;
     }
-    this.viewState = this.viewStateStore.get(this.currentDbIndex, this.currentViewIndex, this.getActiveView());
+    this.viewState = this.hasActiveDatabase()
+      ? this.viewStateStore.get(this.currentDbIndex, this.currentViewIndex, this.getActiveView())
+      : undefined;
     this.selectedRows.clear();
     this.lastSelectedRowPath = null;
     this.cellSelection = null;
@@ -784,6 +797,7 @@ export class DatabaseView extends ItemView {
   protected renderToolbar(): void {
     if (!this.containerEl_) return;
     this.applyDisplayWidth();
+    if (!this.hasActiveDatabase()) return;
     const currentConfig = this.getConfig();
     const needsSetup = !currentConfig?.schema?.columns || currentConfig.schema.columns.length < 2;
     this.toolbarRenderer.render(this.containerEl_, this.viewEntries, this.currentDbIndex, this.currentViewIndex, this.vs(), {
@@ -871,6 +885,11 @@ export class DatabaseView extends ItemView {
 
   private applyDisplayWidth(): void {
     if (!this.containerEl_) return;
+    if (!this.hasActiveDatabase()) {
+      this.containerEl_.toggleClass("db-width-wide", false);
+      this.containerEl_.toggleClass("db-width-default", true);
+      return;
+    }
     const config = this.getConfig();
     const width = config?.displayWidth;
     const wide = width === "wide";
@@ -1744,31 +1763,6 @@ export class DatabaseView extends ItemView {
     const current = used.get(base) || 0;
     used.set(base, current + 1);
     return current === 0 ? base : `${base} ${current + 1}`;
-  }
-
-  private getAvailableExportPath(folder: string, filename: string): string {
-    const safeFolder = folder.replace(/^\/+|\/+$/g, "");
-    const dot = filename.lastIndexOf(".");
-    const name = dot >= 0 ? filename.slice(0, dot) : filename;
-    const ext = dot >= 0 ? filename.slice(dot) : "";
-    let candidate = safeFolder ? `${safeFolder}/${filename}` : filename;
-    let i = 1;
-    while (this.app.vault.getAbstractFileByPath(candidate)) {
-      candidate = safeFolder ? `${safeFolder}/${name} ${i}${ext}` : `${name} ${i}${ext}`;
-      i++;
-    }
-    return candidate;
-  }
-
-  private async ensureFolder(folderPath: string): Promise<void> {
-    const parts = folderPath.split("/").filter(Boolean);
-    let current = "";
-    for (const part of parts) {
-      current = current ? `${current}/${part}` : part;
-      if (!this.app.vault.getAbstractFileByPath(current)) {
-        await this.app.vault.createFolder(current);
-      }
-    }
   }
 
   private getRowsForView(viewIndex: number): RowData[] {
@@ -2783,18 +2777,16 @@ export class DatabaseView extends ItemView {
   }
 
   private render(): void {
-    const config = this.getConfig();
-    const dbConfig = this.getActiveDb();
     this.applyDisplayWidth();
     this.containerEl_?.toggleClass("has-selection-status", false);
-    this.applyViewTypeClass(config?.viewType || "table");
-    if (!config) {
-      this.containerEl_?.createDiv({
-        cls: "db-empty",
-        text: t("empty.noDatabases"),
-      });
+    if (!this.hasActiveDatabase()) {
+      this.applyViewTypeClass("table");
+      this.renderEmptyDashboard();
       return;
     }
+    const config = this.getConfig();
+    const dbConfig = this.getActiveDb();
+    this.applyViewTypeClass(config.viewType || "table");
     if (!config.schema || !config.schema.columns || config.schema.columns.length === 0) {
       this.containerEl_?.createDiv({
         cls: "db-empty",
@@ -2837,6 +2829,18 @@ export class DatabaseView extends ItemView {
     // Clear pending-show flags after one render cycle
     this.pendingShowColumns.clear();
     this.revealPendingNewRow();
+  }
+
+  private renderEmptyDashboard(): void {
+    const empty = this.containerEl_?.createDiv({ cls: "db-empty db-empty-dashboard" });
+    empty?.createDiv({ cls: "db-empty-title", text: t("empty.noDatabases") });
+    const button = empty?.createEl("button", {
+      cls: "mod-cta db-empty-action",
+      text: t("empty.createFirstDatabase"),
+    });
+    button?.addEventListener("click", () => {
+      void this.addDatabase();
+    });
   }
 
   private renderSummary(): void {

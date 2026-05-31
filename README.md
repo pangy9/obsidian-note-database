@@ -8,6 +8,15 @@ It is useful for project tracking, reading plans, subscription lists, content li
 
 ![Table view](assets/screenshots/en-table-view.png)
 
+## What's New In 1.0.6
+
+1.0.6 is a hotfix for data-safety and first-run polish:
+
+- Computed fields now sync only to notes that match the database source boundary, instead of leaking into unrelated Markdown files.
+- Deleted properties no longer reappear after restarting Obsidian.
+- Empty dashboards now show a centered first-database button instead of a render error.
+- CSV + Markdown ZIP export now lets you choose the output location and confirms the saved path.
+
 ## What's New In 1.0.5 (Compared To 1.0.4)
 
 - **Markdown database files as the single storage model**: every database is now stored as a normal `db_view: true` Markdown file. Existing settings-based databases are migrated automatically when the plugin loads.
@@ -51,7 +60,7 @@ List view is for compact indexes, lightweight task lists, and directories. It ke
 
 ## Getting Started
 
-Click the database icon in the left ribbon, or run `Note database: Open dashboard` from the command palette. The command palette can also import data, convert `.base` files, generate database files, or open existing database files.
+Click the database icon in the left ribbon, or run `Note database: Open dashboard` from the command palette. The command palette can also import data, convert `.base` files, or open the corresponding database file.
 
 ![Command palette](assets/screenshots/en-command-list.png)
 
@@ -86,7 +95,7 @@ viewId: mh2g9dz3_abcd123
 
 Every database configuration is saved as a Markdown file with `db_view: true`, with its configuration stored in the frontmatter `database` object. Existing settings-based databases from earlier versions are migrated automatically.
 
-![Generate or open database file](assets/screenshots/en-generate-or-open-database-file.png)
+![Open the corresponding database file](assets/screenshots/en-generate-or-open-database-file.png)
 
 ## Computed Fields And Formulas
 
@@ -114,7 +123,7 @@ The formula editor shows available fields, function lists, examples, live previe
 
 ## Import And Export
 
-Note Database can export the current database as a CSV + Markdown ZIP, and import the same format back. Export can optionally include frontmatter in the Markdown files, and the ZIP also includes database metadata to help restore properties, views, and configuration on re-import.
+Note Database can export the current database as a CSV + Markdown ZIP, and import the same format back. Export lets you choose the ZIP location, can optionally include frontmatter in the Markdown files, and the ZIP also includes database metadata to help restore properties, views, and configuration on re-import.
 
 If imported CSV + Markdown files do not include database metadata, the plugin infers property types from CSV content and opens a confirmation dialog so you can review dates, numbers, checkboxes, select, multi-select, status fields, and other types before import.
 

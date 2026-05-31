@@ -1,13 +1,22 @@
 {
   "name": "obsidian-note-database",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Database views for notes with table, board, gallery, and list layouts.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production"
   },
-  "keywords": ["obsidian", "plugin", "database", "table", "kanban", "gallery", "list", "frontmatter"],
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "database",
+    "table",
+    "kanban",
+    "gallery",
+    "list",
+    "frontmatter"
+  ],
   "author": "pangy9",
   "license": "MIT",
   "devDependencies": {

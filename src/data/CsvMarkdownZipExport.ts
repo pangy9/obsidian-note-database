@@ -1,7 +1,8 @@
-import { App, TFile, Notice, normalizePath, stringifyYaml } from "obsidian";
+import { App, TFile, Notice, stringifyYaml } from "obsidian";
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "./types";
 import { t } from "../i18n";
 import { createStoredZip, ZipEntry } from "./ZipExport";
+import { saveZipWithPicker } from "./ExportSaveTarget";
 
 export interface CsvMarkdownExportOptions {
   includeFrontmatter: boolean;
@@ -57,15 +58,8 @@ export async function createCsvMarkdownZip(
   });
 
   const zip = createStoredZip(entries);
-  const folder = outputFolder || "";
-  const path = availablePath(app, folder, `${baseName}.zip`);
-  const adapter = app.vault.adapter;
-  const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-  if (parent) await ensureFolder(app, parent);
-  await adapter.writeBinary(path, zip);
-  new Notice(t("notice.exportedCsvMarkdownZip", { path }));
-  const file = app.vault.getAbstractFileByPath(path);
-  return file instanceof TFile ? file : null;
+  const result = await saveZipWithPicker(app, zip, `${baseName}.zip`, outputFolder || "");
+  return result?.file || null;
 }
 
 // ── Helpers ──
@@ -165,29 +159,4 @@ function addViewCsvEntries(
     schemaRows.push([col.label || col.key, col.key, col.type].map((v) => csvEscape(v)).join(","));
   }
   entries.push({ path: `${baseName}/${baseName}_schema.csv`, content: schemaRows.join("\n") });
-}
-
-function availablePath(app: App, folder: string, filename: string): string {
-  const safeFolder = folder.replace(/^\/+|\/+$/g, "");
-  const dot = filename.lastIndexOf(".");
-  const name = dot >= 0 ? filename.slice(0, dot) : filename;
-  const ext = dot >= 0 ? filename.slice(dot) : "";
-  let candidate = safeFolder ? `${safeFolder}/${filename}` : filename;
-  let i = 1;
-  while (app.vault.getAbstractFileByPath(candidate)) {
-    candidate = safeFolder ? `${safeFolder}/${name} ${i}${ext}` : `${name} ${i}${ext}`;
-    i++;
-  }
-  return candidate;
-}
-
-async function ensureFolder(app: App, folderPath: string): Promise<void> {
-  const parts = folderPath.split("/").filter(Boolean);
-  let current = "";
-  for (const part of parts) {
-    current = current ? `${current}/${part}` : part;
-    if (!app.vault.getAbstractFileByPath(current)) {
-      await app.vault.createFolder(current);
-    }
-  }
 }

@@ -98,6 +98,8 @@ export class ColumnOperations {
             migrationNotice += t("column.cleanedOldProps", { count: migration.deletedStale });
           }
         }
+      } else if (oldKey !== newKey) {
+        await this.propertySync.delete(config, col);
       }
 
       ensureColumnOrder(config);

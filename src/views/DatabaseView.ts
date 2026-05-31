@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, TFile, stringifyYaml } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
 import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
 import { QueryEngine } from "../data/QueryEngine";
@@ -20,8 +20,9 @@ import {
   getColumnOptionValues,
   toBooleanValue,
 } from "../data/ColumnTypes";
-import { getDefaultGroupOrder, getEffectiveGroupOrder } from "../data/GroupOrder";
+import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
+import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { CellOptionTransaction, CellRenderer } from "./CellRenderer";
 import { ColumnMenu, ColumnMenuOptions } from "./ColumnMenu";
 import { ColumnHeaderController } from "./ColumnHeaderController";
@@ -42,10 +43,12 @@ import { ListRenderer } from "./ListRenderer";
 import { ColumnRenameModal } from "./modals/ColumnRenameModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
+import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportConfirmModal";
+import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
+import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { StatusPresetManagerModal } from "./modals/StatusPresetManagerModal";
 import { FormulaModal, FormulaSaveResult } from "./modals/FormulaModal";
-import { GroupOrderModal } from "./modals/GroupOrderModal";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
 import { t } from "../i18n";
@@ -53,6 +56,7 @@ import { createStoredZip, ZipEntry } from "../data/ZipExport";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
+import { positionToolbarPopover } from "./PopoverPosition";
 
 export const DATABASE_VIEW_TYPE = "note-database-view";
 
@@ -106,7 +110,7 @@ type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry;
 
 interface ViewEntry {
   config: DatabaseConfig;
-  sourcePath: string | null;
+  sourcePath: string;
 }
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
@@ -132,9 +136,7 @@ export class DatabaseView extends ItemView {
   private queryEngine = new QueryEngine();
   private rowPipeline = new RowPipeline();
   private containerEl_: HTMLElement | null = null;
-  /** Settings-based database configs (source of truth for settings) */
-  private databases: DatabaseConfig[] = [];
-  /** Combined database entries (settings + file-based) */
+  /** Combined database entries from vault files */
   private viewEntries: ViewEntry[] = [];
   private databaseFileOrder: string[] = [];
   private statusPresets: StatusPresetDef[] = [];
@@ -165,6 +167,8 @@ export class DatabaseView extends ItemView {
   private activeHeaderPopover?: HeaderPopoverKind;
   private headerPopoverAnchorEl?: HTMLElement;
   private removeHeaderPopoverAutoClose?: () => void;
+  private groupOrderPopover?: HTMLElement;
+  private removeGroupOrderPopoverListener?: () => void;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
   private configSaveTimer: number | null = null;
   private computedSyncTimer: number | null = null;
@@ -176,32 +180,25 @@ export class DatabaseView extends ItemView {
   private pendingNewRevealTimer: number | null = null;
   private onConfigChanged?: () => void | Promise<void>;
   private databaseFolder: string;
-  private databaseSourcePaths: (string | null)[];
-  private dashboardInitialSource: "settings" | "file";
-  private hasAppliedInitialSource = false;
   private readonly instanceId = generateId();
+  private scrollbarIdleTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     dataSource: DataSource,
-    databases: DatabaseConfig[],
     databaseFileOrder: string[],
     databaseFolder: string,
     statusPresets: StatusPresetDef[],
     defaultStatusPresetId: string | undefined,
-    onConfigChanged?: () => void | Promise<void>,
-    databaseSourcePaths: (string | null)[] = [],
-    dashboardInitialSource: "settings" | "file" = "settings"
+    onConfigChanged?: () => void | Promise<void>
   ) {
     super(leaf);
     this.dataSource = dataSource;
     this.databaseFileOrder = databaseFileOrder;
     this.databaseFolder = databaseFolder;
-    this.databaseSourcePaths = databaseSourcePaths;
-    this.dashboardInitialSource = dashboardInitialSource;
     this.statusPresets = normalizeStatusPresets(statusPresets);
     this.defaultStatusPresetId = defaultStatusPresetId;
-    this.propertyService = new PropertyService(this.app);
+    this.propertyService = new PropertyService(this.app, (file, mutator) => this.dataSource.mutateFrontmatter(file, mutator));
     this.cellRenderer = new CellRenderer(
       this.dataSource,
       () => this.refreshAfterSave(),
@@ -210,7 +207,8 @@ export class DatabaseView extends ItemView {
       (col) => this.showFormulaModal(col),
       false,
       (row, col, transaction) => this.commitCellOptionTransaction(row, col, transaction),
-      (row, col, value) => this.saveCellValueWithHistory(row, col, value)
+      (row, col, value) => this.saveCellValueWithHistory(row, col, value),
+      (row) => this.getFileTitleInfo(row)
     );
     this.columnOperations = new ColumnOperations({
       dataSource: this.dataSource,
@@ -259,7 +257,10 @@ export class DatabaseView extends ItemView {
       setupRow: (tr, row) => this.setupRowInteractions(tr, row),
       renderCell: (td, row, col) => this.renderCell(td, row, col),
       setupFillHandle: (td, row, col) => this.setupTableFillHandle(td, row, col),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       moveRowsToGroup: (row, field, fromGroupKey, toGroupKey) => this.updateBoardGroup(row, field, toGroupKey, fromGroupKey),
+      moveRowToGroupAndPosition: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
+        this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
       createEntry: (defaults) => { void this.createBlankEntry(defaults); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
@@ -270,6 +271,9 @@ export class DatabaseView extends ItemView {
       updateGroup: (row, field, value, fromValue) => this.updateBoardGroup(row, field, value, fromValue),
       updateGroupOrder: (field, order) => this.updateBoardGroupOrder(field, order),
       updateCardOrder: (field, groupKey, paths) => this.updateBoardCardOrder(field, groupKey, paths),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
+      moveRowWithGroupUpdatesAndPosition: (row, updates, beforePath, afterPath) =>
+        this.moveRowWithGroupUpdatesAndPosition(row, updates, beforePath, afterPath),
       updateColumnWidth: (width) => this.updateBoardColumnWidth(width),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
@@ -294,7 +298,10 @@ export class DatabaseView extends ItemView {
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
       updateCardSize: (width) => this.updateGalleryCardSize(width),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       moveRowsToGroup: (row, field, fromGroupKey, toGroupKey) => this.updateBoardGroup(row, field, toGroupKey, fromGroupKey),
+      moveRowToGroupAndPosition: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
+        this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -311,7 +318,10 @@ export class DatabaseView extends ItemView {
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       moveRowsToGroup: (row, field, fromGroupKey, toGroupKey) => this.updateBoardGroup(row, field, toGroupKey, fromGroupKey),
+      moveRowToGroupAndPosition: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
+        this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -337,7 +347,6 @@ export class DatabaseView extends ItemView {
       autoFitAllColumns: () => this.autoFitAllColumns(),
       deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
     });
-    this.databases = databases;
     this.onConfigChanged = onConfigChanged;
     this.register(this.dataSource.onDataChanged(() => {
       if (Date.now() < this.suppressDataReloadUntil) return;
@@ -360,7 +369,7 @@ export class DatabaseView extends ItemView {
 
   /** Get the active database config */
   private getActiveDb(): DatabaseConfig {
-    return this.viewEntries[this.currentDbIndex]?.config || this.databases[0];
+    return this.viewEntries[this.currentDbIndex]?.config;
   }
 
   /** Get the active view config within the current database */
@@ -427,16 +436,12 @@ export class DatabaseView extends ItemView {
   private hardRefreshFromSource(databaseOverride?: DatabaseConfig): void {
     const entry = this.getCurrentEntry();
     const view = this.getConfig();
-    const sourcePath = entry?.sourcePath || null;
-    const dbId = entry?.config.id;
+    const sourcePath = entry?.sourcePath;
     const viewId = view?.id;
     this.rebuildViewEntries();
-    const nextDbIndex = this.viewEntries.findIndex((candidate) => {
-      if (sourcePath) return candidate.sourcePath === sourcePath;
-      return dbId != null && candidate.config.id === dbId;
-    });
+    const nextDbIndex = this.viewEntries.findIndex((candidate) => candidate.sourcePath === sourcePath);
     if (nextDbIndex >= 0) {
-      if (databaseOverride && this.viewEntries[nextDbIndex].sourcePath) {
+      if (databaseOverride) {
         this.viewEntries[nextDbIndex].config = this.cloneDatabaseConfig(databaseOverride);
       }
       this.currentDbIndex = nextDbIndex;
@@ -452,6 +457,7 @@ export class DatabaseView extends ItemView {
     this.showColumnManager = false;
     this.showViewConfigPanel = false;
     this.clearHeaderPopover();
+    this.closeGroupOrderPopover();
     this.rerenderToolbar();
     this.refresh();
   }
@@ -462,14 +468,14 @@ export class DatabaseView extends ItemView {
 
   /** Check if the current dashboard page is showing a file-based database */
   isShowingFileDatabase(): boolean {
-    return !!this.viewEntries[this.currentDbIndex]?.sourcePath;
+    return true;
   }
 
   /** Get the currently active database config (for external access) */
-  getActiveDatabaseConfig(): { db: DatabaseConfig; isFileBased: boolean; sourcePath: string | null } | null {
+  getActiveDatabaseConfig(): { db: DatabaseConfig; sourcePath: string } | null {
     const entry = this.viewEntries[this.currentDbIndex];
     if (!entry) return null;
-    return { db: entry.config, isFileBased: !!entry.sourcePath, sourcePath: entry.sourcePath };
+    return { db: entry.config, sourcePath: entry.sourcePath };
   }
 
   async exportCurrentViewAsCsvMarkdownZip(): Promise<TFile | null> {
@@ -592,39 +598,19 @@ export class DatabaseView extends ItemView {
     entries.push({ path: `${baseName}/${baseName}_schema.csv`, content: schemaRows.join("\n") });
   }
 
-  /** Rebuild the combined database list from configuration and file-based sources */
+  /** Rebuild the database list from vault files */
   private rebuildViewEntries(): void {
-    const entries: ViewEntry[] = this.databases.map((db, index) => ({
-      config: db, // share reference — modifications to config directly affect settings source
-      sourcePath: this.databaseSourcePaths[index] || null,
-    }));
-    const existingPaths = new Set(entries.map(e => e.sourcePath).filter((p): p is string => p !== null));
+    const entries: ViewEntry[] = [];
     const defFiles = sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.databaseFileOrder);
     for (const df of defFiles) {
-      if (!existingPaths.has(df.file.path)) {
-        entries.push({ config: df.config, sourcePath: df.file.path });
-        existingPaths.add(df.file.path);
-      }
+      entries.push({ config: df.config, sourcePath: df.file.path });
     }
     this.viewEntries = entries;
-    this.applyInitialDatabaseSource(entries);
     if (this.currentDbIndex >= entries.length) {
       this.currentDbIndex = 0;
       this.currentViewIndex = 0;
     }
     this.captureConfigSnapshots();
-  }
-
-  private applyInitialDatabaseSource(entries: ViewEntry[]): void {
-    if (this.hasAppliedInitialSource || entries.length === 0) return;
-    this.hasAppliedInitialSource = true;
-    const preferredIndex = entries.findIndex((entry) =>
-      this.dashboardInitialSource === "file" ? !!entry.sourcePath : !entry.sourcePath
-    );
-    if (preferredIndex >= 0) {
-      this.currentDbIndex = preferredIndex;
-      this.currentViewIndex = 0;
-    }
   }
 
   private captureConfigSnapshots(): void {
@@ -637,22 +623,18 @@ export class DatabaseView extends ItemView {
   }
 
   private getConfigHistoryKey(entry: ViewEntry): string {
-    return entry.sourcePath ? `file:${entry.sourcePath}` : `settings:${entry.config.id}`;
+    return `file:${entry.sourcePath}`;
   }
 
   /** Update database configs from settings (called when settings change) */
   updateConfigs(
-    databases: DatabaseConfig[],
     databaseFileOrder: string[] = this.databaseFileOrder,
     statusPresets: StatusPresetDef[] = this.statusPresets,
-    defaultStatusPresetId: string | undefined = this.defaultStatusPresetId,
-    dashboardInitialSource: "settings" | "file" = this.dashboardInitialSource
+    defaultStatusPresetId: string | undefined = this.defaultStatusPresetId
   ): void {
-    this.databases = databases;
     this.databaseFileOrder = databaseFileOrder;
     this.statusPresets = normalizeStatusPresets(statusPresets);
     this.defaultStatusPresetId = defaultStatusPresetId;
-    this.dashboardInitialSource = dashboardInitialSource;
     this.rebuildViewEntries();
     if (this.suppressNextSettingsUpdate) {
       this.suppressNextSettingsUpdate = false;
@@ -685,6 +667,10 @@ export class DatabaseView extends ItemView {
     this.undoActionEl.addClass("db-view-undo-action");
     window.requestAnimationFrame(() => this.positionUndoActionNearNavigation());
     this.updateUndoAction();
+    this.registerDomEvent(this.containerEl_, "scroll", () => this.markContainerScrolling());
+    if (this.containerEl_.parentElement) {
+      this.registerDomEvent(this.containerEl_.parentElement, "wheel", (event) => this.forwardOuterWheelScroll(event));
+    }
     document.addEventListener("mousedown", this.handleOutsideClickBound, true);
     this.registerDomEvent(document, "keydown", (event) => this.handleDatabaseKeydown(event));
     this.registerDomEvent(window, "focus", () => this.refreshOnActivation());
@@ -712,7 +698,12 @@ export class DatabaseView extends ItemView {
   async onClose(): Promise<void> {
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
+    this.closeGroupOrderPopover();
     document.removeEventListener("mousedown", this.handleOutsideClickBound, true);
+    if (this.scrollbarIdleTimer !== null) {
+      clearTimeout(this.scrollbarIdleTimer);
+      this.scrollbarIdleTimer = null;
+    }
     if (this.computedSyncTimer !== null) {
       clearTimeout(this.computedSyncTimer);
       this.computedSyncTimer = null;
@@ -720,6 +711,28 @@ export class DatabaseView extends ItemView {
     if (this.configSaveTimer !== null) {
       await this.saveConfigImmediately();
     }
+  }
+
+  /** Default-width dashboards hide the vertical scrollbar again shortly after scrolling. */
+  private markContainerScrolling(): void {
+    this.containerEl_?.addClass("is-scrolling");
+    if (this.scrollbarIdleTimer !== null) clearTimeout(this.scrollbarIdleTimer);
+    this.scrollbarIdleTimer = window.setTimeout(() => {
+      this.containerEl_?.removeClass("is-scrolling");
+      this.scrollbarIdleTimer = null;
+    }, 900);
+  }
+
+  /** In default width, blank side gutters are outside the scroll container; forward wheel input there. */
+  private forwardOuterWheelScroll(event: WheelEvent): void {
+    if (!this.containerEl_?.isConnected) return;
+    if (!this.containerEl_.hasClass("db-width-default")) return;
+    const target = event.target as Node | null;
+    if (target && this.containerEl_.contains(target)) return;
+    if (!event.deltaY && !event.deltaX) return;
+    this.containerEl_.scrollBy({ top: event.deltaY, left: event.deltaX });
+    this.markContainerScrolling();
+    event.preventDefault();
   }
 
   private handleDatabaseKeydown(event: KeyboardEvent): void {
@@ -792,9 +805,8 @@ export class DatabaseView extends ItemView {
       setGroupByField: (value) => this.setGroupByField(value),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(mode),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover("view", anchorEl),
-      configureGroupOrder: () => this.showGroupOrderModal(),
+      configureGroupOrder: () => this.showGroupOrderPopover(),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover("sort", anchorEl),
-      syncComputedFields: () => { void this.syncComputedFieldsNow(true); },
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover("filter", anchorEl),
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover("columns", anchorEl),
       closeToolbarPopovers: () => this.closeHeaderPopovers(),
@@ -850,9 +862,7 @@ export class DatabaseView extends ItemView {
   private setDisplayWidth(value: "default" | "wide"): void {
     const config = this.getConfig();
     if (!config) return;
-    const entry = this.getCurrentEntry();
-    if (entry?.sourcePath) config.displayWidth = value;
-    else config.dashboardDisplayWidth = value;
+    config.displayWidth = value;
     this.pendingUndoLabel = t("undo.displayWidthConfig");
     this.scheduleConfigSave();
     this.applyDisplayWidth();
@@ -862,8 +872,7 @@ export class DatabaseView extends ItemView {
   private applyDisplayWidth(): void {
     if (!this.containerEl_) return;
     const config = this.getConfig();
-    const entry = this.getCurrentEntry();
-    const width = entry?.sourcePath ? config?.displayWidth : config?.dashboardDisplayWidth;
+    const width = config?.displayWidth;
     const wide = width === "wide";
     this.containerEl_.toggleClass("db-width-wide", wide);
     this.containerEl_.toggleClass("db-width-default", !wide);
@@ -886,10 +895,12 @@ export class DatabaseView extends ItemView {
     } else {
       this.vs().groupByField = value;
     }
+    // Update group button active state without full toolbar re-render
+    const groupBtn = this.containerEl_?.querySelector(".db-group-btn");
+    if (groupBtn) groupBtn.toggleClass("is-active", !!value);
     this.pendingUndoLabel = t("undo.groupConfig");
     this.viewStateStore.persist(config, this.vs());
     void this.saveCurrentViewConfig();
-    this.rerenderToolbar();
     this.refresh();
   }
 
@@ -969,12 +980,13 @@ export class DatabaseView extends ItemView {
     return !target.closest(
       "td[data-note-database-row-path][data-note-database-column-key], " +
       ".db-selection-status-bar, .db-cell-editing, input, textarea, select, button, a, " +
-      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .menu"
+      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-group-order-popover, .menu"
     );
   }
 
   private closeHeaderPopovers(): void {
     this.toolbarRenderer.closePopovers();
+    this.closeGroupOrderPopover();
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
@@ -1007,7 +1019,14 @@ export class DatabaseView extends ItemView {
     return this.containerEl_?.querySelector(selector) as HTMLElement | undefined;
   }
 
-  private showGroupOrderModal(): void {
+  private closeGroupOrderPopover(): void {
+    this.removeGroupOrderPopoverListener?.();
+    this.removeGroupOrderPopoverListener = undefined;
+    this.groupOrderPopover?.remove();
+    this.groupOrderPopover = undefined;
+  }
+
+  private showGroupOrderPopover(): void {
     const config = this.getConfig();
     if (!config) return;
     const field = this.getActiveGroupField(config);
@@ -1019,20 +1038,162 @@ export class DatabaseView extends ItemView {
     const groups = this.queryEngine.groupBy(this.rows, field);
     const keys = groups.map((group) => group.key);
     const currentOrder = config.groupOrders?.[field] || [];
-    new GroupOrderModal(
-      this.app,
-      col?.label || field,
-      keys,
-      currentOrder,
-      getDefaultGroupOrder(config, field),
-      async (order) => {
-        config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
-        this.pendingUndoLabel = t("undo.groupConfig");
-        this.scheduleConfigSave();
-        this.rerenderToolbar();
-        this.refresh();
-      }
-    ).open();
+    const defaultOrder = getDefaultGroupOrder(config, field);
+
+    // 构建 order 数组
+    const knownKeys = new Set([...defaultOrder, ...keys]);
+    let order = mergeGroupOrder(
+      currentOrder.filter((key) => knownKeys.has(key)),
+      defaultOrder,
+      keys
+    );
+
+    this.closeGroupOrderPopover();
+
+    const triggerBtn = this.headerPopoverAnchorEl || this.containerEl_?.querySelector(".db-group-btn");
+    const host = this.containerEl_ || document.body;
+    const anchorEl = triggerBtn instanceof HTMLElement ? triggerBtn : undefined;
+
+    const popover = host.createDiv({ cls: "db-group-order-popover" });
+    this.groupOrderPopover = popover;
+    popover.createEl("h3", { text: t("modal.groupOrderTitle", { field: col?.label || field }) });
+
+    const list = popover.createDiv({ cls: "db-group-order-list" });
+    let draggedIndex: number | null = null;
+    let dropLine: HTMLElement | null = null;
+    let outsideTimer: number | undefined;
+    let removeAutoClose: (() => void) | undefined;
+
+    // Keep the panel inside the visible database container after every list height change.
+    const positionPopover = () => {
+      positionToolbarPopover(popover, anchorEl, { minWidth: 260, preferredWidth: 360, maxWidth: 360 });
+    };
+    // Persist every order change immediately so there is no separate save step.
+    const commitOrder = () => {
+      config.groupOrders = { ...(config.groupOrders || {}), [field]: [...order] };
+      this.pendingUndoLabel = t("undo.groupConfig");
+      this.scheduleConfigSave();
+      this.refresh();
+      window.requestAnimationFrame(positionPopover);
+    };
+    const clearDropLine = () => {
+      dropLine?.remove();
+      dropLine = null;
+    };
+    const getInsertIndex = (event: DragEvent, targetIndex: number, row: HTMLElement) => {
+      const rect = row.getBoundingClientRect();
+      return event.clientY > rect.top + rect.height / 2 ? targetIndex + 1 : targetIndex;
+    };
+    const showDropLine = (event: DragEvent, targetIndex: number, row: HTMLElement) => {
+      const insertIndex = getInsertIndex(event, targetIndex, row);
+      const rows = Array.from(list.querySelectorAll<HTMLElement>(".db-group-order-row"));
+      if (!dropLine) dropLine = createDiv({ cls: "db-group-order-drop-line" });
+      const ref = rows[insertIndex] || null;
+      if (ref) list.insertBefore(dropLine, ref);
+      else list.appendChild(dropLine);
+    };
+
+    const renderList = () => {
+      list.empty();
+      dropLine = null;
+      order.forEach((key, index) => {
+        const row = list.createDiv({ cls: "db-group-order-row" });
+        row.draggable = true;
+        row.ondragstart = (event) => {
+          draggedIndex = index;
+          popover.classList.add("is-dragging-order");
+          row.classList.add("is-dragging");
+          event.dataTransfer?.setData("text/plain", String(index));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        };
+        row.ondragover = (event) => {
+          event.preventDefault();
+          showDropLine(event, index, row);
+        };
+        row.ondrop = (event) => {
+          event.preventDefault();
+          const from = draggedIndex;
+          if (from === null || from === index) {
+            draggedIndex = null;
+            clearDropLine();
+            popover.classList.remove("is-dragging-order");
+            return;
+          }
+          let insertIndex = getInsertIndex(event, index, row);
+          const [item] = order.splice(from, 1);
+          if (from < insertIndex) insertIndex -= 1;
+          order.splice(insertIndex, 0, item);
+          draggedIndex = null;
+          clearDropLine();
+          popover.classList.remove("is-dragging-order");
+          renderList();
+          commitOrder();
+        };
+        row.ondragend = () => {
+          draggedIndex = null;
+          clearDropLine();
+          popover.classList.remove("is-dragging-order");
+          list.querySelectorAll(".db-group-order-row").forEach((r) => r.classList.remove("is-dragging"));
+        };
+
+        row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
+        row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
+        const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+        const upBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+        });
+        setIcon(upBtn, "arrow-up");
+        upBtn.disabled = index === 0;
+        upBtn.onclick = () => {
+          if (index === 0) return;
+          [order[index], order[index - 1]] = [order[index - 1], order[index]];
+          renderList();
+          commitOrder();
+        };
+        const downBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+        });
+        setIcon(downBtn, "arrow-down");
+        downBtn.disabled = index >= order.length - 1;
+        downBtn.onclick = () => {
+          if (index >= order.length - 1) return;
+          [order[index], order[index + 1]] = [order[index + 1], order[index]];
+          renderList();
+          commitOrder();
+        };
+      });
+      window.requestAnimationFrame(positionPopover);
+    };
+
+    renderList();
+
+    if (defaultOrder.length > 0) {
+      const resetBtn = popover.createEl("button", {
+        cls: "db-panel-button db-group-order-reset",
+        text: t("modal.resetToOptionOrder"),
+        attr: { type: "button" },
+      });
+      resetBtn.onclick = () => {
+        order = mergeGroupOrder(defaultOrder, keys);
+        renderList();
+        commitOrder();
+      };
+    }
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || anchorEl?.contains(target))) return;
+      this.closeGroupOrderPopover();
+    };
+    outsideTimer = window.setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+    removeAutoClose = installPopoverAutoClose({ panel: popover, anchorEl, close: () => this.closeGroupOrderPopover() });
+    this.removeGroupOrderPopoverListener = () => {
+      if (outsideTimer !== undefined) window.clearTimeout(outsideTimer);
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      removeAutoClose?.();
+    };
+    positionPopover();
+    window.requestAnimationFrame(positionPopover);
   }
 
   private setGroupOrderMode(mode: GroupOrderMode): void {
@@ -1086,7 +1247,6 @@ export class DatabaseView extends ItemView {
     config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
     this.pendingUndoLabel = t("undo.groupConfig");
     this.scheduleConfigSave();
-    this.rerenderToolbar();
     this.refresh();
   }
 
@@ -1142,7 +1302,6 @@ export class DatabaseView extends ItemView {
       newRecordFolder: db.newRecordFolder,
       typeFilter: db.typeFilter,
       schema: db.schema,
-      syncComputedToFrontmatter: db.syncComputedToFrontmatter,
       columnOrder: sourceView?.columnOrder ? [...sourceView.columnOrder] : undefined,
       boardGroupField: viewType === "board"
         ? (db.schema.columns.find(c => c.key !== "file.name")?.key || "file.name")
@@ -1200,33 +1359,18 @@ export class DatabaseView extends ItemView {
     const fromEntry = this.viewEntries[fromIndex];
     const toEntry = this.viewEntries[toIndex];
     if (!fromEntry || !toEntry) return;
-    if (Boolean(fromEntry.sourcePath) !== Boolean(toEntry.sourcePath)) return;
     const currentEntry = this.getCurrentEntry();
-    const currentDbId = currentEntry?.config.id;
-    const currentSourcePath = currentEntry?.sourcePath || null;
+    const currentSourcePath = currentEntry?.sourcePath;
     const currentViewId = this.getConfig()?.id;
 
-    if (fromEntry.sourcePath && toEntry.sourcePath) {
-      const currentFilePaths = this.viewEntries
-        .map((entry) => entry.sourcePath)
-        .filter((path): path is string => Boolean(path));
-      const nextOrder = moveDatabaseFilePath(currentFilePaths, fromEntry.sourcePath, toEntry.sourcePath);
-      this.databaseFileOrder.splice(0, this.databaseFileOrder.length, ...nextOrder);
-    } else {
-      const fromDbIndex = this.databases.indexOf(fromEntry.config);
-      const toDbIndex = this.databases.indexOf(toEntry.config);
-      if (fromDbIndex < 0 || toDbIndex < 0) return;
-      const [db] = this.databases.splice(fromDbIndex, 1);
-      this.databases.splice(toDbIndex, 0, db);
-    }
+    const currentFilePaths = this.viewEntries.map((entry) => entry.sourcePath);
+    const nextOrder = moveDatabaseFilePath(currentFilePaths, fromEntry.sourcePath, toEntry.sourcePath);
+    this.databaseFileOrder.splice(0, this.databaseFileOrder.length, ...nextOrder);
 
     this.suppressNextSettingsUpdate = true;
     void this.onConfigChanged?.();
     this.rebuildViewEntries();
-    const nextIndex = this.viewEntries.findIndex((entry) => {
-      if (currentSourcePath) return entry.sourcePath === currentSourcePath;
-      return entry.config.id === currentDbId;
-    });
+    const nextIndex = this.viewEntries.findIndex((entry) => entry.sourcePath === currentSourcePath);
     if (nextIndex >= 0) {
       this.currentDbIndex = nextIndex;
       const views = this.viewEntries[nextIndex].config.views;
@@ -1282,13 +1426,96 @@ export class DatabaseView extends ItemView {
     if (!result) return;
 
     const dbName = this.getUniqueDatabaseName(result.name);
+    const sourceFolder = result.sourceFolder || "";
+    const scanRules = result.typeFilter
+      ? [{ field: "type" as const, op: "eq" as const, value: result.typeFilter }]
+      : undefined;
+
+    // Scan frontmatter from source folder
+    const allKeys = new Map<string, string>();
+    allKeys.set("file.name", t("defaults.nameColumn"));
+    const sampleValues = new Map<string, unknown[]>();
+    const fileCounts = new Map<string, number>();
+    collectFileFrontmatterKeys(this.app, sourceFolder, scanRules, allKeys, sampleValues, fileCounts);
+
+    // Build column list: always start with file.name
+    const columns: ColumnDef[] = [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }];
+
+    if (allKeys.size > 1) {
+      // Found frontmatter keys — show confirmation modal
+      const STATUS_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
+      const inferredColumns: BaseImportColumn[] = [];
+
+      for (const [key, label] of allKeys) {
+        if (key === "file.name") continue;
+        const type = inferColumnType(key, sampleValues.get(key) || []);
+        const col: any = { key, label, type };
+
+        // Pre-populate options for option-based types
+        if (type === "multi-select" && (key === "tags" || key === "tag")) {
+          const vaultTags = getVaultTags(this.app, sourceFolder, scanRules);
+          if (vaultTags.length > 0) {
+            col.statusOptions = vaultTags.map((tag: string, i: number) => ({
+              value: tag,
+              color: STATUS_COLORS[i % STATUS_COLORS.length],
+            }));
+          }
+        } else if (type === "multi-select") {
+          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, scanRules);
+          if (uniqueValues.length > 0) {
+            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
+              value: val,
+              color: STATUS_COLORS[i % STATUS_COLORS.length],
+            }));
+          }
+        } else if (type === "select" || type === "status") {
+          const uniqueValues = collectUniqueStringValues(this.app, key, sourceFolder, scanRules);
+          if (uniqueValues.length > 0) {
+            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
+              value: val,
+              color: STATUS_COLORS[i % STATUS_COLORS.length],
+            }));
+          }
+        }
+
+        inferredColumns.push({ ...col, fileCount: fileCounts.get(key) || 0 });
+      }
+
+      const confirmed = await new BaseImportConfirmModal(
+        this.app,
+        inferredColumns,
+        {
+          titleText: t("addDatabase.scanTitle"),
+          descText: t("addDatabase.scanDesc"),
+          defaultUnchecked: true,
+        }
+      ).open();
+      if (!confirmed) return;
+
+      // Collect statusOptions for columns where user changed to option types
+      for (const col of confirmed) {
+        if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && !col.statusOptions) {
+          const uniqueValues = collectUniqueStringValues(this.app, col.key, sourceFolder, scanRules);
+          if (uniqueValues.length > 0) {
+            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
+              value: val,
+              color: STATUS_COLORS[i % STATUS_COLORS.length],
+            }));
+          }
+        }
+        columns.push({ key: col.key, label: col.label || col.key, type: col.type, statusOptions: (col as any).statusOptions });
+      }
+    } else {
+      // No frontmatter found
+      new Notice(t("notice.noImportableProperties"));
+    }
 
     const view: ViewConfig = {
       id: generateId(),
       name: t("common.tableView"),
       viewType: "table",
-      sourceFolder: result.sourceFolder || this.databaseFolder,
-      schema: { columns: [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }], computedFields: [] },
+      sourceFolder,
+      schema: { columns, computedFields: [] },
     };
     if (result.typeFilter) {
       view.typeFilter = result.typeFilter;
@@ -1296,30 +1523,31 @@ export class DatabaseView extends ItemView {
     const newDb: DatabaseConfig = {
       id: generateId(),
       name: dbName,
-      sourceFolder: result.sourceFolder || this.databaseFolder,
+      sourceFolder,
       typeFilter: result.typeFilter || undefined,
       schema: view.schema,
       views: [view],
     };
 
-    if (result.createAs === "file") {
-      const file = await this.dataSource.createViewDefFile(
-        this.databaseFolder,
-        dbName,
-        newDb
-      );
-      new Notice(t("notice.createdDbFile", { path: file.path }));
-      void this.onConfigChanged?.();
-    } else {
-      this.databases.push(newDb);
-      void this.onConfigChanged?.();
-    }
+    const file = await this.dataSource.createViewDefFile(
+      this.databaseFolder,
+      dbName,
+      newDb
+    );
+    new Notice(t("notice.createdDbFile", { path: file.path }));
+    void this.onConfigChanged?.();
     this.rebuildViewEntries();
     const idx = this.viewEntries.findIndex(e => e.config.name === dbName);
     this.currentDbIndex = idx >= 0 ? idx : 0;
     this.currentViewIndex = 0;
     this.rerenderToolbar();
     this.refresh();
+
+    // Open the new database file in its own tab
+    const newLeaf = this.app.workspace.getLeaf("tab");
+    if (newLeaf) {
+      await newLeaf.openFile(file);
+    }
   }
 
   private async duplicateCurrentDatabase(): Promise<void> {
@@ -1327,21 +1555,12 @@ export class DatabaseView extends ItemView {
     if (!entry) return;
     const duplicate = this.createDuplicatedDatabaseConfig(entry.config);
 
-    if (entry.sourcePath) {
-      const folder = this.getParentPath(entry.sourcePath) || this.databaseFolder;
-      const file = await this.dataSource.createViewDefFile(folder, duplicate.name, duplicate);
-      this.viewEntries.push({ config: duplicate, sourcePath: file.path });
-      this.currentDbIndex = this.viewEntries.length - 1;
-      new Notice(t("notice.copiedDbFile", { path: file.path }));
-      void this.onConfigChanged?.();
-    } else {
-      this.databases.push(duplicate);
-      await this.onConfigChanged?.();
-      this.rebuildViewEntries();
-      const nextIndex = this.viewEntries.findIndex((candidate) => candidate.config.id === duplicate.id);
-      this.currentDbIndex = nextIndex >= 0 ? nextIndex : this.viewEntries.length - 1;
-      new Notice(t("notice.copiedDatabase", { name: duplicate.name }));
-    }
+    const folder = this.getParentPath(entry.sourcePath) || this.databaseFolder;
+    const file = await this.dataSource.createViewDefFile(folder, duplicate.name, duplicate);
+    this.viewEntries.push({ config: duplicate, sourcePath: file.path });
+    this.currentDbIndex = this.viewEntries.length - 1;
+    new Notice(t("notice.copiedDbFile", { path: file.path }));
+    void this.onConfigChanged?.();
 
     this.currentViewIndex = 0;
     this.rerenderToolbar();
@@ -1390,8 +1609,8 @@ export class DatabaseView extends ItemView {
       }
     }
 
-    // Move to recycle bin or permanently remove
-    if (result.action === "trash") {
+    // Move to plugin trash or system trash
+    if (result.action === "plugin-trash") {
       // Store in plugin settings trashedDatabases
       const plugin = (this.app as any).plugins?.plugins?.["note-database"];
       if (plugin?.settings) {
@@ -1404,15 +1623,9 @@ export class DatabaseView extends ItemView {
       }
     }
 
-    // Remove from the current list
-    const idx = this.databases.indexOf(db);
-    if (idx >= 0) this.databases.splice(idx, 1);
-
-    // If file-based, also delete the file
-    if (entry.sourcePath) {
-      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
-      if (file) await this.dataSource.trashNote(file as any);
-    }
+    // Remove the database file
+    const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    if (file) await this.dataSource.trashNote(file as any);
 
     this.rebuildViewEntries();
     this.currentDbIndex = Math.min(this.currentDbIndex, this.viewEntries.length - 1);
@@ -1425,22 +1638,9 @@ export class DatabaseView extends ItemView {
   private async openDatabaseFile(): Promise<void> {
     const entry = this.getCurrentEntry();
     if (!entry) return;
-    if (entry.sourcePath) {
-      // File-based: open the file in the editor
-      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
-      if (file instanceof TFile) {
-        await this.app.workspace.getLeaf("tab").openFile(file);
-      }
-    } else {
-      // Configuration database: generate a database file
-      const db = entry.config;
-      const file = await this.dataSource.createViewDefFile(
-        this.databaseFolder,
-        db.name || "Database",
-        db
-      );
-      new Notice(t("notice.createdDbFile", { path: file.path }));
-      this.dataSource.openNote(file);
+    const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf("tab").openFile(file);
     }
   }
 
@@ -1613,9 +1813,7 @@ export class DatabaseView extends ItemView {
     const entry = this.getCurrentEntry();
     const view = entry?.config.views[viewIndex] || this.getConfig();
     if (!entry || !view) return;
-    const locator = entry.sourcePath
-      ? `dbPath: ${entry.sourcePath}`
-      : `dbId: ${entry.config.id}`;
+    const locator = `dbPath: ${entry.sourcePath}`;
     const lines = [
       "```note-database",
       locator,
@@ -1632,15 +1830,9 @@ export class DatabaseView extends ItemView {
     }
   }
 
-  openViewReference(sourcePath: string | null, viewId?: string, dbId?: string): void {
+  openViewReference(sourcePath: string, viewId?: string): void {
     this.rebuildViewEntries();
-    const bySource = sourcePath
-      ? this.viewEntries.findIndex((entry) => entry.sourcePath === sourcePath)
-      : -1;
-    const byId = dbId
-      ? this.viewEntries.findIndex((entry) => entry.config.id === dbId)
-      : -1;
-    const index = bySource >= 0 ? bySource : byId;
+    const index = this.viewEntries.findIndex((entry) => entry.sourcePath === sourcePath);
     if (index >= 0) {
       this.currentDbIndex = index;
       const views = this.viewEntries[index].config.views;
@@ -1693,6 +1885,20 @@ export class DatabaseView extends ItemView {
         frontmatter: { ...frontmatter },
         expiresAt: Date.now() + 8000,
       };
+      if (config.schema.computedFields.length > 0) {
+        void this.syncComputedForFile(file, frontmatter);
+      }
+      // Assign manual rank for the new entry (appends to end)
+      if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) {
+        const paths = this.rows.map((r) => r.file.path);
+        const lastPath = paths.length > 0 ? paths[paths.length - 1] : undefined;
+        const lastRank = lastPath ? config.manualOrder.ranks[lastPath] : undefined;
+        const newRank = rankBetween(lastRank, undefined);
+        if (newRank) {
+          config.manualOrder.ranks[file.path] = newRank;
+          this.scheduleConfigSave();
+        }
+      }
       new Notice(t("notice.createdRow", { name: file.basename }));
       await this.refreshAfterSave();
     } catch (err) {
@@ -1773,22 +1979,31 @@ export class DatabaseView extends ItemView {
       sourceFolder: config.sourceFolder || db.sourceFolder || "",
       sourceRules: config.sourceRules || db.sourceRules,
       sourceLogic: config.sourceLogic || db.sourceLogic,
-      newRecordFolder: config.newRecordFolder || db.newRecordFolder || db.sourceFolder,
+      newRecordFolder: config.newRecordFolder || db.newRecordFolder,
       typeFilter: config.typeFilter || db.typeFilter,
       schema: config.schema || db.schema,
-      syncComputedToFrontmatter: config.syncComputedToFrontmatter ?? db.syncComputedToFrontmatter,
     };
   }
 
   private getCreateFolder(config: ViewConfig): string {
     const folderRule = config.sourceRules?.find((rule) => rule.op === "inFolder" && rule.value);
-    return config.sourceFolder || config.newRecordFolder || folderRule?.value || this.databaseFolder;
+    return normalizePath(config.newRecordFolder || config.sourceFolder || folderRule?.value || this.databaseFolder || "");
   }
 
-  /** When no sourceFolder and no sourceRules, use databaseFolder as fallback so querying and creating are consistent. */
+  /** Empty sourceFolder means vault root for querying; newRecordFolder controls only where new notes are created. */
   private getEffectiveConfig(dbConfig: DatabaseConfig): DatabaseConfig {
-    if (dbConfig.sourceFolder || dbConfig.sourceRules?.length) return dbConfig;
-    return { ...dbConfig, sourceFolder: this.databaseFolder };
+    return { ...dbConfig, sourceFolder: this.normalizeVaultFolder(dbConfig.sourceFolder || "") };
+  }
+
+  /** Show relative paths only when duplicate filenames would otherwise be ambiguous. */
+  private getFileDisplayName(row: RowData): string {
+    const info = this.getFileTitleInfo(row);
+    return info.hasDuplicateName ? info.displayPath : info.name;
+  }
+
+  /** Build structured file title pieces for table/card/list renderers. */
+  private getFileTitleInfo(row: RowData): FileTitleDisplay {
+    return getFileTitleDisplay(row, this.rows);
   }
 
   private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
@@ -2257,7 +2472,7 @@ export class DatabaseView extends ItemView {
 
     if (!transaction.nextOptions) {
       if (!transaction.setValue) return;
-      const change = this.createCellChange(row, target, transaction.value);
+      const change = this.createCurrentCellChange(row, target, transaction.value);
       if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
       await this.applyCellChanges([change], t("undo.editCell"));
       return;
@@ -2307,7 +2522,7 @@ export class DatabaseView extends ItemView {
       ...this.getOptionValueCellChanges(target, removedValues, renameValues),
       ...(
         options.setValue && options.currentRow
-          ? [this.createCellChange(options.currentRow, target, options.value)]
+          ? [this.createCurrentCellChange(options.currentRow, target, options.value)]
           : []
       ),
     ]);
@@ -2348,7 +2563,7 @@ export class DatabaseView extends ItemView {
     const changes: CellEditChange[] = [];
     if (removedValues.size === 0 && renameValues.length === 0) return changes;
     const renameMap = new Map(renameValues.map((rename) => [rename.from, rename.to]));
-    for (const record of this.dataSource.getRecordsForConfig(this.getActiveDb())) {
+    for (const record of this.getRecordsForActiveDatabase()) {
       if (!Object.prototype.hasOwnProperty.call(record.frontmatter, col.key)) continue;
       const oldValue = record.frontmatter[col.key];
       let newValue: unknown = oldValue;
@@ -2468,6 +2683,7 @@ export class DatabaseView extends ItemView {
     }
     this.pendingUndoLabel = t("undo.formulaConfig");
     await this.saveCurrentViewConfig();
+    await this.syncComputedFieldsNow(false);
     this.refresh();
   }
 
@@ -2478,8 +2694,13 @@ export class DatabaseView extends ItemView {
 
   private getFilesForConfig(config: ViewConfig): TFile[] {
     return this.dataSource
-      .getRecordsForConfig(this.getActiveDb())
+      .getRecordsForConfig(this.getEffectiveConfig(this.getActiveDb()))
       .map((record) => record.file);
+  }
+
+  private getRecordsForActiveDatabase(): NoteRecord[] {
+    // Use the same fallback source folder as rendering so bulk mutations target the visible database scope.
+    return this.dataSource.getRecordsForConfig(this.getEffectiveConfig(this.getActiveDb()));
   }
 
   private async saveConfigImmediately(): Promise<void> {
@@ -2501,18 +2722,10 @@ export class DatabaseView extends ItemView {
     if (!entry) return;
     const mutation = mutationOverride || this.getCurrentMutationTarget();
     this.recordConfigHistory(entry, mutation?.viewId);
-    if (entry.sourcePath) {
-      // File-based: write back to file
-      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
-      if (file instanceof TFile) {
-        this.suppressDataReload(2500);
-        await this.dataSource.updateViewDefFile(file, entry.config, mutation);
-      }
-    } else {
-      // Settings-based: entry.config shares reference with viewConfigs,
-      // so modifications are already in the settings source object
-      await this.onConfigChanged?.();
-      if (mutation) this.dataSource.notifyViewConfigChanged({ ...mutation, database: entry.config });
+    const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    if (file instanceof TFile) {
+      this.suppressDataReload(2500);
+      await this.dataSource.updateViewDefFile(file, entry.config, mutation);
     }
     this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
     this.updateUndoAction();
@@ -2554,6 +2767,9 @@ export class DatabaseView extends ItemView {
 
   /** Debounced config save: batch rapid changes (drag, resize) into one write */
   private scheduleConfigSave(): void {
+    // Protect in-memory config mutations immediately. Frontmatter writes can emit
+    // metadata events before the debounced view-definition write reaches disk.
+    this.suppressDataReload(2500);
     if (this.configSaveTimer !== null) {
       clearTimeout(this.configSaveTimer);
     }
@@ -2586,13 +2802,6 @@ export class DatabaseView extends ItemView {
       });
       return;
     }
-    if (config.schema.columns.length === 1) {
-      this.containerEl_?.createDiv({
-        cls: "db-empty",
-        text: t("empty.onlyNameColumnDb", { name: dbConfig.name }),
-      });
-      return;
-    }
     let records: NoteRecord[];
     try {
       records = this.includePendingNewRecord(this.dataSource.getRecordsForConfig(this.getEffectiveConfig(dbConfig)));
@@ -2604,6 +2813,10 @@ export class DatabaseView extends ItemView {
       return;
     }
 
+    if (this.initializeManualRanksForRecords(config, records)) {
+      this.pendingUndoLabel = t("undo.cardOrderConfig");
+      this.scheduleConfigSave();
+    }
     this.rows = this.rowPipeline.build(records, config, this.vs());
     this.scheduleComputedSync(config, this.rows);
 
@@ -2850,13 +3063,65 @@ export class DatabaseView extends ItemView {
       };
     });
 
-    if (!found) {
+    if (!found && this.pendingRecordMatchesActiveSource(pending)) {
       merged.push({
         file: pending.file,
         frontmatter: pending.frontmatter,
       });
     }
     return merged;
+  }
+
+  /** Avoid showing an optimistic new row when its create folder is outside the current source. */
+  private pendingRecordMatchesActiveSource(record: NoteRecord): boolean {
+    const config = this.getEffectiveConfig(this.getActiveDb());
+    const sourceFolder = this.normalizeVaultFolder(config.sourceFolder || "");
+    if (sourceFolder && !record.file.path.startsWith(sourceFolder.endsWith("/") ? sourceFolder : `${sourceFolder}/`)) {
+      return false;
+    }
+    if (config.typeFilter && record.frontmatter["type"] !== config.typeFilter) return false;
+    const rules = (config.sourceRules || []).filter((rule) => !sourceFolder || rule.op !== "inFolder");
+    if (rules.length === 0) return true;
+    const results = rules.map((rule) => this.pendingRecordMatchesRule(record, rule));
+    return (config.sourceLogic || "and") === "or" ? results.some(Boolean) : results.every(Boolean);
+  }
+
+  /** Mirrors DataSource source-rule checks for pending records before metadata cache catches up. */
+  private pendingRecordMatchesRule(record: NoteRecord, rule: NonNullable<DatabaseConfig["sourceRules"]>[number]): boolean {
+    const expected = String(rule.value ?? "");
+    const value = rule.field.startsWith("file.")
+      ? this.getPendingFileField(record, rule.field)
+      : record.frontmatter[rule.field];
+    if (rule.op === "inFolder") {
+      const folder = this.normalizeVaultFolder(expected);
+      return !folder || folder === "/" || record.file.path.startsWith(folder.endsWith("/") ? folder : `${folder}/`);
+    }
+    if (rule.op === "hasTag") {
+      const tags = record.frontmatter["tags"] ?? record.frontmatter["tag"];
+      const list = Array.isArray(tags) ? tags : String(tags ?? "").split(/[,\s]+/);
+      return list.map((tag) => String(tag).replace(/^#/, "")).includes(expected.replace(/^#/, ""));
+    }
+    if (rule.op === "eq") return String(value ?? "") === expected;
+    if (rule.op === "neq") return String(value ?? "") !== expected;
+    if (rule.op === "contains") return String(value ?? "").toLowerCase().includes(expected.toLowerCase());
+    if (rule.op === "empty") return value == null || value === "";
+    if (rule.op === "notempty") return value != null && value !== "";
+    return true;
+  }
+
+  /** Read file.* values used by source rules for an optimistic pending row. */
+  private getPendingFileField(record: NoteRecord, field: string): unknown {
+    if (field === "file.name") return record.file.basename;
+    if (field === "file.path") return record.file.path;
+    if (field === "file.ext" || field === "file.extension") return record.file.extension;
+    if (field === "file.folder") return record.file.parent?.path || "";
+    return undefined;
+  }
+
+  /** Treat empty or "/" as the vault root and keep stored paths vault-relative. */
+  private normalizeVaultFolder(folderPath: string): string {
+    const normalized = normalizePath(folderPath || "");
+    return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
   }
 
   private revealPendingNewRow(): void {
@@ -2877,13 +3142,29 @@ export class DatabaseView extends ItemView {
       const scrollTarget = target.matches("tr")
         ? target.querySelector<HTMLElement>("td") || target
         : target;
-      scrollTarget.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      if (this.getConfig()?.viewType === "list") {
+        this.revealListRowLeadingEdge(target);
+      } else {
+        scrollTarget.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      }
       target.addClass("is-new-record-highlight");
       this.clearPendingNewRow();
       window.setTimeout(() => {
         if (target.isConnected) target.removeClass("is-new-record-highlight");
       }, 2200);
     });
+  }
+
+  /** Reveal a wide list row without asking the browser to scroll outer Obsidian containers. */
+  private revealListRowLeadingEdge(target: HTMLElement): void {
+    if (!this.containerEl_) return;
+    const containerRect = this.containerEl_.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const centeredTop = this.containerEl_.scrollTop
+      + targetRect.top
+      - containerRect.top
+      - Math.max(0, (this.containerEl_.clientHeight - targetRect.height) / 2);
+    this.containerEl_.scrollTo({ top: Math.max(0, centeredTop), left: 0, behavior: "smooth" });
   }
 
   private findRenderedRowElement(path: string): HTMLElement | null {
@@ -2979,7 +3260,132 @@ export class DatabaseView extends ItemView {
     if (!this.canFillColumn(col)) return;
     const change = this.createCellChange(row, col, value);
     if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
+    if (this.canApplyCellChangeOptimistically(col)) {
+      await this.applyCellChangeOptimistically(change, t("undo.editCell"));
+      return;
+    }
     await this.applyCellChanges([change], t("undo.editCell"));
+  }
+
+  private canApplyCellChangeOptimistically(col: ColumnDef): boolean {
+    if (col.type === "computed" || col.key === "file.name") return false;
+    const config = this.getConfig();
+    if (!config) return false;
+    const state = this.vs();
+    const groupField = config.viewType === "board"
+      ? config.boardGroupField || state.groupByField || this.getDefaultBoardField(config)
+      : state.groupByField;
+    if (groupField === col.key) return false;
+    if (config.boardSubgroupField === col.key) return false;
+    if (config.titleField === col.key) return false;
+    if (config.galleryImageField === col.key) return false;
+    if (state.searchText.trim()) return false;
+    if (state.sortColumn === col.key || state.sortRules.some((rule) => rule.field === col.key)) return false;
+    if (getEffectiveFilterRules(state.filters).some((rule) => rule.field === col.key)) return false;
+    if (this.isColumnReferencedByComputedFields(col.key)) return false;
+    return true;
+  }
+
+  private async applyCellChangeOptimistically(change: CellEditChange, label: string): Promise<void> {
+    this.suppressDataReload(1200);
+    const oldValue = change.oldValue;
+    try {
+      await this.dataSource.updateFrontmatter(change.file, { [change.key]: change.newValue });
+    } catch (err) {
+      this.applyFrontmatterChangeToRenderedRows({ ...change, newValue: oldValue });
+      this.refresh();
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+      return;
+    }
+    this.applyFrontmatterChangeToRenderedRows(change);
+    this.pushHistory({ type: "cells", label, changes: [change] });
+
+    const row = this.rows.find(r => r.file.path === change.path);
+    if (row) {
+      const col = this.getConfig()?.schema.columns.find(c => c.key === change.key);
+      if (col) this.updateCellDOM(row, col);
+    }
+  }
+
+  private applyFrontmatterChangeToRenderedRows(change: CellEditChange): void {
+    for (const row of this.rows) {
+      if (row.file.path !== change.path) continue;
+      if (change.newValue === null) delete row.frontmatter[change.key];
+      else row.frontmatter[change.key] = this.cloneFillValue(change.newValue);
+    }
+  }
+
+  private isColumnReferencedByComputedFields(colKey: string): boolean {
+    const config = this.getConfig();
+    if (!config?.schema.computedFields.length) return false;
+    for (const cf of config.schema.computedFields) {
+      const expr = cf.expression;
+      if (expr.includes(`[${colKey}]`) ||
+          expr.includes(`field("${colKey}")`) ||
+          expr.includes(`field('${colKey}')`)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private updateCellDOM(row: RowData, col: ColumnDef): void {
+    if (!this.containerEl_) return;
+    const config = this.getConfig();
+    if (!config) return;
+
+    switch (config.viewType) {
+      case "table":
+        this.updateTableCellDOM(row, col);
+        break;
+      case "board":
+        this.updateCardFieldDOM(row, col, config, this.boardRenderer.renderCardFieldContent(row, col, config));
+        break;
+      case "gallery":
+        this.updateCardFieldDOM(row, col, config, this.galleryRenderer.renderCardFieldContent(row, col, config));
+        break;
+      case "list":
+        this.updateCardFieldDOM(row, col, config, this.listRenderer.renderRowFieldContent(row, col, config));
+        break;
+      default:
+        this.refresh();
+        break;
+    }
+  }
+
+  private updateCardFieldDOM(row: RowData, col: ColumnDef, config: ViewConfig, newField: HTMLElement): void {
+    if (!this.containerEl_) return;
+    const cardSelector = `[data-note-database-row-path="${CSS.escape(row.file.path)}"]`;
+    const fieldSelector = `[data-note-database-column-key="${CSS.escape(col.key)}"]`;
+    const card = this.containerEl_.querySelector<HTMLElement>(cardSelector);
+    if (!card) { this.refresh(); return; }
+    const oldField = card.querySelector<HTMLElement>(fieldSelector);
+    if (!oldField) { this.refresh(); return; }
+    oldField.replaceWith(newField);
+  }
+
+  private updateTableCellDOM(row: RowData, col: ColumnDef): void {
+    if (!this.containerEl_) return;
+    const selector = `td[data-note-database-row-path="${CSS.escape(row.file.path)}"][data-note-database-column-key="${CSS.escape(col.key)}"]`;
+    const oldTd = this.containerEl_.querySelector<HTMLElement>(selector);
+    if (!oldTd) {
+      this.refresh();
+      return;
+    }
+
+    const newTd = document.createElement("td");
+    newTd.setAttribute("data-note-database-row-path", row.file.path);
+    newTd.setAttribute("data-note-database-column-key", col.key);
+    if (oldTd.hasClass("db-cell-range-selected")) {
+      newTd.addClass("db-cell-range-selected");
+    }
+
+    oldTd.replaceWith(newTd);
+    this.cellRenderer.renderCell(newTd, row, col);
+    this.setupTableCellSelection(newTd, row, col);
+    if (!this.isPhoneLayout() && this.canFillColumn(col)) {
+      this.setupTableFillHandle(newTd, row, col);
+    }
   }
 
   private areCellValuesEqual(a: unknown, b: unknown): boolean {
@@ -3363,6 +3769,21 @@ export class DatabaseView extends ItemView {
     };
   }
 
+  private createCurrentCellChange(row: RowData, col: ColumnDef, newValue: unknown): CellEditChange {
+    // Option popovers can survive a refresh after grouped rows move, so re-read the latest value by file path.
+    const record = this.getRecordsForActiveDatabase().find((candidate) => candidate.file.path === row.file.path);
+    const frontmatter = record?.frontmatter || row.frontmatter;
+    const oldExists = Object.prototype.hasOwnProperty.call(frontmatter, col.key);
+    return {
+      file: row.file,
+      path: row.file.path,
+      key: col.key,
+      oldValue: this.cloneFillValue(frontmatter[col.key]),
+      oldExists,
+      newValue: this.cloneFillValue(newValue),
+    };
+  }
+
   private async applyCellChanges(changes: CellEditChange[], label: string): Promise<void> {
     const effectiveChanges = changes.filter((change) => change.key !== "file.name");
     if (effectiveChanges.length === 0) return;
@@ -3374,6 +3795,17 @@ export class DatabaseView extends ItemView {
     }
     for (const entry of updatesByPath.values()) {
       await this.dataSource.updateFrontmatter(entry.file, entry.updates);
+    }
+    // Sync computed fields for affected files before rendering
+    const config = this.getConfig();
+    if (config?.schema.computedFields.length) {
+      const affectedFields = effectiveChanges.map((c) => c.key);
+      for (const entry of updatesByPath.values()) {
+        const row = this.rows.find((r) => r.file.path === entry.file.path);
+        if (row) {
+          await this.syncComputedForFile(row.file, { ...row.frontmatter, ...entry.updates }, affectedFields);
+        }
+      }
     }
     this.pushHistory({ type: "cells", label, changes: effectiveChanges });
     this.clearCellSelection();
@@ -3428,10 +3860,7 @@ export class DatabaseView extends ItemView {
   }
 
   private async undoConfigEntry(entry: ConfigHistoryEntry): Promise<void> {
-    const index = this.viewEntries.findIndex((candidate) => {
-      if (entry.dbPath) return candidate.sourcePath === entry.dbPath;
-      return !candidate.sourcePath && candidate.config.id === entry.dbId;
-    });
+    const index = this.viewEntries.findIndex((candidate) => candidate.sourcePath === entry.dbPath);
     if (index < 0) return;
     const target = this.viewEntries[index];
     this.replaceDatabaseConfig(target.config, entry.before);
@@ -3443,16 +3872,10 @@ export class DatabaseView extends ItemView {
     this.currentDbIndex = index;
     this.viewStateStore.clear();
     this.viewState = undefined;
-    if (target.sourcePath) {
-      const file = this.app.vault.getAbstractFileByPath(target.sourcePath);
-      if (file instanceof TFile) {
-        this.suppressDataReload(2500);
-        await this.dataSource.updateViewDefFile(file, target.config, this.getCurrentDatabaseMutationTarget());
-      }
-    } else {
-      await this.onConfigChanged?.();
-      const mutation = this.getCurrentDatabaseMutationTarget();
-      if (mutation) this.dataSource.notifyViewConfigChanged({ ...mutation, database: target.config });
+    const file = this.app.vault.getAbstractFileByPath(target.sourcePath);
+    if (file instanceof TFile) {
+      this.suppressDataReload(2500);
+      await this.dataSource.updateViewDefFile(file, target.config, this.getCurrentDatabaseMutationTarget());
     }
     if (entry.cellChanges?.length) {
       await this.applyFrontmatterChanges(entry.cellChanges, "old");
@@ -3568,7 +3991,12 @@ export class DatabaseView extends ItemView {
     }
     const sortedGroups = this.queryEngine.sortGroups(Array.from(groupMap.values()), order);
     if (!this.hasActiveBoardSort()) {
-      this.applyBoardCardOrder(config, field, sortedGroups);
+      if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) {
+        // Manual order already applied by RowPipeline — no per-group sorting needed
+      } else if (config.boardCardOrders?.[field]) {
+        // Legacy backward compat: use boardCardOrders for per-group ordering
+        this.applyBoardCardOrder(config, field, sortedGroups);
+      }
     }
     this.applyBoardSubgroups(config, field, sortedGroups);
     return sortedGroups;
@@ -3636,6 +4064,125 @@ export class DatabaseView extends ItemView {
     this.refresh();
   }
 
+  private moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void {
+    const config = this.getConfig();
+    if (!config) return;
+
+    if (!this.setManualRank(config, movedPath, beforePath, afterPath)) return;
+    this.pendingUndoLabel = t("undo.cardOrderConfig");
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private setManualRank(config: ViewConfig, movedPath: string, beforePath?: string, afterPath?: string): boolean {
+    this.ensureManualRanks(config);
+
+    let ranks = config.manualOrder?.ranks;
+    if (!ranks) return false;
+    let beforeRank = beforePath ? ranks[beforePath] : undefined;
+    let afterRank = afterPath ? ranks[afterPath] : undefined;
+    if (beforePath && afterPath && beforeRank && afterRank && beforeRank >= afterRank) {
+      config.manualOrder!.ranks = generateRanks(this.rows.map((row) => row.file.path));
+      ranks = config.manualOrder!.ranks!;
+      beforeRank = ranks[beforePath];
+      afterRank = ranks[afterPath];
+    }
+    let newRank = rankBetween(beforeRank, afterRank);
+
+    if (newRank === null) {
+      // Ranks too dense — rebalance then retry
+      const rebalanced = rebalanceRanks(ranks);
+      config.manualOrder!.ranks = rebalanced;
+      const newBeforeRank = beforePath ? rebalanced[beforePath] : undefined;
+      const newAfterRank = afterPath ? rebalanced[afterPath] : undefined;
+      newRank = rankBetween(newBeforeRank, newAfterRank);
+    }
+
+    if (!newRank || !config.manualOrder?.ranks) return false;
+    config.manualOrder.ranks[movedPath] = newRank;
+    return true;
+  }
+
+  private ensureManualRanks(config: ViewConfig): void {
+    if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) {
+      this.ensureVisibleRowsHaveManualRanks(config);
+      return;
+    }
+
+    const orderedPaths = this.getInitialManualOrderPaths(config, this.rows.map((row) => row.file.path));
+    if (!config.manualOrder) config.manualOrder = {};
+    config.manualOrder.ranks = generateRanks(orderedPaths);
+  }
+
+  private getInitialManualOrderPaths(config: ViewConfig, fallbackPaths: string[]): string[] {
+    // For board views with existing boardCardOrders, preserve that order.
+    const boardField = config.boardGroupField || this.vs().groupByField || this.getDefaultBoardField(config);
+    const groupOrders = config.boardCardOrders?.[boardField];
+    if (groupOrders) {
+      const col = config.schema.columns.find((c) => c.key === boardField);
+      const optionValues = col ? getColumnOptionValues(col) : [];
+      const groupOrder = getEffectiveGroupOrder(config, boardField, [...Object.keys(groupOrders), ...optionValues]);
+      const flattened: string[] = [];
+      const seen = new Set<string>();
+      for (const groupKey of groupOrder) {
+        for (const path of groupOrders[groupKey] || []) {
+          if (!seen.has(path)) { flattened.push(path); seen.add(path); }
+        }
+      }
+      // Append records that did not exist in the legacy board order.
+      for (const path of fallbackPaths) {
+        if (!seen.has(path)) { flattened.push(path); seen.add(path); }
+      }
+      return flattened;
+    }
+    return fallbackPaths;
+  }
+
+  private initializeManualRanksForRecords(config: ViewConfig, records: NoteRecord[]): boolean {
+    const paths = records.map((record) => record.file.path);
+    if (paths.length === 0) return false;
+    if (!config.manualOrder?.ranks || Object.keys(config.manualOrder.ranks).length === 0) {
+      config.manualOrder = {
+        ...(config.manualOrder || {}),
+        ranks: generateRanks(this.getInitialManualOrderPaths(config, paths)),
+      };
+      return true;
+    }
+    const ranks = config.manualOrder.ranks;
+    if (paths.every((path) => ranks[path] != null)) return false;
+    const orderedPaths = Object.entries(ranks)
+      .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([path]) => path);
+    const seen = new Set(orderedPaths);
+    for (const path of paths) {
+      if (!seen.has(path)) {
+        orderedPaths.push(path);
+        seen.add(path);
+      }
+    }
+    config.manualOrder.ranks = generateRanks(orderedPaths);
+    return true;
+  }
+
+  private ensureVisibleRowsHaveManualRanks(config: ViewConfig): void {
+    const ranks = config.manualOrder?.ranks;
+    if (!ranks) return;
+    const missing = this.rows.filter((row) => ranks[row.file.path] == null);
+    if (missing.length === 0) return;
+    const existingOrdered = Object.entries(ranks)
+      .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([path]) => path);
+    const seen = new Set(existingOrdered);
+    const orderedPaths = [...existingOrdered];
+    for (const row of this.rows) {
+      if (!seen.has(row.file.path)) {
+        orderedPaths.push(row.file.path);
+        seen.add(row.file.path);
+      }
+    }
+    config.manualOrder!.ranks = generateRanks(orderedPaths);
+  }
+
   private updateBoardColumnWidth(width: number): void {
     const config = this.getConfig();
     if (!config) return;
@@ -3677,6 +4224,56 @@ export class DatabaseView extends ItemView {
       for (const targetRow of rows) {
         const nextValue = this.getMovedGroupValue(targetRow, field, col, fromValue, value);
         await this.dataSource.updateFrontmatter(targetRow.file, { [field]: nextValue });
+      }
+      await this.refreshAfterSave();
+    } catch (err) {
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    }
+  }
+
+  private async moveRowToGroupAndPosition(
+    row: RowData,
+    field: string,
+    fromGroupKey: string,
+    toGroupKey: string,
+    beforePath?: string,
+    afterPath?: string
+  ): Promise<void> {
+    await this.moveRowWithGroupUpdatesAndPosition(
+      row,
+      [{ field, fromGroupKey, toGroupKey }],
+      beforePath,
+      afterPath
+    );
+  }
+
+  private async moveRowWithGroupUpdatesAndPosition(
+    row: RowData,
+    updates: Array<{ field: string; fromGroupKey: string; toGroupKey: string }>,
+    beforePath?: string,
+    afterPath?: string
+  ): Promise<void> {
+    const config = this.getConfig();
+    if (!config) return;
+    try {
+      this.setManualRank(config, row.file.path, beforePath, afterPath);
+      this.pendingUndoLabel = t("undo.cardOrderConfig");
+      this.scheduleConfigSave();
+
+      const rows = this.getRowsForGroupMove(row);
+      for (const targetRow of rows) {
+        const frontmatterUpdates: Record<string, unknown> = {};
+        for (const update of updates) {
+          const col = config.schema.columns.find((candidate) => candidate.key === update.field);
+          frontmatterUpdates[update.field] = this.getMovedGroupValue(
+            targetRow,
+            update.field,
+            col,
+            update.fromGroupKey,
+            update.toGroupKey
+          );
+        }
+        await this.dataSource.updateFrontmatter(targetRow.file, frontmatterUpdates);
       }
       await this.refreshAfterSave();
     } catch (err) {
@@ -3729,6 +4326,7 @@ export class DatabaseView extends ItemView {
     }
     this.pendingUndoLabel = t("undo.sortConfig");
     this.scheduleViewStateSave();
+    this.updateToolbarIndicators();
     this.refresh();
   }
 
@@ -3751,6 +4349,7 @@ export class DatabaseView extends ItemView {
     }
     this.pendingUndoLabel = t("undo.sortConfig");
     this.scheduleViewStateSave();
+    this.updateToolbarIndicators();
     this.refresh();
   }
 
@@ -3779,7 +4378,7 @@ export class DatabaseView extends ItemView {
   }
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
-    if (col.key === "file.name") return row.file.basename;
+    if (col.key === "file.name") return this.getFileDisplayName(row);
     const value = col.type === "computed" && col.computedKey
       ? row.computed[col.computedKey]
       : row.frontmatter[col.key];
@@ -3802,13 +4401,48 @@ export class DatabaseView extends ItemView {
     this.refresh();
   }
 
+  private async syncComputedForFile(
+    file: TFile,
+    frontmatter: Record<string, unknown>,
+    affectedFields?: string[]
+  ): Promise<void> {
+    const config = this.getConfig();
+    if (!config?.schema.computedFields.length) return;
+
+    const engine = new ComputedFieldEngine(config.schema.computedFields, config.schema.columns);
+    const computed = engine.evaluate(frontmatter);
+
+    const computedColumns = config.schema.columns.filter(col => col.type === "computed");
+    const updates: Record<string, unknown> = {};
+
+    for (const col of computedColumns) {
+      if (affectedFields?.length) {
+        const deps = ComputedFieldEngine.extractDependencies(
+          config.schema.computedFields.find(cf => cf.key === (col.computedKey || col.key))?.expression || ""
+        );
+        const allRelevant = [...affectedFields, ...computedColumns.map(c => c.key)];
+        if (!deps.some(d => allRelevant.includes(d))) continue;
+      }
+      const key = col.computedKey || col.key;
+      const value = computed[key];
+      const nextValue = value == null ? "" : value;
+      if (String(frontmatter[col.key] ?? "") !== String(nextValue ?? "")) {
+        updates[col.key] = nextValue;
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await this.dataSource.updateFrontmatter(file, updates);
+    }
+  }
+
   private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
-    if (config.syncComputedToFrontmatter === false || config.schema.computedFields.length === 0) return;
+    if (config.schema.computedFields.length === 0) return;
     if (this.computedSyncTimer !== null) clearTimeout(this.computedSyncTimer);
     this.computedSyncTimer = window.setTimeout(() => {
       this.computedSyncTimer = null;
       void this.syncComputedFieldsNow(false, config);
-    }, 500);
+    }, 5000);
   }
 
   private async syncComputedFieldsNow(
@@ -3820,7 +4454,7 @@ export class DatabaseView extends ItemView {
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
       const db = this.getCurrentEntry()?.config;
-      const records = db ? this.dataSource.getRecordsForDatabase(db) : this.rows.map((row) => ({
+      const records = db ? this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db)) : this.rows.map((row) => ({
         file: row.file,
         frontmatter: row.frontmatter,
       }));

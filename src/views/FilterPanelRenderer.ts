@@ -23,6 +23,7 @@ export class FilterPanelRenderer {
     actions: FilterPanelActions,
     anchorEl?: HTMLElement
   ): void {
+    const savedScroll = this.panelEl?.scrollTop ?? 0;
     if (this.panelEl) {
       this.panelEl.remove();
       this.panelEl = null;
@@ -67,6 +68,7 @@ export class FilterPanelRenderer {
       actions.refresh();
     };
     positionToolbarPopover(panel, this.anchorEl || undefined);
+    if (savedScroll) panel.scrollTop = savedScroll;
   }
 
   private renderHeader(

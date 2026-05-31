@@ -1,8 +1,23 @@
-export function positionToolbarPopover(panel: HTMLElement, anchorEl?: HTMLElement): void {
+export interface ToolbarPopoverPositionOptions {
+  minWidth?: number;
+  preferredWidth?: number;
+  maxWidth?: number;
+  margin?: number;
+  gap?: number;
+}
+
+export function positionToolbarPopover(
+  panel: HTMLElement,
+  anchorEl?: HTMLElement,
+  options: ToolbarPopoverPositionOptions = {}
+): void {
   if (!anchorEl?.isConnected) return;
 
-  const margin = 12;
-  const gap = 6;
+  const margin = options.margin ?? 12;
+  const gap = options.gap ?? 6;
+  const minWidth = options.minWidth ?? 160;
+  const preferredWidth = options.preferredWidth ?? 520;
+  const maxPreferredWidth = options.maxWidth ?? preferredWidth;
   const container = panel.closest(".note-database-container") as HTMLElement | null;
 
   panel.addClass("db-anchored-popover");
@@ -16,13 +31,16 @@ export function positionToolbarPopover(panel: HTMLElement, anchorEl?: HTMLElemen
   const place = () => {
     if (!panel.isConnected || !anchorEl.isConnected) return;
 
+    // 保存 popover 内部滚动位置，reposition 后恢复
+    const savedPanelScroll = panel.scrollTop;
+
     const bounds = getVisiblePopoverBounds(container);
     const containerRect = container?.getBoundingClientRect();
     const scrollLeft = container?.scrollLeft || 0;
     const scrollTop = container?.scrollTop || 0;
     const anchorRect = anchorEl.getBoundingClientRect();
-    const maxWidth = Math.max(160, bounds.width - margin * 2);
-    const width = Math.min(520, maxWidth);
+    const maxWidth = Math.max(minWidth, Math.min(maxPreferredWidth, bounds.width - margin * 2));
+    const width = Math.min(preferredWidth, maxWidth);
 
     panel.style.width = `${width}px`;
     panel.style.maxWidth = `${maxWidth}px`;
@@ -64,6 +82,7 @@ export function positionToolbarPopover(panel: HTMLElement, anchorEl?: HTMLElemen
       scrollTop
     );
     panel.style.maxHeight = `${availableHeight}px`;
+    panel.scrollTop = savedPanelScroll;
   };
 
   place();

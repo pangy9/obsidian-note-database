@@ -10,6 +10,7 @@ export interface NoteRecord {
 }
 
 export type DataChangeCallback = () => void;
+export type FrontmatterMutator = (frontmatter: Record<string, unknown>) => void;
 
 export interface ViewConfigMutation {
   dbId?: string;
@@ -110,7 +111,7 @@ export class DataSource {
   /** Get all notes in a folder */
   getNotesInFolder(folderPath: string, typeFilter?: string): NoteRecord[] {
     const allFiles = this.vault.getMarkdownFiles();
-    const normalizedFolder = normalizePath(folderPath || "");
+    const normalizedFolder = this.normalizeVaultFolder(folderPath);
     const prefix = normalizedFolder ? (normalizedFolder.endsWith("/") ? normalizedFolder : normalizedFolder + "/") : "";
 
     const files = allFiles.filter(
@@ -165,24 +166,40 @@ export class DataSource {
     return this.getRecordsForDatabase(db);
   }
 
+  /** Modify a note's frontmatter with a queued mutator and remember changed keys for immediate reads. */
+  async mutateFrontmatter(
+    file: TFile,
+    mutator: FrontmatterMutator
+  ): Promise<void> {
+    return this.enqueueWrite(file.path, async () => {
+      let updates: Record<string, unknown> | null = null;
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          const frontmatter = fm as Record<string, unknown>;
+          const before = this.cloneFrontmatter(frontmatter);
+          mutator(frontmatter);
+          updates = this.diffFrontmatter(before, frontmatter);
+        });
+        if (updates && Object.keys(updates).length > 0) {
+          this.rememberFrontmatterUpdates(file.path, updates);
+        }
+      } catch (err) {
+        if (updates && Object.keys(updates).length > 0) this.frontmatterOverrides.delete(file.path);
+        throw err;
+      }
+    });
+  }
+
   /** Modify a note's frontmatter fields using the official API.
    *  Writes to the same file are serialized to prevent overlapping processFrontMatter. */
   async updateFrontmatter(
     file: TFile,
     updates: Record<string, unknown>
   ): Promise<void> {
-    return this.enqueueWrite(file.path, async () => {
-      this.rememberFrontmatterUpdates(file.path, updates);
-      try {
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
-          for (const [key, value] of Object.entries(updates)) {
-            if (value === null) delete (fm as Record<string, unknown>)[key];
-            else (fm as Record<string, unknown>)[key] = value;
-          }
-        });
-      } catch (err) {
-        this.frontmatterOverrides.delete(file.path);
-        throw err;
+    return this.mutateFrontmatter(file, (frontmatter) => {
+      for (const [key, value] of Object.entries(updates)) {
+        if (value === null) delete frontmatter[key];
+        else frontmatter[key] = value;
       }
     });
   }
@@ -196,7 +213,7 @@ export class DataSource {
     const yaml = stringifyYaml(frontmatter).trim();
     const content = "---\n" + yaml + "\n---\n\n";
     const safeFilename = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
-    const folder = normalizePath(folderPath || "");
+    const folder = this.normalizeVaultFolder(folderPath);
     await this.ensureFolder(folder);
     const basePath = normalizePath(folder ? `${folder}/${safeFilename}.md` : `${safeFilename}.md`);
     const path = this.getAvailablePath(basePath);
@@ -276,7 +293,6 @@ export class DataSource {
           newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
           typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
           schema: sharedSchema,
-          syncComputedToFrontmatter: source["syncComputedToFrontmatter"] !== false,
           statusPresets: normalizeStatusPresets(source["viewStatusPresets"] || [], []),
           defaultStatusPresetId: source["viewDefaultStatusPresetId"] != null ? String(source["viewDefaultStatusPresetId"]) : undefined,
           displayWidth: source["displayWidth"] === "wide" ? "wide" : "default",
@@ -305,6 +321,9 @@ export class DataSource {
           boardCardOrders: source["boardCardOrders"] && typeof source["boardCardOrders"] === "object"
             ? source["boardCardOrders"] as Record<string, Record<string, string[]>>
             : undefined,
+          manualOrder: source["manualOrder"] && typeof source["manualOrder"] === "object"
+            ? source["manualOrder"] as { ranks?: Record<string, string> }
+            : undefined,
           filterLogic: source["filterLogic"] === "or" ? "or" : "and",
           filters: Array.isArray(source["filters"]) ? source["filters"] as any : undefined,
           sortColumn: source["sortColumn"] != null ? String(source["sortColumn"]) : undefined,
@@ -326,7 +345,6 @@ export class DataSource {
         newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
         typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
         schema: sharedSchema,
-        syncComputedToFrontmatter: source["syncComputedToFrontmatter"] !== false,
         statusPresets: normalizeStatusPresets(source["statusPresets"] || [], []),
         defaultStatusPresetId: source["defaultStatusPresetId"] != null ? String(source["defaultStatusPresetId"]) : undefined,
         views,
@@ -348,7 +366,6 @@ export class DataSource {
       newRecordFolder: v["newRecordFolder"] != null ? String(v["newRecordFolder"]) : undefined,
       typeFilter: v["typeFilter"] != null ? String(v["typeFilter"]) : undefined,
       schema: sharedSchema,
-      syncComputedToFrontmatter: v["syncComputedToFrontmatter"] !== false,
       statusPresets: normalizeStatusPresets(v["statusPresets"] || [], []),
       defaultStatusPresetId: v["defaultStatusPresetId"] != null ? String(v["defaultStatusPresetId"]) : undefined,
       displayWidth: v["displayWidth"] === "wide" ? "wide" : "default",
@@ -376,6 +393,9 @@ export class DataSource {
         : undefined,
       boardCardOrders: v["boardCardOrders"] && typeof v["boardCardOrders"] === "object"
         ? v["boardCardOrders"] as Record<string, Record<string, string[]>>
+        : undefined,
+      manualOrder: v["manualOrder"] && typeof v["manualOrder"] === "object"
+        ? v["manualOrder"] as { ranks?: Record<string, string> }
         : undefined,
       filterLogic: v["filterLogic"] === "or" ? "or" : "and",
       filters: Array.isArray(v["filters"]) ? v["filters"] as any : undefined,
@@ -416,7 +436,7 @@ export class DataSource {
       database: this.toDatabasePayload(dbConfig),
     };
     const yaml = stringifyYaml(frontmatter).trim();
-    const folder = normalizePath(folderPath || "");
+    const folder = this.normalizeVaultFolder(folderPath);
     await this.ensureFolder(folder);
     const safeFilename = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
     const withExtension = safeFilename.endsWith(".md") ? safeFilename : `${safeFilename}.md`;
@@ -436,7 +456,6 @@ export class DataSource {
       typeFilter: dbConfig.typeFilter || "",
       columns: dbConfig.schema.columns || [],
       computedFields: dbConfig.schema.computedFields || [],
-      syncComputedToFrontmatter: dbConfig.syncComputedToFrontmatter !== false,
       statusPresets: dbConfig.statusPresets || [],
       defaultStatusPresetId: dbConfig.defaultStatusPresetId || "",
       views: dbConfig.views.map((v) => this.toViewPayload(v)),
@@ -466,6 +485,9 @@ export class DataSource {
       defaultColumnWidth: view.defaultColumnWidth || 150,
       titleField: view.titleField || "",
       boardCardOrders: view.boardCardOrders || {},
+      manualOrder: view.manualOrder && view.manualOrder.ranks && Object.keys(view.manualOrder.ranks).length > 0
+        ? view.manualOrder
+        : undefined,
       galleryImageField: view.galleryImageField || "",
       galleryImageAspectRatio: view.galleryImageAspectRatio || 0.75,
       galleryCardSize: view.galleryCardSize || 250,
@@ -491,7 +513,6 @@ export class DataSource {
       "sortColumn",
       "sortDirection",
       "sortRules",
-      "syncComputedToFrontmatter",
       "viewStatusPresets",
       "viewDefaultStatusPresetId",
       "viewType",
@@ -546,6 +567,12 @@ export class DataSource {
     }
   }
 
+  /** Treat empty or "/" as the vault root and keep stored paths vault-relative. */
+  private normalizeVaultFolder(folderPath: string): string {
+    const normalized = normalizePath(folderPath || "");
+    return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
+  }
+
   private toRecord(file: TFile): NoteRecord | null {
     const cache = this.metadataCache.getFileCache(file);
     const frontmatter = this.withFrontmatterOverride(
@@ -562,6 +589,54 @@ export class DataSource {
       values: { ...existing, ...updates },
       expiresAt: Date.now() + 10000,
     });
+  }
+
+  private diffFrontmatter(
+    before: Record<string, unknown>,
+    after: Record<string, unknown>
+  ): Record<string, unknown> {
+    // Track only changed top-level keys so metadata overlays mirror Obsidian's frontmatter shape.
+    const updates: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const key of keys) {
+      const beforeHas = Object.prototype.hasOwnProperty.call(before, key);
+      const afterHas = Object.prototype.hasOwnProperty.call(after, key);
+      if (!afterHas) {
+        if (beforeHas) updates[key] = null;
+        continue;
+      }
+      if (!beforeHas || !this.valuesEqual(before[key], after[key])) {
+        updates[key] = this.cloneFrontmatterValue(after[key]);
+      }
+    }
+    return updates;
+  }
+
+  private cloneFrontmatter(frontmatter: Record<string, unknown>): Record<string, unknown> {
+    // Snapshot before mutation so in-place array/object edits can still be compared reliably.
+    const clone: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(frontmatter)) {
+      clone[key] = this.cloneFrontmatterValue(value);
+    }
+    return clone;
+  }
+
+  private cloneFrontmatterValue(value: unknown): unknown {
+    // Frontmatter values are YAML-compatible; JSON cloning is enough for nested arrays/objects here.
+    if (Array.isArray(value)) return value.map((entry) => this.cloneFrontmatterValue(entry));
+    if (value && typeof value === "object") {
+      const serialized = JSON.stringify(value);
+      return serialized == null ? value : JSON.parse(serialized);
+    }
+    return value;
+  }
+
+  private valuesEqual(a: unknown, b: unknown): boolean {
+    // Normalize nullish scalars while comparing structured values by content.
+    if (Array.isArray(a) || Array.isArray(b) || (a && typeof a === "object") || (b && typeof b === "object")) {
+      return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    }
+    return (a ?? null) === (b ?? null);
   }
 
   private withFrontmatterOverride(path: string, frontmatter: Record<string, unknown>): Record<string, unknown> {

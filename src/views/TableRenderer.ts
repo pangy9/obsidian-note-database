@@ -1,6 +1,8 @@
+import { Menu } from "obsidian";
 import { ColumnDef, RowData, ViewConfig } from "../data/types";
 import { toBooleanValue } from "../data/ColumnTypes";
 import { t } from "../i18n";
+import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -22,7 +24,16 @@ export interface TableRendererActions {
   setupRow(tr: HTMLElement, row: RowData): void;
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void;
   setupFillHandle?(td: HTMLElement, row: RowData, col: ColumnDef): void;
+  moveRowToPosition?(movedPath: string, beforePath?: string, afterPath?: string): void;
   moveRowsToGroup?(row: RowData, field: string, fromGroupKey: string, toGroupKey: string): void | Promise<void>;
+  moveRowToGroupAndPosition?(
+    row: RowData,
+    field: string,
+    fromGroupKey: string,
+    toGroupKey: string,
+    beforePath?: string,
+    afterPath?: string
+  ): void | Promise<void>;
   createEntry(defaults?: Record<string, unknown>): void;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
@@ -34,6 +45,7 @@ export interface TableRendererActions {
 
 export class TableRenderer {
   private rowByPath = new Map<string, RowData>();
+  private draggingPath: string | undefined;
 
   constructor(private actions: TableRendererActions) {}
 
@@ -114,7 +126,7 @@ export class TableRenderer {
       this.renderHeader(table, config, visibleColumns, group.rows);
       const tbody = table.createEl("tbody");
       if (groupField) this.setupGroupDropTarget(tbody, groupField, group.key);
-      this.renderRows(tbody, config, group.rows, visibleColumns, groupField, group.key);
+      this.renderRows(tbody, config, group.rows, visibleColumns, groupField, group.key, groups);
       if (!this.actions.hideCreateEntry) {
         const defaults = groupField ? this.getGroupDefaults(config, groupField, group.key) : undefined;
         this.renderNewRow(tbody, visibleColumns.length + 1, defaults);
@@ -131,42 +143,54 @@ export class TableRenderer {
     const renderedWidths = this.getRenderedColumnWidths(config, columns);
     if (!this.actions.isReadOnly) {
       const selectionCol = colgroup.createEl("col");
+      const selectionWidth = this.getSelectionColumnWidth();
       selectionCol.addClass("db-select-colgroup");
-      selectionCol.setAttr("width", "34");
-      selectionCol.style.width = "34px";
+      selectionCol.setAttr("width", String(selectionWidth));
+      selectionCol.style.width = `${selectionWidth}px`;
     }
     columns.forEach((col, index) => {
       const colEl = colgroup.createEl("col");
       colEl.setAttr("data-note-database-column-key", col.key);
-      colEl.style.width = `${renderedWidths[index]}px`;
+      // 最后一列不设固定宽度，由 table-layout:fixed + width:100% 自动填满容器剩余空间
+      if (index < columns.length - 1) {
+        colEl.style.width = `${renderedWidths[index]}px`;
+      } else {
+        colEl.style.minWidth = `${renderedWidths[index]}px`;
+      }
     });
   }
 
   private getTableMinWidth(config: ViewConfig, columns: ColumnDef[]): number {
-    const selectionWidth = this.actions.isReadOnly ? 0 : 34;
+    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
     const columnWidth = columns.reduce((total, col) => total + this.getColumnWidth(config, col), 0);
     return Math.max(720, selectionWidth + columnWidth);
   }
 
   private applyTableWidth(table: HTMLElement, config: ViewConfig, columns: ColumnDef[]): void {
     const width = this.getTableMinWidth(config, columns);
-    table.style.width = `${width}px`;
     table.style.minWidth = `${width}px`;
+    // 不设固定 width，依赖 CSS width:100% + 最后一列自适应填满容器
   }
 
   private getRenderedColumnWidths(config: ViewConfig, columns: ColumnDef[]): number[] {
     const widths = columns.map((col) => this.getColumnWidth(config, col));
     if (widths.length === 0) return widths;
-    const selectionWidth = this.actions.isReadOnly ? 0 : 34;
+    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
     const baseWidth = widths.reduce((total, width) => total + width, 0);
     const extraWidth = this.getTableMinWidth(config, columns) - selectionWidth - baseWidth;
-    if (extraWidth <= 0) return widths;
-    const extraPerColumn = extraWidth / widths.length;
-    return widths.map((width) => width + extraPerColumn);
+    if (extraWidth > 0) {
+      // 最小宽度内的剩余空间分配给最后一列
+      widths[widths.length - 1] += extraWidth;
+    }
+    return widths;
   }
 
   private getColumnWidth(config: ViewConfig, col: ColumnDef): number {
     return col.width || config.defaultColumnWidth || 150;
+  }
+
+  private getSelectionColumnWidth(): number {
+    return this.isPhoneLayout() ? 62 : 34;
   }
 
   private renderHeader(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], rows: RowData[]): void {
@@ -219,14 +243,15 @@ export class TableRenderer {
     rows: RowData[],
     columns: ColumnDef[],
     groupField?: string,
-    groupKey?: string
+    groupKey?: string,
+    groups?: TableGroup[]
   ): void {
     for (const row of rows) {
       const tr = tbody.createEl("tr", {
         attr: { "data-note-database-row-path": row.file.path },
       });
       this.actions.setupRow(tr, row);
-      if (groupField && groupKey != null) this.setupGroupedRowDrag(tr, row, groupField, groupKey);
+      this.setupRowDrag(tr, row, rows, config, groupField, groupKey);
       if (!this.actions.isReadOnly) {
         const selectTd = tr.createEl("td", { cls: "db-select-col" });
         const cb = selectTd.createEl("input", { attr: { type: "checkbox" } });
@@ -235,6 +260,9 @@ export class TableRenderer {
           event.stopPropagation();
           this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
         };
+        if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
+          this.renderMobileMoveButton(selectTd, config, row, rows, groupField, groupKey, groups);
+        }
       }
       for (const col of columns) {
         const td = tr.createEl("td", {
@@ -249,6 +277,65 @@ export class TableRenderer {
     }
   }
 
+  /** Phone layouts use a compact menu instead of HTML drag and drop. */
+  private renderMobileMoveButton(
+    parent: HTMLElement,
+    config: ViewConfig,
+    row: RowData,
+    rows: RowData[],
+    groupField?: string,
+    groupKey?: string,
+    groups?: TableGroup[]
+  ): void {
+    const button = parent.createEl("button", {
+      cls: "db-table-mobile-move-btn",
+      attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
+    });
+    renderMobileMoveIcon(button);
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menu = new Menu();
+      if (this.canManualReorder(config)) this.addMobilePositionItems(menu, row, rows);
+      if (groupField && groupKey != null && groups?.length && this.actions.moveRowToGroupAndPosition) {
+        if (this.canManualReorder(config)) menu.addSeparator();
+        for (const group of groups) {
+          if (group.key === groupKey) continue;
+          menu.addItem((item) => item
+            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setIcon("folder-input")
+            .onClick(() => {
+              const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
+              void this.actions.moveRowToGroupAndPosition?.(
+                row,
+                groupField,
+                groupKey,
+                group.key,
+                paths[paths.length - 1],
+                undefined
+              );
+            }));
+        }
+      }
+      menu.showAtMouseEvent(event);
+    };
+  }
+
+  /** Add local rank movement actions shared by grouped and ungrouped table rows. */
+  private addMobilePositionItems(menu: Menu, row: RowData, rows: RowData[]): void {
+    const paths = rows.map((candidate) => candidate.file.path);
+    const index = paths.indexOf(row.file.path);
+    const move = (targetIndex: number) => {
+      const remaining = paths.filter((path) => path !== row.file.path);
+      const boundedIndex = Math.max(0, Math.min(targetIndex, remaining.length));
+      this.actions.moveRowToPosition?.(row.file.path, remaining[boundedIndex - 1], remaining[boundedIndex]);
+    };
+    menu.addItem((item) => item.setTitle(t("menu.moveUp")).setIcon("chevron-up").setDisabled(index <= 0).onClick(() => move(index - 1)));
+    menu.addItem((item) => item.setTitle(t("menu.moveDown")).setIcon("chevron-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(index + 1)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").setDisabled(index <= 0).onClick(() => move(0)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
+  }
+
   private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>): void {
     const tr = tbody.createEl("tr", { cls: "db-new-row" });
     const td = tr.createEl("td", { attr: { colspan: String(Math.max(colspan, 1)) } });
@@ -256,10 +343,21 @@ export class TableRenderer {
     btn.onclick = () => this.actions.createEntry(defaults);
   }
 
-  private setupGroupedRowDrag(tr: HTMLElement, row: RowData, groupField: string, groupKey: string): void {
-    if (this.actions.isReadOnly || !this.actions.moveRowsToGroup) return;
+  private setupRowDrag(
+    tr: HTMLElement,
+    row: RowData,
+    rows: RowData[],
+    config: ViewConfig,
+    groupField?: string,
+    groupKey?: string
+  ): void {
+    const canMoveGroup = Boolean(groupField && groupKey != null && this.actions.moveRowsToGroup);
+    const canReorder = this.canManualReorder(config);
+    if (this.actions.isReadOnly || (!canMoveGroup && !canReorder)) return;
     if (this.isPhoneLayout()) return;
+
     tr.draggable = true;
+    tr.addClass("is-manual-row-draggable");
     tr.addEventListener("dragstart", (event) => {
       if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-cell-fill-handle")) {
         event.preventDefault();
@@ -267,10 +365,55 @@ export class TableRenderer {
       }
       event.dataTransfer?.setData(ROW_MIME, row.file.path);
       event.dataTransfer?.setData("text/plain", row.file.path);
-      event.dataTransfer?.setData(ROW_FROM_GROUP_MIME, groupKey);
+      if (groupKey != null) event.dataTransfer?.setData(ROW_FROM_GROUP_MIME, groupKey);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      this.draggingPath = row.file.path;
+      this.setRowDraggingMode(tr, true);
       tr.addClass("is-dragging");
     });
-    tr.addEventListener("dragend", () => tr.removeClass("is-dragging"));
+
+    tr.addEventListener("dragend", () => {
+      this.draggingPath = undefined;
+      this.setRowDraggingMode(tr, false);
+      tr.removeClass("is-dragging");
+      this.clearRowDropTargets(tr.closest(".db-table-wrap") || tr.parentElement);
+    });
+
+    if (!canReorder) return;
+
+    tr.addEventListener("dragover", (event) => {
+      const dragPath = this.draggingPath || event.dataTransfer?.getData(ROW_MIME);
+      if (!dragPath || dragPath === row.file.path) return;
+      if (!this.isRowDrag(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.clearRowDropTargets(tr.parentElement, tr);
+      const rect = tr.getBoundingClientRect();
+      const isAfter = event.clientY > rect.top + rect.height / 2;
+      tr.toggleClass("is-drop-after", isAfter);
+      tr.toggleClass("is-drop-before", !isAfter);
+    });
+
+    tr.addEventListener("dragleave", () => {
+      tr.removeClass("is-drop-before", "is-drop-after");
+    });
+
+    tr.addEventListener("drop", (event) => {
+      if (!this.isRowDrag(event)) return;
+      const dragPath = this.draggingPath || event.dataTransfer?.getData(ROW_MIME) || event.dataTransfer?.getData("text/plain");
+      const draggedRow = dragPath ? this.rowByPath.get(dragPath) : undefined;
+      if (!dragPath || dragPath === row.file.path || !draggedRow) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.draggingPath = undefined;
+      this.setRowDraggingMode(tr, false);
+      this.clearRowDropTargets(tr.parentElement);
+
+      const rect = tr.getBoundingClientRect();
+      const isAfter = event.clientY > rect.top + rect.height / 2;
+      const position = this.getDropPosition(rows, dragPath, row.file.path, isAfter);
+      void this.moveRowToDropPosition(draggedRow, dragPath, groupField, groupKey, event, position.beforePath, position.afterPath);
+    });
   }
 
   private setupGroupDropTarget(target: HTMLElement, groupField: string, groupKey: string): void {
@@ -301,7 +444,71 @@ export class TableRenderer {
   }
 
   private isRowDrag(event: DragEvent): boolean {
-    return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+    return Boolean(this.draggingPath) || Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private canManualReorder(config: ViewConfig): boolean {
+    if (!this.actions.moveRowToPosition) return false;
+    if (config.sortColumn) return false;
+    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
+  }
+
+  private getDropPosition(
+    rows: RowData[],
+    dragPath: string,
+    targetPath: string,
+    isAfter: boolean
+  ): { beforePath?: string; afterPath?: string } {
+    const paths = rows.map((candidate) => candidate.file.path).filter((path) => path !== dragPath);
+    const targetIndex = paths.indexOf(targetPath);
+    if (targetIndex < 0) return {};
+    if (isAfter) {
+      return {
+        beforePath: targetPath,
+        afterPath: targetIndex < paths.length - 1 ? paths[targetIndex + 1] : undefined,
+      };
+    }
+    return {
+      beforePath: targetIndex > 0 ? paths[targetIndex - 1] : undefined,
+      afterPath: targetPath,
+    };
+  }
+
+  private async moveRowToDropPosition(
+    row: RowData,
+    dragPath: string,
+    groupField: string | undefined,
+    groupKey: string | undefined,
+    event: DragEvent,
+    beforePath?: string,
+    afterPath?: string
+  ): Promise<void> {
+    const fromGroupKey = event.dataTransfer?.getData(ROW_FROM_GROUP_MIME) || "";
+    if (groupField && groupKey != null && fromGroupKey !== groupKey) {
+      if (this.actions.moveRowToGroupAndPosition) {
+        await this.actions.moveRowToGroupAndPosition(row, groupField, fromGroupKey, groupKey, beforePath, afterPath);
+        return;
+      }
+      await this.actions.moveRowsToGroup?.(row, groupField, fromGroupKey, groupKey);
+    }
+    this.actions.moveRowToPosition?.(dragPath, beforePath, afterPath);
+  }
+
+  private clearRowDropTargets(scope: Element | null, except?: HTMLElement): void {
+    if (!scope) return;
+    scope.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
+      if (el !== except) el.classList.remove("is-drop-before", "is-drop-after");
+    });
+  }
+
+  private setRowDraggingMode(rowEl: HTMLElement, active: boolean): void {
+    const container = rowEl.closest<HTMLElement>(".note-database-container");
+    container?.toggleClass("is-row-dragging", active);
+    if (!active) {
+      container?.querySelectorAll(".db-table th.db-drop-target, .db-table th.db-dragging").forEach((el) => {
+        el.classList.remove("db-drop-target", "db-dragging");
+      });
+    }
   }
 
   private isPhoneLayout(): boolean {

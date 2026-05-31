@@ -1,5 +1,6 @@
 import { App, TFile } from "obsidian";
 import { getDefaultCellValue, toBooleanValue, toMultiSelectValues } from "./ColumnTypes";
+import type { FrontmatterMutator } from "./DataSource";
 import { ColumnDef } from "./types";
 
 export interface RenameFrontmatterResult {
@@ -17,7 +18,10 @@ export class PropertyService {
   /** Serialize writes to .obsidian/types.json to prevent read-modify-write races */
   private typesJsonWriteQueue: Promise<void> = Promise.resolve();
 
-  constructor(private app: App) {}
+  constructor(
+    private app: App,
+    private mutateFrontmatter?: (file: TFile, mutator: FrontmatterMutator) => Promise<void>
+  ) {}
 
   async setObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
     if (!key || key === "file.name" || type === "computed") return;
@@ -58,8 +62,7 @@ export class PropertyService {
     if (!oldKey || !newKey || oldKey === newKey) return result;
 
     for (const file of files) {
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
-        const frontmatter = fm as Record<string, unknown>;
+      await this.processFrontmatter(file, (frontmatter) => {
         if (!Object.prototype.hasOwnProperty.call(frontmatter, oldKey)) return;
         if (force) {
           // Force mode: always overwrite new key with old key's value
@@ -111,8 +114,7 @@ export class PropertyService {
     if (!key || key === "file.name") return result;
 
     for (const file of files) {
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
-        const frontmatter = fm as Record<string, unknown>;
+      await this.processFrontmatter(file, (frontmatter) => {
         if (Object.prototype.hasOwnProperty.call(frontmatter, key)) {
           result.skipped += 1;
           return;
@@ -134,8 +136,7 @@ export class PropertyService {
     if (!sourceKey || !targetKey || sourceKey === targetKey) return result;
 
     for (const file of files) {
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
-        const frontmatter = fm as Record<string, unknown>;
+      await this.processFrontmatter(file, (frontmatter) => {
         if (!Object.prototype.hasOwnProperty.call(frontmatter, sourceKey)) {
           result.skipped += 1;
           return;
@@ -165,8 +166,7 @@ export class PropertyService {
     if (!key || key === "file.name" || type === "computed") return result;
 
     for (const file of files) {
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
-        const frontmatter = fm as Record<string, unknown>;
+      await this.processFrontmatter(file, (frontmatter) => {
         if (!Object.prototype.hasOwnProperty.call(frontmatter, key)) {
           result.skipped += 1;
           return;
@@ -193,8 +193,7 @@ export class PropertyService {
     if (!key || key === "file.name") return result;
 
     for (const file of files) {
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
-        const frontmatter = fm as Record<string, unknown>;
+      await this.processFrontmatter(file, (frontmatter) => {
         if (!Object.prototype.hasOwnProperty.call(frontmatter, key)) {
           result.skipped += 1;
           return;
@@ -205,6 +204,15 @@ export class PropertyService {
     }
 
     return result;
+  }
+
+  private async processFrontmatter(file: TFile, mutator: FrontmatterMutator): Promise<void> {
+    // Prefer DataSource so bulk property operations share queued writes and metadata-cache overlays.
+    if (this.mutateFrontmatter) {
+      await this.mutateFrontmatter(file, mutator);
+      return;
+    }
+    await this.app.fileManager.processFrontMatter(file, (fm) => mutator(fm as Record<string, unknown>));
   }
 
   getDefaultValue(col: ColumnDef): unknown {

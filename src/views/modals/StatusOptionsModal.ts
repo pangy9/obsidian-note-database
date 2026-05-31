@@ -30,6 +30,8 @@ export class StatusOptionsModal extends Modal {
   private options: StatusOptionDef[];
   private listEl?: HTMLElement;
   private draggedIndex: number | null = null;
+  private activePresetId: string;
+  private presetButtonsEl?: HTMLElement;
 
   constructor(
     app: App,
@@ -42,7 +44,8 @@ export class StatusOptionsModal extends Modal {
     super(app);
     const defaults = col.type === "status" ? this.defaultOptions : [];
     this.options = (col.statusOptions?.length ? col.statusOptions : defaults)
-      .map((option) => ({ ...option }));
+    .map((option) => ({ ...option }));
+    this.activePresetId = this.presets[0]?.id ?? "";
   }
 
   onOpen(): void {
@@ -76,17 +79,28 @@ export class StatusOptionsModal extends Modal {
   }
 
   private renderPresets(): void {
-    const wrap = this.contentEl.createDiv({ cls: "db-status-preset-list" });
-    wrap.createDiv({ cls: "db-status-preset-title", text: t("modal.preset") });
-    const buttons = wrap.createDiv({ cls: "db-status-preset-buttons" });
+    // 首次：创建标题 + 按钮容器；之后：直接清空按钮容器
+    if (!this.presetButtonsEl) {
+      const wrap = this.contentEl.createDiv({ cls: "db-status-preset-list" });
+      wrap.createDiv({ cls: "db-status-preset-title", text: t("modal.preset") });
+      this.presetButtonsEl = wrap.createDiv({ cls: "db-status-preset-buttons" });
+    } else {
+      this.presetButtonsEl.empty();
+    }
+
     for (const preset of this.presets) {
-      const btn = buttons.createEl("button", {
+      const btn = this.presetButtonsEl.createEl("button", {
         cls: "db-status-preset-button",
         text: preset.name,
         attr: { type: "button" },
       });
+      if (preset.id === this.activePresetId) {
+        btn.addClass("is-active");
+      }
       btn.onclick = () => {
+        this.activePresetId = preset.id;
         this.options = preset.options.map((option) => ({ ...option }));
+        this.renderPresets(); // ← 关键：重新渲染按钮区，刷新 is-active
         this.renderList();
       };
     }

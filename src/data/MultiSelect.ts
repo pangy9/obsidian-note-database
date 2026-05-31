@@ -60,16 +60,6 @@ export function moveMultiSelectGroupValue(
   return sortMultiSelectValues(next, globalOptions);
 }
 
-export function handleCardMove<T extends { tags?: unknown }>(
-  item: T,
-  fromGroupId: string,
-  toGroupId: string,
-  globalOptions: readonly MultiSelectGlobalOption[] = []
-): T {
-  item.tags = moveMultiSelectGroupValue(item.tags, fromGroupId, toGroupId, globalOptions);
-  return item;
-}
-
 function normalizeMultiSelectForCompare(value: unknown, ranks: Map<string, number>): string[] {
   const seen = new Set<string>();
   const values: string[] = [];

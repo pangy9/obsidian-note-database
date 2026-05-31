@@ -5,6 +5,7 @@ import { ColumnDef, RowData, StatusOptionDef } from "../data/types";
 import { t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
+import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./FileTitleDisplay";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -51,7 +52,8 @@ export class CellRenderer {
     private editFormula?: (col: ColumnDef) => void,
     private isReadOnly = false,
     private commitCellOptionTransaction?: (row: RowData, col: ColumnDef, transaction: CellOptionTransaction) => Promise<void>,
-    private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>
+    private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>,
+    private getFileTitleInfo: (row: RowData) => FileTitleDisplay = (row) => getFileTitleDisplay(row, [row])
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -63,29 +65,29 @@ export class CellRenderer {
       value = row.computed[col.computedKey];
     } else if (col.key === "file.name") {
       td.addClass("db-title-cell");
-      const displayName = row.file.name.replace(/\.md$/, "");
+      const displayInfo = this.getFileTitleInfo(row);
       const link = td.createEl("a", {
-        text: displayName,
         cls: "internal-link",
-        attr: { title: displayName },
+        attr: { title: displayInfo.fullPath },
       });
+      renderInlineFileTitle(link, displayInfo, true);
       link.addEventListener("click", (event) => {
         event.preventDefault();
         void this.openNote(row);
       });
-      setFieldTooltip(td, displayName);
+      setFieldTooltip(td, displayInfo.fullPath);
       if (!this.isReadOnly) {
         td.addClass("db-editable-cell");
-        setFieldTooltip(td, displayName, t("cell.doubleClickRename"));
+        setFieldTooltip(td, displayInfo.fullPath, t("cell.doubleClickRename"));
         td.tabIndex = 0;
         td.addEventListener("dblclick", (event) => {
           event.stopPropagation();
-          this.editFileName(td, row, displayName);
+          this.editFileName(td, row, displayInfo.name);
         });
         td.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            this.editFileName(td, row, displayName);
+            this.editFileName(td, row, displayInfo.name);
           }
         });
       }
@@ -247,6 +249,14 @@ export class CellRenderer {
     event?: MouseEvent,
     currentValue = this.getCurrentValue(row, col)
   ): void {
+    if (col.type === "checkbox") {
+      const checkbox = target.matches("input[type='checkbox']")
+        ? target as HTMLInputElement
+        : target.querySelector<HTMLInputElement>("input[type='checkbox']");
+      void this.saveValue(row, col, checkbox ? checkbox.checked : !toBooleanValue(currentValue));
+      return;
+    }
+
     if (this.focusExistingEditor(target, event)) return;
     if (col.type === "computed") {
       this.editFormula?.(col);
@@ -255,11 +265,6 @@ export class CellRenderer {
     if (col.key === "file.name") return;
     const origText = target.textContent || "";
     const anchorPoint = event ? { x: event.clientX, y: event.clientY } : undefined;
-
-    if (col.type === "checkbox") {
-      void this.saveValue(row, col, !toBooleanValue(currentValue));
-      return;
-    }
 
     if (col.type === "status" || col.type === "select") {
       this.editOptionPopover(target, row, col, currentValue, false, anchorPoint);
@@ -277,7 +282,7 @@ export class CellRenderer {
     }
 
     if (col.type === "date") {
-      this.editDate(target, row, col, currentValue, origText);
+      this.editDatePopover(target, row, col, currentValue);
       return;
     }
 
@@ -343,6 +348,7 @@ export class CellRenderer {
         close();
         return;
       }
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select")) return;
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
       const items = Array.from(popover.querySelectorAll<HTMLButtonElement>(".db-cell-option-item"));
       if (!items.length) return;
@@ -390,8 +396,9 @@ export class CellRenderer {
     };
 
     const renderOptionList = () => {
-      // Clear existing options
-      popover.querySelectorAll(".db-cell-option-item").forEach(el => el.remove());
+      // Rebuild transient option rows and empty state from the current local selection set.
+      popover.querySelectorAll(".db-cell-option-item, .db-panel-empty, .db-option-drop-line").forEach(el => el.remove());
+      activeOptionIndex = 0;
       if (optionDefs.length === 0) {
         const empty = popover.createDiv({ cls: "db-panel-empty", text: t("cell.noOptions") });
         popover.insertBefore(empty, popover.querySelector(".db-cell-option-add"));
@@ -676,19 +683,8 @@ export class CellRenderer {
     currentValue: unknown,
     origText: string
   ): void {
-    const inp = document.createElement("input");
-    inp.className = "db-cell-input";
-    inp.type = "number";
-    inp.step = "any";
-    inp.value = String(currentValue ?? "");
-    this.mountInput(td, inp);
-
-    let committed = false;
-
-    const save = async () => {
-      if (committed) return;
-      committed = true;
-      const raw = inp.value;
+    this.editSingleLinePopover(td, String(currentValue ?? ""), "number", async (inputValue) => {
+      const raw = inputValue;
       const newVal = raw ? parseFloat(raw) : "";
       if (String(newVal) !== String(currentValue)) {
         await this.saveValue(row, col, newVal);
@@ -696,11 +692,7 @@ export class CellRenderer {
         td.textContent = origText;
       }
       this.clearTransientClass(td, "db-cell-editing");
-    };
-
-    inp.onblur = save;
-    inp.onkeydown = (event) => this.handleEditKey(event, save, () => {
-      committed = true;
+    }, () => {
       td.textContent = origText;
       this.clearTransientClass(td, "db-cell-editing");
     });
@@ -854,6 +846,239 @@ export class CellRenderer {
     yearInp.select();
   }
 
+  private editDatePopover(
+    td: HTMLElement,
+    row: RowData,
+    col: ColumnDef,
+    currentValue: unknown,
+  ): void {
+    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const isMobile = Platform.isMobile || document.body.classList.contains("is-phone");
+    const host = isMobile ? null : (container || document.body);
+
+    this.activeTextEditClose?.();
+    td.addClass("db-cell-editing");
+
+    const parts = String(currentValue ?? "").substring(0, 10).split("-");
+    const initYear = parts[0] || "";
+    const initMonth = parts[1] || "";
+    const initDay = parts[2] || "";
+
+    let popover: HTMLElement;
+    let closeBtn: HTMLButtonElement | undefined;
+    let editScrollContainer: HTMLElement | null = null;
+
+    if (isMobile) {
+      editScrollContainer = td.closest(".note-database-container")
+        || td.closest(".markdown-preview-view")
+        || document.body;
+
+      popover = editScrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay db-date-edit-popover" });
+
+      const containerRect = editScrollContainer.getBoundingClientRect();
+      const tdRect = td.getBoundingClientRect();
+      const scrollTop = editScrollContainer.scrollTop || 0;
+      const relativeTop = tdRect.top - containerRect.top + scrollTop;
+
+      popover.style.position = "absolute";
+      popover.style.left = "0";
+      popover.style.right = "0";
+      popover.style.top = `${relativeTop + tdRect.height + 2}px`;
+      popover.style.zIndex = "1000";
+
+      closeBtn = popover.createEl("button", {
+        cls: "db-cell-edit-close",
+        attr: { type: "button", title: t("common.cancel"), "aria-label": t("common.cancel") },
+      });
+      setIcon(closeBtn, "x");
+    } else {
+      popover = (host as HTMLElement).createDiv({ cls: "db-cell-edit-popover db-date-edit-popover" });
+    }
+
+    const segments = popover.createDiv({ cls: "db-date-segments" });
+    const yearInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "4", placeholder: "YYYY" } });
+    segments.createSpan({ cls: "db-date-sep", text: "-" });
+    const monthInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "MM" } });
+    segments.createSpan({ cls: "db-date-sep", text: "-" });
+    const dayInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
+
+    const inputs = [yearInp, monthInp, dayInp];
+    let committed = false;
+
+    const pad2 = (v: string) => v.length === 1 ? `0${v}` : v;
+    const isLeapYear = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    const daysInMonth = (y: number, m: number) => {
+      if (m === 2) return isLeapYear(y) ? 29 : 28;
+      if ([4, 6, 9, 11].includes(m)) return 30;
+      return 31;
+    };
+
+    const close = () => {
+      popover.remove();
+      td.removeClass("db-cell-editing");
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("keydown", onDocumentKeydown, true);
+      if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
+    };
+    this.activeTextEditClose = close;
+
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const y = yearInp.value;
+      const rawM = monthInp.value;
+      const rawD = dayInp.value;
+      const allEmpty = !y && !rawM && !rawD;
+      if (allEmpty) {
+        if (String(currentValue ?? "").substring(0, 10)) {
+          await this.saveValue(row, col, null);
+        }
+        close();
+        return;
+      }
+      if (!y || !rawM || !rawD) { close(); return; }
+      const m = parseInt(rawM, 10);
+      const d = parseInt(rawD, 10);
+      const yr = parseInt(y, 10);
+      if (isNaN(yr) || isNaN(m) || isNaN(d)) { close(); return; }
+      const clampedM = Math.min(Math.max(m, 1), 12);
+      const maxD = daysInMonth(yr, clampedM);
+      const clampedD = Math.min(Math.max(d, 1), maxD);
+      if (m !== clampedM || d !== clampedD) {
+        new Notice(t("cell.invalidDate"));
+      }
+      const newVal = `${y}-${pad2(String(clampedM))}-${pad2(String(clampedD))}`;
+      if (newVal !== String(currentValue ?? "").substring(0, 10)) {
+        await this.saveValue(row, col, newVal);
+      }
+      close();
+    };
+
+    const cancel = () => {
+      if (committed) return;
+      committed = true;
+      close();
+    };
+
+    const onOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || td.contains(target))) return;
+      void commit();
+    };
+
+    const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancel();
+    };
+
+    const isMovingToSegment = (e: FocusEvent) =>
+      inputs.includes(e.relatedTarget as HTMLInputElement);
+
+    const handleSegmentKey = (
+      event: KeyboardEvent,
+      input: HTMLInputElement,
+      prev?: HTMLInputElement,
+    ) => {
+      if (["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        if (event.key === "Backspace" && input.value === "" && prev) {
+          event.preventDefault();
+          prev.focus();
+        }
+        return;
+      }
+      if (event.key === "Enter") { event.preventDefault(); void commit(); return; }
+      if (event.key === "Escape") { cancel(); return; }
+      if (!/^\d$/.test(event.key)) { event.preventDefault(); return; }
+    };
+
+    yearInp.value = initYear;
+    yearInp.onkeydown = (e) => handleSegmentKey(e, yearInp, undefined);
+    yearInp.oninput = () => {
+      yearInp.value = yearInp.value.replace(/\D/g, "");
+      if (yearInp.value.length === 4) { monthInp.focus(); monthInp.select(); }
+    };
+    yearInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+
+    monthInp.value = initMonth;
+    monthInp.onkeydown = (e) => handleSegmentKey(e, monthInp, yearInp);
+    monthInp.oninput = () => {
+      monthInp.value = monthInp.value.replace(/\D/g, "");
+      const v = monthInp.value;
+      if (v.length === 1 && /^[2-9]$/.test(v)) {
+        monthInp.value = `0${v}`;
+        dayInp.focus();
+        dayInp.select();
+      } else if (v.length === 2) {
+        dayInp.focus();
+        dayInp.select();
+      }
+    };
+    monthInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+
+    dayInp.value = initDay;
+    dayInp.onkeydown = (e) => handleSegmentKey(e, dayInp, monthInp);
+    dayInp.oninput = () => {
+      dayInp.value = dayInp.value.replace(/\D/g, "");
+      const v = dayInp.value;
+      if (v.length === 1 && /^[4-9]$/.test(v)) {
+        dayInp.value = `0${v}`;
+        void commit();
+      } else if (v.length === 2) {
+        void commit();
+      }
+    };
+    dayInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+
+    if (closeBtn) {
+      closeBtn.onmousedown = (event) => event.preventDefault();
+      closeBtn.onclick = cancel;
+    }
+
+    if (!isMobile) {
+      window.requestAnimationFrame(() => {
+        this.positionDateEditPopover(popover, td, container);
+        yearInp.focus();
+        yearInp.select();
+      });
+    } else {
+      setTimeout(() => {
+        yearInp.focus();
+        yearInp.select();
+      }, 50);
+    }
+
+    window.setTimeout(() => {
+      document.addEventListener("mousedown", onOutside, true);
+      document.addEventListener("keydown", onDocumentKeydown, true);
+    }, 0);
+  }
+
+  private positionDateEditPopover(popover: HTMLElement, td: HTMLElement, container: HTMLElement | null): void {
+    const margin = 8;
+    const rect = td.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const bounds = getVisiblePopoverBounds(container);
+    const width = Math.max(popoverRect.width || 170, 170);
+    const left = clamp(rect.left, bounds.left + margin, bounds.right - width - margin);
+    const height = popoverRect.height || 36;
+    const below = bounds.bottom - rect.top - margin;
+    const above = rect.bottom - bounds.top - margin;
+    const useAbove = above > below && below < height;
+    const top = useAbove ? rect.bottom - height : rect.top;
+    const clampedTop = clamp(top, bounds.top + margin, bounds.bottom - height - margin);
+
+    popover.style.width = `${width}px`;
+    setPosition(
+      popover,
+      left,
+      clampedTop,
+      container?.getBoundingClientRect(),
+      container?.scrollLeft || 0,
+      container?.scrollTop || 0
+    );
+  }
+
   private editText(
     td: HTMLElement,
     row: RowData,
@@ -903,9 +1128,6 @@ export class CellRenderer {
     const container = td.closest(".note-database-container") as HTMLElement | null;
     const isMobile = Platform.isMobile || document.body.classList.contains("is-phone");
     const host = isMobile ? null : (container || document.body);
-    const scrollContainer = td.closest('.note-database-container') as HTMLElement
-      || td.closest('.markdown-preview-view') as HTMLElement
-      || document.body;
 
     // 清理之前的编辑器
     this.activeTextEditClose?.();
@@ -914,18 +1136,23 @@ export class CellRenderer {
     let popover: HTMLElement;
     let textarea: HTMLTextAreaElement;
     let closeBtn: HTMLButtonElement | undefined;
+    let editScrollContainer: HTMLElement | null = null;
 
     if (isMobile) {
       // ========== 移动端：Inline Overlay 方案 ==========
       // 在单元格所在的滚动容器内直接插入编辑器，不脱离文档流
+
+      editScrollContainer = td.closest(".note-database-container")
+        || td.closest(".markdown-preview-view")
+        || document.body;
       
       // 创建内联编辑器包装器
-      popover = scrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay" });
+      popover = editScrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay" });
       
       // 计算相对于滚动容器的位置
-      const containerRect = scrollContainer.getBoundingClientRect();
+      const containerRect = editScrollContainer.getBoundingClientRect();
       const tdRect = td.getBoundingClientRect();
-      const scrollTop = scrollContainer.scrollTop || 0;
+      const scrollTop = editScrollContainer.scrollTop || 0;
       
       // 相对位置 = 单元格顶部 - 容器顶部 + 容器滚动偏移
       const relativeTop = tdRect.top - containerRect.top + scrollTop;
@@ -1048,9 +1275,9 @@ export class CellRenderer {
             const visibleBottom = visibleTop + viewportHeight;
             
             // 如果编辑器底部被键盘遮挡，向上滚动容器
-            if (popoverRect.bottom > visibleBottom - 20) {
+            if (popoverRect.bottom > visibleBottom - 20 && editScrollContainer) {
               const scrollNeeded = popoverRect.bottom - visibleBottom + 60; // 60px 缓冲
-              scrollContainer.scrollBy({ top: scrollNeeded, behavior: "smooth" });
+              editScrollContainer.scrollBy({ top: scrollNeeded, behavior: "smooth" });
             }
             
             // 同时确保单元格也在可视区域
@@ -1065,6 +1292,10 @@ export class CellRenderer {
       // 桌面端原有逻辑
       resize();
       window.requestAnimationFrame(resize);
+      window.requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      });
     }
 
     // 绑定全局关闭事件
@@ -1080,6 +1311,81 @@ export class CellRenderer {
 
   private shouldUsePopoverEditor(_target: HTMLElement, col: ColumnDef, _value: string): boolean {
     return col.type === "text";
+  }
+
+  private editSingleLinePopover(
+    td: HTMLElement,
+    currentValue: string,
+    inputType: "text" | "number",
+    saveValue: (value: string) => Promise<void>,
+    restore: () => void
+  ): void {
+    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const host = container || document.body;
+    this.activeTextEditClose?.();
+    td.addClass("db-cell-popover-editing");
+
+    const popover = host.createDiv({ cls: "db-cell-edit-popover db-cell-line-edit-popover" });
+    const input = popover.createEl("input", {
+      cls: "db-cell-line-input",
+      attr: { type: inputType },
+    });
+    if (inputType === "number") input.setAttr("step", "any");
+    input.value = currentValue;
+
+    let committed = false;
+    const close = () => {
+      popover.remove();
+      td.removeClass("db-cell-popover-editing");
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("keydown", onDocumentKeydown, true);
+      if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
+    };
+    this.activeTextEditClose = close;
+
+    const save = async () => {
+      if (committed) return;
+      committed = true;
+      await saveValue(input.value);
+      close();
+    };
+    const cancel = () => {
+      if (committed) return;
+      committed = true;
+      restore();
+      close();
+    };
+    const onOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || td.contains(target))) return;
+      void save();
+    };
+    const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancel();
+    };
+
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void save();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancel();
+      }
+    };
+    this.positionTextEditPopover(popover, td, container, false);
+    window.requestAnimationFrame(() => {
+      this.positionTextEditPopover(popover, td, container, false);
+      input.focus();
+      input.select();
+    });
+    window.setTimeout(() => {
+      document.addEventListener("mousedown", onOutside, true);
+      document.addEventListener("keydown", onDocumentKeydown, true);
+    }, 0);
   }
 
   private mountInput(td: HTMLElement, input: HTMLInputElement): void {
@@ -1178,21 +1484,23 @@ export class CellRenderer {
   }
 
   private editFileName(td: HTMLElement, row: RowData, currentName: string): void {
-    this.addTransientClass(td, "db-cell-editing", 1600);
-    const inp = document.createElement("input");
-    inp.className = "db-cell-input";
-    inp.type = "text";
-    inp.value = currentName;
-    td.textContent = "";
-    td.appendChild(inp);
-    inp.focus();
-    inp.select();
+    const restore = () => {
+      this.clearTransientClass(td, "db-cell-editing");
+      td.textContent = "";
+      const displayInfo = this.getFileTitleInfo(row);
+      const link = td.createEl("a", {
+        cls: "internal-link",
+        attr: { title: displayInfo.fullPath },
+      });
+      renderInlineFileTitle(link, displayInfo, true);
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void this.openNote(row);
+      });
+    };
 
-    let committed = false;
-    const commit = async () => {
-      if (committed) return;
-      committed = true;
-      const newName = inp.value.trim();
+    this.editSingleLinePopover(td, currentName, "text", async (value) => {
+      const newName = value.trim();
       if (!newName || newName === currentName) {
         restore();
         return;
@@ -1211,26 +1519,7 @@ export class CellRenderer {
         new Notice(t("errors.renameFailed", { error: String(err) }));
         restore();
       }
-    };
-
-    const restore = () => {
-      this.clearTransientClass(td, "db-cell-editing");
-      td.textContent = "";
-      const link = td.createEl("a", {
-        text: currentName,
-        cls: "internal-link",
-      });
-      link.addEventListener("click", (event) => {
-        event.preventDefault();
-        void this.openNote(row);
-      });
-    };
-
-    inp.onblur = () => void commit();
-    inp.onkeydown = (event) => {
-      if (event.key === "Enter") { event.preventDefault(); void commit(); }
-      if (event.key === "Escape") { committed = true; restore(); }
-    };
+    }, restore);
   }
 
   private formatNumber(value: number): string {

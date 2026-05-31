@@ -26,6 +26,8 @@ export class ViewConfigPanelRenderer {
     actions: ViewConfigPanelActions,
     anchorEl?: HTMLElement
   ): void {
+    const existingPanel = containerEl.querySelector(".db-view-config-panel");
+    const savedScroll = (existingPanel as HTMLElement | null)?.scrollTop ?? 0;
     containerEl.querySelectorAll(".db-view-config-panel").forEach((el) => el.remove());
     if (!visible || !config) return;
 
@@ -60,14 +62,17 @@ export class ViewConfigPanelRenderer {
     if (config.viewType === "gallery") {
       this.renderGallerySettings(panel, config, actions);
       positionToolbarPopover(panel, anchorEl);
+      if (savedScroll) panel.scrollTop = savedScroll;
       return;
     }
     if (config.viewType === "board") {
       this.renderBoardSettings(panel, config, actions);
       positionToolbarPopover(panel, anchorEl);
+      if (savedScroll) panel.scrollTop = savedScroll;
       return;
     }
     positionToolbarPopover(panel, anchorEl);
+    if (savedScroll) panel.scrollTop = savedScroll;
   }
 
   private renderSectionTitle(panel: HTMLElement, text: string): void {
@@ -99,15 +104,11 @@ export class ViewConfigPanelRenderer {
 
   private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
     const readOnly = actions.isDatabaseReadOnly;
-    let updateNewRecordFolderControl = (_sourceFolder: string) => {};
     const syncSourceFolder = (value: string) => {
       database.sourceFolder = value;
-      if (value) database.newRecordFolder = value;
       for (const view of database.views) {
         view.sourceFolder = value;
-        if (value) view.newRecordFolder = value;
       }
-      updateNewRecordFolderControl(value);
     };
     this.renderText(panel, t("viewConfig.databaseName"), database.name || "", t("settings.databaseName"), (value) => {
       database.name = value || t("common.untitledDatabase");
@@ -120,20 +121,15 @@ export class ViewConfigPanelRenderer {
     this.renderText(panel, t("viewConfig.sourceFolder"), database.sourceFolder || "", t("settings.sourceFolder.placeholder"), (value) => {
       syncSourceFolder(value);
       actions.onDatabaseChange?.();
-    }, readOnly, undefined, (value) => {
+    }, readOnly, t("settings.sourceFolder.desc"), (value) => {
       syncSourceFolder(value);
     });
-    updateNewRecordFolderControl = this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
+    this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
     this.renderText(panel, t("viewConfig.typeFilter"), database.typeFilter || "", t("settings.typeFilter.placeholder"), (value) => {
       database.typeFilter = value || undefined;
       for (const view of database.views) view.typeFilter = database.typeFilter;
       actions.onDatabaseChange?.();
-    }, readOnly);
-    this.renderCheckbox(panel, t("viewConfig.syncComputed"), database.syncComputedToFrontmatter !== false, (value) => {
-      database.syncComputedToFrontmatter = value;
-      for (const view of database.views) view.syncComputedToFrontmatter = value;
-      actions.onDatabaseChange?.();
-    }, readOnly);
+    }, readOnly, t("settings.typeFilter.desc"));
     this.renderStatusPresetSettings(panel, {
       presets: actions.statusPresets || [],
       defaultPresetId: actions.defaultStatusPresetId,
@@ -175,21 +171,18 @@ export class ViewConfigPanelRenderer {
     database: DatabaseConfig,
     actions: ViewConfigPanelActions,
     readOnly?: boolean
-  ): (sourceFolder: string) => void {
+  ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: t("viewConfig.newRecordFolder") });
     const field = row.createDiv({ cls: "db-view-config-field" });
 
-    const renderControl = (sourceFolder: string) => {
-      field.empty();
-      if (readOnly || sourceFolder) {
-        field.createDiv({
-          cls: "db-view-config-readonly-value",
-          text: sourceFolder || database.newRecordFolder || t("common.untitled"),
-        });
-        if (sourceFolder) field.createDiv({ cls: "db-view-config-help", text: t("viewConfig.newRecordFolderLocked") });
-        return;
-      }
+    if (readOnly) {
+      field.createDiv({
+        cls: "db-view-config-readonly-value",
+        text: database.newRecordFolder || t("common.untitled"),
+      });
+      return;
+    }
       const input = field.createEl("input", {
         cls: "db-view-config-text",
         attr: { type: "text", placeholder: t("settings.sourceFolder.placeholder") },
@@ -204,10 +197,7 @@ export class ViewConfigPanelRenderer {
         for (const view of database.views) view.newRecordFolder = database.newRecordFolder;
         actions.onDatabaseChange?.();
       };
-    };
-
-    renderControl(database.sourceFolder || "");
-    return (sourceFolder: string) => renderControl(sourceFolder.trim());
+    field.createDiv({ cls: "db-view-config-help", text: t("viewConfig.newRecordFolderLocked") });
   }
 
   private renderGallerySettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
@@ -379,7 +369,7 @@ export class ViewConfigPanelRenderer {
     onChange: (value: string) => void,
     disabled = false
   ): void {
-    const row = panel.createDiv({ cls: "db-view-config-row db-view-config-row-top" });
+    const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
     if (disabled) {
       row.createDiv({ cls: "db-view-config-readonly-value db-view-config-readonly-multiline", text: value || t("common.notSet") });
@@ -398,17 +388,21 @@ export class ViewConfigPanelRenderer {
     label: string,
     value: boolean,
     onChange: (value: boolean) => void,
-    disabled = false
+    disabled = false,
+    helpText?: string
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
+    const field = row.createDiv({ cls: "db-view-config-field" });
     if (disabled) {
-      row.createDiv({ cls: "db-view-config-readonly-value", text: value ? t("common.true") : t("common.false") });
+      field.createDiv({ cls: "db-view-config-readonly-value", text: value ? t("common.true") : t("common.false") });
+      if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });
       return;
     }
-    const input = row.createEl("input", { attr: { type: "checkbox" } });
+    const input = field.createEl("input", { attr: { type: "checkbox" } });
     input.checked = value;
     input.onchange = () => onChange(input.checked);
+    if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });
   }
 
   private renderRange(

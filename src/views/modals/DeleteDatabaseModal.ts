@@ -2,7 +2,8 @@ import { App, Modal, Setting } from "obsidian";
 import { t } from "../../i18n";
 
 export interface DeleteDatabaseModalResult {
-  action: "trash" | "permanent";
+  /** "plugin-trash" = 移至插件回收站；"system-trash" = 移至系统回收站 */
+  action: "plugin-trash" | "system-trash";
   deleteFiles: boolean;
 }
 
@@ -37,13 +38,15 @@ export class DeleteDatabaseModal extends Modal {
       text: t("deleteDatabase.info", { count: this.fileCount }),
     });
 
-    new Setting(contentEl)
-      .setName(t("deleteDatabase.deleteFiles"))
-      .setDesc(t("deleteDatabase.deleteFilesDesc", { count: this.fileCount }))
-      .addToggle((toggle) => {
-        toggle.setValue(this.deleteFiles);
-        toggle.onChange((v) => { this.deleteFiles = v; });
-      });
+    if (this.fileCount > 0) {
+      new Setting(contentEl)
+        .setName(t("deleteDatabase.deleteFiles"))
+        .setDesc(t("deleteDatabase.deleteFilesDesc", { count: this.fileCount }))
+        .addToggle((toggle) => {
+          toggle.setValue(this.deleteFiles);
+          toggle.onChange((v) => { this.deleteFiles = v; });
+        });
+    }
 
     const btnRow = contentEl.createDiv({ cls: "db-delete-modal-buttons db-delete-modal-danger-row" });
     const primaryActions = btnRow.createDiv({ cls: "db-delete-modal-primary-actions" });
@@ -53,21 +56,23 @@ export class DeleteDatabaseModal extends Modal {
       this.close();
     };
 
-    const trashBtn = primaryActions.createEl("button", {
+    // 移至插件回收站（主操作）
+    const pluginTrashBtn = primaryActions.createEl("button", {
       cls: "mod-cta",
-      text: t("deleteDatabase.moveToTrash"),
+      text: t("deleteDatabase.moveToPluginTrash"),
     });
-    trashBtn.onclick = () => {
-      this.resolve?.({ action: "trash", deleteFiles: this.deleteFiles });
+    pluginTrashBtn.onclick = () => {
+      this.resolve?.({ action: "plugin-trash", deleteFiles: this.deleteFiles });
       this.close();
     };
 
-    const permBtn = btnRow.createEl("button", {
+    // 移至系统回收站（危险操作）
+    const systemTrashBtn = btnRow.createEl("button", {
       cls: "mod-warning",
-      text: t("common.permanentlyDelete"),
+      text: t("deleteDatabase.moveToSystemTrash"),
     });
-    permBtn.onclick = () => {
-      this.resolve?.({ action: "permanent", deleteFiles: this.deleteFiles });
+    systemTrashBtn.onclick = () => {
+      this.resolve?.({ action: "system-trash", deleteFiles: this.deleteFiles });
       this.close();
     };
   }

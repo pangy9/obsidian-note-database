@@ -23,6 +23,7 @@ export class SortPanelRenderer {
     actions: SortPanelActions,
     anchorEl?: HTMLElement
   ): void {
+    const savedScroll = this.panelEl?.scrollTop ?? 0;
     this.panelEl?.remove();
     this.panelEl = null;
     if (!visible) {
@@ -56,6 +57,7 @@ export class SortPanelRenderer {
       actions.refresh();
     };
     positionToolbarPopover(panel, this.anchorEl || undefined);
+    if (savedScroll) panel.scrollTop = savedScroll;
   }
 
   private renderRule(

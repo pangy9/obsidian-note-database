@@ -1,15 +1,17 @@
-import { App, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, TFile } from "obsidian";
+import { App, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, setIcon, TFile } from "obsidian";
 import { t } from "../i18n";
 import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { ensureColumnOrder, getColumnsInOrder, getVisibleColumns } from "../data/ColumnConfig";
 import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
 import { ColumnDef, DatabaseConfig, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
+import { ComputedFieldEngine } from "../data/ComputedField";
 import { isOptionColumnType, toBooleanValue } from "../data/ColumnTypes";
-import { getDefaultGroupOrder, getEffectiveGroupOrder } from "../data/GroupOrder";
+import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
 import { createCsvMarkdownZip, CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
+import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { CellRenderer } from "./CellRenderer";
@@ -22,19 +24,21 @@ import { SortPanelRenderer } from "./SortPanelRenderer";
 import { SummaryRenderer } from "./SummaryRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
+import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
 import { ToolbarRenderer } from "./ToolbarRenderer";
 import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
-import { GroupOrderModal } from "./modals/GroupOrderModal";
+
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
+import { positionToolbarPopover } from "./PopoverPosition";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
 export interface EmbeddedDatabaseEntry {
   config: DatabaseConfig;
-  sourcePath: string | null;
+  sourcePath: string;
 }
 
 interface EmbeddedReference {
@@ -70,15 +74,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private activeHeaderPopover?: HeaderPopoverKind;
   private headerPopoverAnchorEl?: HTMLElement;
   private removeHeaderPopoverAutoClose?: () => void;
+  private groupOrderPopover?: HTMLElement;
+  private removeGroupOrderPopoverListener?: () => void;
   private config?: ViewConfig;
   private currentDbConfig?: DatabaseConfig;
-  private currentSourcePath: string | null = null;
+  private currentSourcePath = "";
   private currentViewIndex = 0;
   private viewIndexOverride: number | null = null;
   private selectedRows = new Set<string>();
   private cellSelection: { anchor: CellAddress; focus: CellAddress } | null = null;
   private isSelectingCells = false;
   private syncingComputed = false;
+  private computedSyncTimer: number | null = null;
   private pendingDataChange = false;
   private suppressDataReloadUntil = 0;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
@@ -105,7 +112,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
-    this.cellRenderer = new CellRenderer(this.dataSource, () => this.refreshAfterSave(), undefined, undefined, undefined, isCodeBlock);
+    this.cellRenderer = new CellRenderer(this.dataSource, () => this.refreshAfterSave(), undefined, undefined, undefined, isCodeBlock, undefined, undefined, (row) => this.getFileTitleInfo(row));
     this.rowMenu = new RowMenu({
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
@@ -134,6 +141,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         td.toggleClass("db-cell-range-selected", this.isEmbedCellSelected(row.file.path, col.key));
         this.setupEmbedCellSelection(td, row, col);
       },
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
@@ -146,6 +154,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       updateGroup: (row, field, value) => this.updateBoardGroup(row, field, value),
       updateGroupOrder: (field, order) => this.updateBoardGroupOrder(field, order),
       updateCardOrder: (field, groupKey, paths) => this.updateBoardCardOrder(field, groupKey, paths),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       updateColumnWidth: (width) => this.updateBoardColumnWidth(width),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
@@ -170,6 +179,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
       updateCardSize: (width) => this.updateGalleryCardSize(width),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -185,6 +195,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -212,6 +223,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   onunload(): void {
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
+    this.closeGroupOrderPopover();
     this.unsubscribe?.();
     this.unsubscribeViewConfig?.();
     document.removeEventListener("mousedown", this.handleOutsideClickBound, true);
@@ -247,6 +259,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.showColumnManager = false;
     this.showViewConfigPanel = false;
     this.clearHeaderPopover();
+    this.closeGroupOrderPopover();
     this.cellSelection = null;
     this.isSelectingCells = false;
     this.render(scroll);
@@ -323,12 +336,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return !target.closest(
       "td[data-note-database-row-path][data-note-database-column-key], " +
       ".db-selection-status-bar, .db-cell-editing, input, textarea, select, button, a, " +
-      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .menu"
+      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-group-order-popover, .menu"
     );
   }
 
   private closePopovers(): void {
     this.toolbarRenderer.closePopovers();
+    this.closeGroupOrderPopover();
     if (!this.config) return;
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     this.removeHeaderPopoverAutoClose?.();
@@ -406,10 +420,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       target.createDiv({ cls: "db-empty", text: t("errors.noColumns") });
       return;
     }
-    if (config.schema.columns.length === 1) {
-      target.createDiv({ cls: "db-empty", text: t("errors.onlyNameColumn") });
-      return;
-    }
     let records: NoteRecord[];
     try {
       records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(config));
@@ -419,7 +429,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
 
     this.rows = this.rowPipeline.build(records, config, this.vs(config));
-    void this.syncComputedFields(config, this.rows);
+    this.scheduleComputedSync(config, this.rows);
     this.summaryRenderer.render(target, this.rows);
     const renderConfig = this.getStatefulConfig(config);
     if (config.viewType === "board") {
@@ -469,7 +479,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       schema: config.schema,
       views: [config],
     } as DatabaseConfig;
-    this.toolbarRenderer.render(this.containerEl, [{ config: dbConfig, sourcePath: null }], 0, this.currentViewIndex, this.vs(config), {
+    this.toolbarRenderer.render(this.containerEl, [{ config: dbConfig, sourcePath: this.currentSourcePath }], 0, this.currentViewIndex, this.vs(config), {
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
         if (!this.currentDbConfig || viewIndex === this.currentViewIndex) return;
@@ -538,7 +548,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.renderResults(config);
         void this.saveEmbeddedConfigToSource();
       },
-      configureGroupOrder: () => this.showGroupOrderModal(config),
+      configureGroupOrder: () => this.showGroupOrderPopover(config),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(config, mode),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover(config, "sort", anchorEl),
       syncComputedFields: () => { void this.syncComputedFields(config, this.rows, true); },
@@ -645,6 +655,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           ? ".db-view-config-btn"
           : ".db-col-manager-btn";
     return this.containerEl.querySelector(selector) as HTMLElement | undefined;
+  }
+
+  private closeGroupOrderPopover(): void {
+    this.removeGroupOrderPopoverListener?.();
+    this.removeGroupOrderPopoverListener = undefined;
+    this.groupOrderPopover?.remove();
+    this.groupOrderPopover = undefined;
   }
 
   private renderFilterPanel(config: ViewConfig): void {
@@ -799,7 +816,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           config.sourceLogic = this.currentDbConfig.sourceLogic;
           config.newRecordFolder = this.currentDbConfig.newRecordFolder;
           config.typeFilter = this.currentDbConfig.typeFilter;
-          config.syncComputedToFrontmatter = this.currentDbConfig.syncComputedToFrontmatter;
         }
         this.persistEmbeddedConfigLocally(config);
         this.renderResults(config);
@@ -817,7 +833,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.app.workspace.revealLeaf(leaf);
     const view = leaf.view;
     if (view instanceof DatabaseView) {
-      view.openViewReference(this.currentSourcePath, config.id, this.currentDbConfig?.id);
+      view.openViewReference(this.currentSourcePath, config.id);
     }
   }
 
@@ -845,7 +861,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!view.sourceLogic) view.sourceLogic = db.sourceLogic;
     if (!view.newRecordFolder) view.newRecordFolder = db.newRecordFolder;
     if (!view.typeFilter) view.typeFilter = db.typeFilter;
-    if (view.syncComputedToFrontmatter === undefined) view.syncComputedToFrontmatter = db.syncComputedToFrontmatter;
   }
 
   private getEmbeddedConfig(): ViewConfig | undefined {
@@ -1034,7 +1049,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
-    if (col.key === "file.name") return row.file.basename;
+    if (col.key === "file.name") return this.getFileDisplayName(row);
     const value = col.type === "computed" && col.computedKey
       ? row.computed[col.computedKey]
       : row.frontmatter[col.key];
@@ -1182,6 +1197,36 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     void this.saveEmbeddedConfigToSource();
   }
 
+  private moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void {
+    const config = this.config;
+    if (!config) return;
+    this.ensureManualRanks(config);
+    const ranks = config.manualOrder?.ranks;
+    if (!ranks) return;
+
+    const beforeRank = beforePath ? ranks[beforePath] : undefined;
+    const afterRank = afterPath ? ranks[afterPath] : undefined;
+    let newRank = rankBetween(beforeRank, afterRank);
+    if (newRank === null) {
+      const rebalanced = rebalanceRanks(ranks);
+      config.manualOrder = { ...(config.manualOrder || {}), ranks: rebalanced };
+      newRank = rankBetween(
+        beforePath ? rebalanced[beforePath] : undefined,
+        afterPath ? rebalanced[afterPath] : undefined
+      );
+    }
+    if (!newRank || !config.manualOrder?.ranks) return;
+    config.manualOrder.ranks[movedPath] = newRank;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    void this.saveEmbeddedConfigToSource();
+  }
+
+  private ensureManualRanks(config: ViewConfig): void {
+    if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) return;
+    config.manualOrder = { ...(config.manualOrder || {}), ranks: generateRanks(this.rows.map((row) => row.file.path)) };
+  }
+
   private updateBoardColumnWidth(width: number): void {
     const config = this.config;
     if (!config) return;
@@ -1216,7 +1261,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     void this.saveEmbeddedConfigToSource();
   }
 
-  private showGroupOrderModal(config: ViewConfig): void {
+  private showGroupOrderPopover(config: ViewConfig): void {
     const field = this.getActiveGroupField(config);
     if (!field) {
       new Notice(t("notice.selectGroupField"));
@@ -1225,19 +1270,160 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const col = getColumnsInOrder(config).find((candidate) => candidate.key === field);
     const groups = this.queryEngine.groupBy(this.rows, field);
     const keys = groups.map((group) => group.key);
-    new GroupOrderModal(
-      this.app,
-      col?.label || field,
-      keys,
-      config.groupOrders?.[field] || [],
-      getDefaultGroupOrder(config, field),
-      async (order) => {
-        config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
-        this.persistEmbeddedConfigLocally(config);
-        this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
-      }
-    ).open();
+    const defaultOrder = getDefaultGroupOrder(config, field);
+    const knownKeys = new Set([...defaultOrder, ...keys]);
+    let order = mergeGroupOrder(
+      (config.groupOrders?.[field] || []).filter((key) => knownKeys.has(key)),
+      defaultOrder,
+      keys
+    );
+
+    this.closeGroupOrderPopover();
+
+    const triggerBtn = this.containerEl.querySelector(".db-group-btn");
+    const host = this.containerEl;
+    const anchorEl = triggerBtn instanceof HTMLElement ? triggerBtn : undefined;
+
+    const popover = host.createDiv({ cls: "db-group-order-popover" });
+    this.groupOrderPopover = popover;
+    popover.createEl("h3", { text: t("modal.groupOrderTitle", { field: col?.label || field }) });
+
+    const list = popover.createDiv({ cls: "db-group-order-list" });
+    let draggedIndex: number | null = null;
+    let dropLine: HTMLElement | null = null;
+    let outsideTimer: number | undefined;
+    let removeAutoClose: (() => void) | undefined;
+
+    // Keep the panel inside the visible database container after every list height change.
+    const positionPopover = () => {
+      positionToolbarPopover(popover, anchorEl, { minWidth: 260, preferredWidth: 360, maxWidth: 360 });
+    };
+    // Persist every order change immediately so embedded views do not need a save step.
+    const commitOrder = () => {
+      config.groupOrders = { ...(config.groupOrders || {}), [field]: [...order] };
+      this.persistEmbeddedConfigLocally(config);
+      this.renderResults(config);
+      void this.saveEmbeddedConfigToSource();
+      window.requestAnimationFrame(positionPopover);
+    };
+    const clearDropLine = () => {
+      dropLine?.remove();
+      dropLine = null;
+    };
+    const getInsertIndex = (event: DragEvent, targetIndex: number, row: HTMLElement) => {
+      const rect = row.getBoundingClientRect();
+      return event.clientY > rect.top + rect.height / 2 ? targetIndex + 1 : targetIndex;
+    };
+    const showDropLine = (event: DragEvent, targetIndex: number, row: HTMLElement) => {
+      const insertIndex = getInsertIndex(event, targetIndex, row);
+      const rows = Array.from(list.querySelectorAll<HTMLElement>(".db-group-order-row"));
+      if (!dropLine) dropLine = createDiv({ cls: "db-group-order-drop-line" });
+      const ref = rows[insertIndex] || null;
+      if (ref) list.insertBefore(dropLine, ref);
+      else list.appendChild(dropLine);
+    };
+
+    const renderList = () => {
+      list.empty();
+      dropLine = null;
+      order.forEach((key, index) => {
+        const row = list.createDiv({ cls: "db-group-order-row" });
+        row.draggable = true;
+        row.ondragstart = (event) => {
+          draggedIndex = index;
+          popover.classList.add("is-dragging-order");
+          row.classList.add("is-dragging");
+          event.dataTransfer?.setData("text/plain", String(index));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        };
+        row.ondragover = (event) => {
+          event.preventDefault();
+          showDropLine(event, index, row);
+        };
+        row.ondrop = (event) => {
+          event.preventDefault();
+          const from = draggedIndex;
+          if (from === null || from === index) {
+            draggedIndex = null;
+            clearDropLine();
+            popover.classList.remove("is-dragging-order");
+            return;
+          }
+          let insertIndex = getInsertIndex(event, index, row);
+          const [item] = order.splice(from, 1);
+          if (from < insertIndex) insertIndex -= 1;
+          order.splice(insertIndex, 0, item);
+          draggedIndex = null;
+          clearDropLine();
+          popover.classList.remove("is-dragging-order");
+          renderList();
+          commitOrder();
+        };
+        row.ondragend = () => {
+          draggedIndex = null;
+          clearDropLine();
+          popover.classList.remove("is-dragging-order");
+          list.querySelectorAll(".db-group-order-row").forEach((r) => r.classList.remove("is-dragging"));
+        };
+
+        row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
+        row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
+        const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
+        const upBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+        });
+        setIcon(upBtn, "arrow-up");
+        upBtn.disabled = index === 0;
+        upBtn.onclick = () => {
+          if (index === 0) return;
+          [order[index], order[index - 1]] = [order[index - 1], order[index]];
+          renderList();
+          commitOrder();
+        };
+        const downBtn = moveControls.createEl("button", {
+          attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+        });
+        setIcon(downBtn, "arrow-down");
+        downBtn.disabled = index >= order.length - 1;
+        downBtn.onclick = () => {
+          if (index >= order.length - 1) return;
+          [order[index], order[index + 1]] = [order[index + 1], order[index]];
+          renderList();
+          commitOrder();
+        };
+      });
+      window.requestAnimationFrame(positionPopover);
+    };
+
+    renderList();
+
+    if (defaultOrder.length > 0) {
+      const resetBtn = popover.createEl("button", {
+        cls: "db-panel-button db-group-order-reset",
+        text: t("modal.resetToOptionOrder"),
+        attr: { type: "button" },
+      });
+      resetBtn.onclick = () => {
+        order = mergeGroupOrder(defaultOrder, keys);
+        renderList();
+        commitOrder();
+      };
+    }
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || anchorEl?.contains(target))) return;
+      this.closeGroupOrderPopover();
+    };
+    outsideTimer = window.setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+    removeAutoClose = installPopoverAutoClose({ panel: popover, anchorEl, close: () => this.closeGroupOrderPopover() });
+    this.removeGroupOrderPopoverListener = () => {
+      if (outsideTimer !== undefined) window.clearTimeout(outsideTimer);
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      removeAutoClose?.();
+    };
+    positionPopover();
+    window.requestAnimationFrame(positionPopover);
   }
 
   private setGroupOrderMode(config: ViewConfig, mode: GroupOrderMode): void {
@@ -1336,27 +1522,41 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private getCreateFolder(config: ViewConfig): string {
     const folderRule = config.sourceRules?.find((rule) => rule.op === "inFolder" && rule.value);
-    return config.sourceFolder || folderRule?.value || config.newRecordFolder || this.defaultRecordFolder || "";
+    return normalizePath(config.newRecordFolder || config.sourceFolder || folderRule?.value || this.defaultRecordFolder || "");
   }
 
-  /** When no sourceFolder and no sourceRules, use defaultRecordFolder as fallback so querying and creating are consistent. */
+  /** Empty sourceFolder means vault root for querying; defaultRecordFolder is only the create fallback. */
   private getEffectiveConfig(config: ViewConfig): DatabaseConfig {
     // Build a DatabaseConfig from the view config for DataSource queries
     const db: DatabaseConfig = {
       id: "embedded",
       name: config.name,
-      sourceFolder: config.sourceFolder || this.defaultRecordFolder,
+      sourceFolder: this.normalizeVaultFolder(config.sourceFolder || ""),
       sourceRules: config.sourceRules,
       sourceLogic: config.sourceLogic,
       newRecordFolder: config.newRecordFolder,
       typeFilter: config.typeFilter,
       schema: config.schema,
-      syncComputedToFrontmatter: config.syncComputedToFrontmatter,
       views: [config],
     };
-    if (db.sourceFolder || db.sourceRules?.length) return db;
-    db.sourceFolder = this.defaultRecordFolder;
     return db;
+  }
+
+  /** Show relative paths only when duplicate filenames would otherwise be ambiguous. */
+  private getFileDisplayName(row: RowData): string {
+    const info = this.getFileTitleInfo(row);
+    return info.hasDuplicateName ? info.displayPath : info.name;
+  }
+
+  /** Build structured file title pieces for readonly and editable embedded renderers. */
+  private getFileTitleInfo(row: RowData): FileTitleDisplay {
+    return getFileTitleDisplay(row, this.rows);
+  }
+
+  /** Treat empty or "/" as the vault root and keep stored paths vault-relative. */
+  private normalizeVaultFolder(folderPath: string): string {
+    const normalized = normalizePath(folderPath || "");
+    return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
   }
 
   private toggleRowSelected(row: RowData, selected: boolean): void {
@@ -1380,8 +1580,52 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.selectedRows.clear();
   }
 
+  private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
+    if (config.schema.computedFields.length === 0) return;
+    if (this.computedSyncTimer !== null) clearTimeout(this.computedSyncTimer);
+    this.computedSyncTimer = window.setTimeout(() => {
+      this.computedSyncTimer = null;
+      void this.syncComputedFields(config, rows);
+    }, 5000);
+  }
+
+  private async syncComputedForFile(
+    file: TFile,
+    frontmatter: Record<string, unknown>,
+    config: ViewConfig,
+    affectedFields?: string[]
+  ): Promise<void> {
+    if (!config.schema.computedFields.length) return;
+
+    const engine = new ComputedFieldEngine(config.schema.computedFields, config.schema.columns);
+    const computed = engine.evaluate(frontmatter);
+
+    const computedColumns = config.schema.columns.filter(col => col.type === "computed");
+    const updates: Record<string, unknown> = {};
+
+    for (const col of computedColumns) {
+      if (affectedFields?.length) {
+        const deps = ComputedFieldEngine.extractDependencies(
+          config.schema.computedFields.find(cf => cf.key === (col.computedKey || col.key))?.expression || ""
+        );
+        const allRelevant = [...affectedFields, ...computedColumns.map(c => c.key)];
+        if (!deps.some(d => allRelevant.includes(d))) continue;
+      }
+      const key = col.computedKey || col.key;
+      const value = computed[key];
+      const nextValue = value == null ? "" : value;
+      if (String(frontmatter[col.key] ?? "") !== String(nextValue ?? "")) {
+        updates[col.key] = nextValue;
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await this.dataSource.updateFrontmatter(file, updates);
+    }
+  }
+
   private async syncComputedFields(config: ViewConfig, rows: RowData[], notify = false): Promise<void> {
-    if (config.syncComputedToFrontmatter === false || this.syncingComputed) return;
+    if (this.syncingComputed) return;
     this.syncingComputed = true;
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");

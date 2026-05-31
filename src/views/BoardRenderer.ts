@@ -3,6 +3,8 @@ import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/C
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
+import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
+import { renderMobileMoveIcon } from "./MobileMoveIcon";
 
 const CARD_MIME = "application/x-note-database-card";
 const CARD_FROM_GROUP_MIME = "application/x-note-database-card-from-group";
@@ -28,6 +30,13 @@ export interface BoardRendererActions {
   updateGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void>;
   updateGroupOrder(field: string, order: string[]): void;
   updateCardOrder(field: string, groupKey: string, paths: string[]): void;
+  moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void;
+  moveRowWithGroupUpdatesAndPosition?(
+    row: RowData,
+    updates: Array<{ field: string; fromGroupKey: string; toGroupKey: string }>,
+    beforePath?: string,
+    afterPath?: string
+  ): void | Promise<void>;
   updateColumnWidth(width: number): void;
   isRowSelected(row: RowData): boolean;
   toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void;
@@ -105,6 +114,7 @@ export class BoardRenderer {
     column.addEventListener("dragleave", () => this.clearTransientClass(column, "is-drop-target"));
     column.addEventListener("drop", (event) => {
       event.preventDefault();
+      event.stopPropagation();
       this.clearTransientClass(column, "is-drop-target");
       const groupKey = event.dataTransfer?.getData(GROUP_MIME);
       if (groupKey && this.canReorderGroups()) {
@@ -115,7 +125,19 @@ export class BoardRenderer {
       const path = event.dataTransfer?.getData(CARD_MIME) || event.dataTransfer?.getData("text/plain");
       const row = path ? this.rowByPath.get(path) : undefined;
       const fromGroup = event.dataTransfer?.getData(CARD_FROM_GROUP_MIME) || undefined;
-      if (row) void this.actions.updateGroup(row, groupField, group.key, fromGroup);
+      if (row) {
+        void this.moveCardAndOrder(
+          row,
+          groupField,
+          group.key,
+          fromGroup,
+          row.file.path,
+          this.getContainerDropOrder(group, row.file.path),
+          undefined,
+          undefined,
+          undefined
+        );
+      }
     });
 
     const header = column.createDiv({ cls: "db-board-column-header" });
@@ -165,7 +187,7 @@ export class BoardRenderer {
 
     const cards = this.createCardsContainer(column, config, group, groupField);
     for (const row of group.rows) {
-      this.renderCard(cards, config, groups, group, row, groupField);
+      this.renderCard(cards, config, groups, group, row, groupField, undefined, undefined, group.rows);
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
@@ -209,7 +231,7 @@ export class BoardRenderer {
 
     const cards = this.createCardsContainer(section, config, group, groupField, subgroupField, subgroup);
     for (const row of subgroup.rows) {
-      this.renderCard(cards, config, groups, group, row, groupField, subgroupField, subgroup.key);
+      this.renderCard(cards, config, groups, group, row, groupField, subgroupField, subgroup.key, subgroup.rows);
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
@@ -258,11 +280,12 @@ export class BoardRenderer {
     row: RowData,
     groupField: string,
     subgroupField?: string,
-    subgroupKey?: string
+    subgroupKey?: string,
+    visibleRows: RowData[] = group.rows
   ): void {
     const card = cards.createDiv({
       cls: "db-board-card",
-      attr: { "data-note-database-row-path": row.file.path },
+      attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
     this.attachRowContextMenu(card, row);
     if (!this.actions.isReadOnly && !this.isPhoneLayout()) {
@@ -318,7 +341,7 @@ export class BoardRenderer {
         this.clearCardDropTarget(card);
         const fromGroup = event.dataTransfer?.getData(CARD_FROM_GROUP_MIME) || undefined;
         const fromSubgroup = event.dataTransfer?.getData(CARD_FROM_SUBGROUP_MIME) || undefined;
-        void this.moveCardAndOrder(dragged, groupField, group.key, fromGroup, path, this.getCardDropOrder(group, path, row.file.path, event, card), subgroupField, subgroupKey, fromSubgroup);
+        void this.moveCardAndOrder(dragged, groupField, group.key, fromGroup, path, this.getCardDropOrder(visibleRows, path, row.file.path, event, card), subgroupField, subgroupKey, fromSubgroup);
       });
       card.addEventListener("dragend", () => {
         this.clearTransientClass(card, "is-dragging");
@@ -336,9 +359,6 @@ export class BoardRenderer {
         this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
       };
     }
-    if (!this.actions.isReadOnly && this.isPhoneLayout()) {
-      this.renderMobileMoveButton(card, config, groups, group, row, groupField, subgroupField, subgroupKey);
-    }
     const openBtn = controls.createEl("button", {
       cls: "db-board-card-open",
       attr: { "aria-label": t("menu.openNote"), title: t("menu.openNote") },
@@ -349,23 +369,36 @@ export class BoardRenderer {
       event.stopPropagation();
       this.actions.openRow(row);
     };
+    if (!this.actions.isReadOnly && this.isPhoneLayout()) {
+      this.renderMobileMoveButton(controls, config, groups, group, row, groupField, subgroupField, subgroupKey);
+    }
     const columns = this.actions.getColumns(config);
     const titleField = this.getTitleField(config, columns);
+    const titleCol = titleField ? columns.find((col) => col.key === titleField) : undefined;
     const title = titleField ? this.getTitleText(config, row, titleField) : "";
-    if (title) {
-      card.createDiv({ cls: "db-board-card-title", text: title, attr: { title } });
+    if (title && titleCol) {
+      const titleEl = card.createDiv({
+        cls: "db-board-card-title",
+        attr: { title: titleCol.key === "file.name" ? row.file.path : title },
+      });
+      if (titleCol.key === "file.name") {
+        renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
+      } else {
+        titleEl.textContent = title;
+      }
     }
     const meta = card.createDiv({ cls: "db-board-card-meta" });
     const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
-      const empty = this.isEmptyValue(value);
+      const empty = this.isEmptyValue(value) && col.type !== "checkbox";
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
-      const item = meta.createDiv({ cls: "db-board-card-field" });
+      const item = meta.createDiv({ cls: "db-board-card-field", attr: { "data-note-database-column-key": col.key } });
       item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
+      if (col.type === "checkbox") item.addClass("is-checkbox-field");
       if (col.wrap) item.addClass("db-board-card-field-wrap");
       const label = item.createSpan({ text: col.label });
       this.attachColumnContextMenu(item, col);
@@ -406,7 +439,7 @@ export class BoardRenderer {
       cls: "db-card-mobile-move-btn",
       attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
     });
-    setIcon(button, "move");
+    renderMobileMoveIcon(button);
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -482,20 +515,10 @@ export class BoardRenderer {
     subgroupField?: string,
     subgroupKey?: string
   ): string[] {
-    const order = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== draggedPath);
-    if (subgroupField && subgroupKey != null && !targetPath) {
-      const subgroupPaths = new Set((group.subgroups?.find((subgroup) => subgroup.key === subgroupKey)?.rows || [])
-        .map((candidate) => candidate.file.path)
-        .filter((path) => path !== draggedPath));
-      const subgroupIndexes = order
-        .map((path, index) => subgroupPaths.has(path) ? index : -1)
-        .filter((index) => index >= 0);
-      const insertIndex = placement === "top"
-        ? (subgroupIndexes[0] ?? order.length)
-        : ((subgroupIndexes[subgroupIndexes.length - 1] ?? (order.length - 1)) + 1);
-      order.splice(insertIndex, 0, draggedPath);
-      return order;
-    }
+    const targetRows = subgroupField && subgroupKey != null
+      ? group.subgroups?.find((subgroup) => subgroup.key === subgroupKey)?.rows || []
+      : group.rows;
+    const order = targetRows.map((candidate) => candidate.file.path).filter((path) => path !== draggedPath);
     if (placement === "top") return [draggedPath, ...order];
     if (placement === "bottom" || !targetPath) return [...order, draggedPath];
     const targetIndex = order.indexOf(targetPath);
@@ -533,13 +556,13 @@ export class BoardRenderer {
   }
 
   private getCardDropOrder(
-    group: BoardGroup,
+    rows: RowData[],
     draggedPath: string,
     targetPath: string,
     event: DragEvent,
     card: HTMLElement
   ): string[] {
-    const order = group.rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
+    const order = rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
     const target = order.indexOf(targetPath);
     if (draggedPath === targetPath || target < 0) return order;
     const rect = card.getBoundingClientRect();
@@ -559,12 +582,23 @@ export class BoardRenderer {
     subgroupKey?: string,
     fromSubgroup?: string
   ): Promise<void> {
-    if (fromGroup && fromGroup !== groupKey) await this.actions.updateGroup(row, groupField, groupKey, fromGroup);
-    if (subgroupField && subgroupKey != null && fromSubgroup && fromSubgroup !== subgroupKey) {
-      await this.actions.updateGroup(row, subgroupField, subgroupKey, fromSubgroup);
-    }
     if (!order.includes(draggedPath)) order = [...order, draggedPath];
-    this.updateCardOrder(groupField, groupKey, order);
+    const position = this.getDropPositionFromOrder(order, draggedPath);
+    const groupUpdates: Array<{ field: string; fromGroupKey: string; toGroupKey: string }> = [];
+    if (fromGroup && fromGroup !== groupKey) {
+      groupUpdates.push({ field: groupField, fromGroupKey: fromGroup, toGroupKey: groupKey });
+    }
+    if (subgroupField && subgroupKey != null && fromSubgroup && fromSubgroup !== subgroupKey) {
+      groupUpdates.push({ field: subgroupField, fromGroupKey: fromSubgroup, toGroupKey: subgroupKey });
+    }
+    if (groupUpdates.length > 0 && this.actions.moveRowWithGroupUpdatesAndPosition) {
+      await this.actions.moveRowWithGroupUpdatesAndPosition(row, groupUpdates, position.before, position.after);
+      return;
+    }
+    for (const update of groupUpdates) {
+      await this.actions.updateGroup(row, update.field, update.toGroupKey, update.fromGroupKey);
+    }
+    this.actions.moveRowToPosition(draggedPath, position.before, position.after);
   }
 
   private getContainerDropOrder(
@@ -573,22 +607,22 @@ export class BoardRenderer {
     subgroupField?: string,
     subgroup?: BoardSubgroup
   ): string[] {
-    const paths = group.rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
-    if (!subgroupField || !subgroup) return [...paths, draggedPath];
-    const subgroupPathSet = new Set(subgroup.rows.map((row) => row.file.path));
-    let insertIndex = paths.length;
-    for (let index = paths.length - 1; index >= 0; index--) {
-      if (subgroupPathSet.has(paths[index])) {
-        insertIndex = index + 1;
-        break;
-      }
-    }
-    paths.splice(insertIndex, 0, draggedPath);
-    return paths;
+    const rows = subgroupField && subgroup ? subgroup.rows : group.rows;
+    const paths = rows.map((row) => row.file.path).filter((path) => path !== draggedPath);
+    return [...paths, draggedPath];
   }
 
   private updateCardOrder(groupField: string, groupKey: string, paths: string[]): void {
     this.actions.updateCardOrder(groupField, groupKey, paths);
+  }
+
+  private getDropPositionFromOrder(order: string[], movedPath: string): { before?: string; after?: string } {
+    const index = order.indexOf(movedPath);
+    if (index < 0) return {};
+    return {
+      before: index > 0 ? order[index - 1] : undefined,
+      after: index < order.length - 1 ? order[index + 1] : undefined,
+    };
   }
 
   private canReorderCards(config: ViewConfig): boolean {
@@ -651,7 +685,7 @@ export class BoardRenderer {
   }
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
-    if (col.key === "file.name") return row.file.name.replace(/\.md$/, "");
+    if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
     return row.frontmatter[col.key];
   }
@@ -680,8 +714,18 @@ export class BoardRenderer {
       this.actions.editCell(valueEl, row, col, event);
     });
     if (col.type === "checkbox") {
-      valueEl.textContent = toBooleanValue(value) ? t("common.true") : t("common.false");
-      setFieldTooltip(valueEl, valueEl.textContent);
+      valueEl.addClass("db-checkbox-cell");
+      const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = toBooleanValue(value);
+      cb.onclick = (event) => event.stopPropagation();
+      if (!this.actions.isReadOnly) {
+        cb.onchange = () => {
+          void this.actions.editCell(valueEl, row, col);
+        };
+      } else {
+        cb.disabled = true;
+      }
+      setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;
     }
     if (col.type === "select" || col.type === "status") {
@@ -719,6 +763,25 @@ export class BoardRenderer {
 
     valueEl.textContent = Array.isArray(value) ? value.join(", ") : String(value);
     setFieldTooltip(valueEl, valueEl.textContent);
+  }
+
+  renderCardFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
+    const value = this.getCellValue(row, col);
+    const empty = this.isEmptyValue(value) && col.type !== "checkbox";
+    const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+    const item = document.createElement("div");
+    item.className = "db-board-card-field";
+    item.setAttribute("data-note-database-column-key", col.key);
+    item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
+    setFieldTooltip(item, displayValue, col.label);
+    if (empty) item.classList.add("is-empty-field");
+    if (col.type === "checkbox") item.classList.add("is-checkbox-field");
+    if (col.wrap) item.classList.add("db-board-card-field-wrap");
+    const label = item.createSpan({ text: col.label });
+    this.attachColumnContextMenu(item, col);
+    this.attachColumnContextMenu(label, col);
+    this.renderPreviewValue(item, row, col, displayValue, empty);
+    return item;
   }
 
   private isEmptyValue(value: unknown): boolean {

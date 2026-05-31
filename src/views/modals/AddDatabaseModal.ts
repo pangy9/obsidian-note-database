@@ -5,7 +5,6 @@ export interface AddDatabaseModalResult {
   name: string;
   sourceFolder: string;
   typeFilter: string;
-  createAs: "settings" | "file";
 }
 
 export class AddDatabaseModal extends Modal {
@@ -13,11 +12,10 @@ export class AddDatabaseModal extends Modal {
   private name = t("defaults.newDatabase");
   private sourceFolder = "";
   private typeFilter = "";
-  private createAs: "settings" | "file" = "settings";
 
   constructor(
     app: App,
-    private defaultFolder: string
+    private defaultFolder: string,
   ) {
     super(app);
   }
@@ -44,7 +42,7 @@ export class AddDatabaseModal extends Modal {
 
     new Setting(contentEl)
       .setName(t("settings.sourceFolder"))
-      .setDesc(t("addDatabase.sourceDesc"))
+      .setDesc(t("addDatabase.sourceDesc", { folder: this.defaultFolder || "/" }))
       .addText((text) => {
         text.setValue(this.sourceFolder);
         text.setPlaceholder(t("settings.sourceFolder.placeholder"));
@@ -60,15 +58,6 @@ export class AddDatabaseModal extends Modal {
         text.setPlaceholder(t("settings.typeFilter.placeholder"));
         text.inputEl.addClass("db-fullwidth-input");
         text.onChange((v) => { this.typeFilter = v.trim(); });
-      });
-
-    new Setting(contentEl)
-      .setName(t("addDatabase.createAs"))
-      .addDropdown((dd) => {
-        dd.addOption("settings", t("addDatabase.createInSettings"));
-        dd.addOption("file", t("addDatabase.createAsFile"));
-        dd.setValue(this.createAs);
-        dd.onChange((v) => { this.createAs = v as "settings" | "file"; });
       });
 
     const btnRow = contentEl.createDiv({ cls: "db-delete-modal-buttons" });
@@ -87,7 +76,6 @@ export class AddDatabaseModal extends Modal {
         name: this.name,
         sourceFolder: this.sourceFolder,
         typeFilter: this.typeFilter || "",
-        createAs: this.createAs,
       });
       this.close();
     };

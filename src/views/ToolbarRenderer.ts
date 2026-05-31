@@ -9,7 +9,7 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 
 export interface ToolbarViewEntry {
   config: DatabaseConfig;
-  sourcePath: string | null;
+  sourcePath: string;
 }
 
 export interface ToolbarActions {
@@ -38,7 +38,7 @@ export interface ToolbarActions {
   toggleViewConfig(anchorEl: HTMLElement): void;
   configureGroupOrder(): void;
   toggleSortPanel(anchorEl: HTMLElement): void;
-  syncComputedFields(): void;
+  syncComputedFields?(): void;
   toggleFilterPanel(anchorEl: HTMLElement): void;
   toggleColumnManager(anchorEl: HTMLElement): void;
   closeToolbarPopovers?(): void;
@@ -61,6 +61,10 @@ export class ToolbarRenderer {
   private removeDatabasePopoverListener?: () => void;
   private groupPopover?: HTMLElement;
   private removeGroupPopoverListener?: () => void;
+  private groupPopoverConfig?: ViewConfig;
+  private groupPopoverViewType?: DatabaseViewType;
+  private groupPopoverActions?: ToolbarActions;
+  private groupPopoverState?: DatabaseViewState;
   private viewTabPopover?: HTMLElement;
   private removeViewTabPopoverListener?: () => void;
   private exportPopover?: HTMLElement;
@@ -178,8 +182,8 @@ export class ToolbarRenderer {
 
     if (actions.showDatabaseChrome && currentDb) {
       this.renderViewTabs(left, currentDb, currentViewIndex, actions);
-    } else if (currentDb && currentDb.views.length > 1) {
-      // Show view tabs for multi-view databases even without database chrome
+    } else if (currentDb && currentDb.views.length > 0) {
+      // Embedded views still show a single active tab so the toolbar shape stays consistent.
       this.renderViewTabs(left, currentDb, currentViewIndex, actions);
     }
     if (phoneLayout) this.renderSearch(left, state, actions);
@@ -189,7 +193,6 @@ export class ToolbarRenderer {
     this.renderSortButton(right, state, actions);
     this.renderViewConfigButton(right, actions);
     this.renderGroupSelect(right, currentView, state, actions);
-    this.renderSyncButton(right, currentView, actions);
     this.renderColumnButton(right, currentView, state, actions);
     this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
@@ -249,31 +252,14 @@ export class ToolbarRenderer {
     updateState: (entries: ToolbarViewEntry[], currentIndex: number) => void
   ): void {
     panel.empty();
-    const settingsEntries = viewEntries.filter(e => !e.sourcePath);
-    const fileEntries = viewEntries.filter(e => e.sourcePath);
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("settings.databaseList.title") });
 
-    if (settingsEntries.length > 0) {
-      this.renderDatabasePopoverSection(panel, t("settings.databaseList.title"));
-      settingsEntries.forEach((entry) => {
-        const i = viewEntries.indexOf(entry);
-        this.renderDatabasePopoverRow(panel, anchorEl, viewEntries, entry, i, currentDbIndex, actions, true, updateState);
-      });
-    }
+    viewEntries.forEach((entry, i) => {
+      this.renderDatabasePopoverRow(panel, anchorEl, viewEntries, entry, i, currentDbIndex, actions, true, updateState);
+    });
 
-    if (fileEntries.length > 0) {
-      this.renderDatabasePopoverSection(panel, "Markdown");
-      fileEntries.forEach((entry) => {
-        const i = viewEntries.indexOf(entry);
-        this.renderDatabasePopoverRow(panel, anchorEl, viewEntries, entry, i, currentDbIndex, actions, true, updateState);
-      });
-    }
     positionToolbarPopover(panel, anchorEl);
-  }
-
-  private renderDatabasePopoverSection(panel: HTMLElement, title: string): void {
-    panel.createDiv({ cls: "db-database-popover-section-title", text: title });
   }
 
   private renderDatabasePopoverRow(
@@ -288,7 +274,7 @@ export class ToolbarRenderer {
     updateState: (entries: ToolbarViewEntry[], currentIndex: number) => void
   ): void {
     const row = panel.createEl("button", {
-      cls: `db-database-popover-row${entry.sourcePath ? " has-source" : ""}${index === currentDbIndex ? " is-active" : ""}${canMove && actions.moveDatabase ? " is-draggable" : ""}`,
+      cls: `db-database-popover-row${index === currentDbIndex ? " is-active" : ""}${canMove && actions.moveDatabase ? " is-draggable" : ""}`,
       attr: { type: "button" },
     });
     const drag = row.createSpan({ cls: "db-database-popover-drag", text: canMove && actions.moveDatabase ? "⋮⋮" : "" });
@@ -296,7 +282,6 @@ export class ToolbarRenderer {
       const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
       const sameSourceIndexes = viewEntries
         .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
-        .filter(({ candidate }) => Boolean(candidate.sourcePath) === Boolean(entry.sourcePath))
         .map(({ candidateIndex }) => candidateIndex);
       const sourcePosition = sameSourceIndexes.indexOf(index);
       const upBtn = moveControls.createEl("button", {
@@ -320,9 +305,8 @@ export class ToolbarRenderer {
         this.moveDatabasePopoverEntry(panel, anchorEl, viewEntries, currentDbIndex, actions, updateState, index, sameSourceIndexes[sourcePosition + 1]);
       };
     }
-    const label = entry.config.name || (entry.sourcePath ? t("common.untitled") : `${t("common.database")} ${index + 1}`);
+    const label = entry.config.name || t("common.untitled");
     row.createSpan({ cls: "db-database-popover-label", text: label });
-    if (entry.sourcePath) row.createSpan({ cls: "db-database-popover-source", text: entry.sourcePath });
     if (index === currentDbIndex) setIcon(row.createSpan({ cls: "db-database-popover-check" }), "check");
     row.onclick = () => {
       actions.selectDatabase(index);
@@ -347,7 +331,7 @@ export class ToolbarRenderer {
       event.preventDefault();
       const from = this.draggedDatabaseIndex;
       const fromEntry = viewEntries[from];
-      if (!fromEntry || Boolean(fromEntry.sourcePath) !== Boolean(entry.sourcePath)) {
+      if (!fromEntry) {
         this.clearDatabaseDragState(panel);
         return;
       }
@@ -377,7 +361,7 @@ export class ToolbarRenderer {
     if (to == null || from === to || from < 0 || to < 0) return;
     const fromEntry = viewEntries[from];
     const toEntry = viewEntries[to];
-    if (!fromEntry || !toEntry || Boolean(fromEntry.sourcePath) !== Boolean(toEntry.sourcePath)) return;
+    if (!fromEntry || !toEntry) return;
     const activeEntry = viewEntries[currentDbIndex];
     const nextEntries = [...viewEntries];
     const [moved] = nextEntries.splice(from, 1);
@@ -839,9 +823,7 @@ export class ToolbarRenderer {
     config: ViewConfig | undefined,
     actions: ToolbarActions
   ): void {
-    const current = entry?.sourcePath
-      ? config?.displayWidth || "default"
-      : config?.dashboardDisplayWidth || config?.displayWidth || "default";
+    const current = config?.displayWidth || "default";
     const next = current === "wide" ? "default" : "wide";
     const btn = this.createIconButton(toolbar, "", current === "wide" ? t("toolbar.defaultWidth") : t("toolbar.wide"), "db-width-toggle-btn");
     btn.innerHTML = current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut;
@@ -897,7 +879,7 @@ export class ToolbarRenderer {
       this.closeViewTabPopover();
       this.closeExportPopover();
       this.closeTitleActionsPopover();
-      this.renderGroupPopover(btn, config, currentViewType, groupValue || "", actions);
+      this.renderGroupPopover(btn, config, currentViewType, groupValue || "", actions, state);
     };
     return groupValue || "";
   }
@@ -907,7 +889,8 @@ export class ToolbarRenderer {
     config: ViewConfig,
     currentViewType: DatabaseViewType,
     groupValue: string,
-    actions: ToolbarActions
+    actions: ToolbarActions,
+    state: DatabaseViewState
   ): void {
     const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
     if (!root) return;
@@ -918,6 +901,35 @@ export class ToolbarRenderer {
 
     const panel = root.createDiv({ cls: "db-group-popover" });
     this.groupPopover = panel;
+    this.groupPopoverConfig = config;
+    this.groupPopoverViewType = currentViewType;
+    this.groupPopoverActions = actions;
+    this.groupPopoverState = state;
+
+    this.populateGroupPopover(panel, config, currentViewType, groupValue, actions);
+
+    positionToolbarPopover(panel, anchorEl);
+    const onOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && (panel.contains(target) || anchorEl.contains(target))) return;
+      this.closeGroupPopover();
+    };
+    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeGroupPopover() });
+    this.removeGroupPopoverListener = () => {
+      clearTimeout(popoverTimer);
+      document.removeEventListener("mousedown", onOutside, true);
+      removeAutoClose();
+    };
+  }
+
+  private populateGroupPopover(
+    panel: HTMLElement,
+    config: ViewConfig,
+    currentViewType: DatabaseViewType,
+    groupValue: string,
+    actions: ToolbarActions
+  ): void {
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("toolbar.group") });
 
@@ -944,19 +956,26 @@ export class ToolbarRenderer {
         onClick: () => actions.setGroupByField(col.key),
       });
     }
-    positionToolbarPopover(panel, anchorEl);
-    const onOutside = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && (panel.contains(target) || anchorEl.contains(target))) return;
-      this.closeGroupPopover();
-    };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
-    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeGroupPopover() });
-    this.removeGroupPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
-      removeAutoClose();
-    };
+  }
+
+  private rebuildGroupPopover(): void {
+    const panel = this.groupPopover;
+    if (!panel?.isConnected) return;
+    const config = this.groupPopoverConfig;
+    const viewType = this.groupPopoverViewType;
+    const actions = this.groupPopoverActions;
+    const state = this.groupPopoverState;
+    if (!config || !viewType || !actions || !state) return;
+
+    const scrollTop = panel.scrollTop;
+    panel.empty();
+
+    const groupValue = viewType === "board"
+      ? config.boardGroupField || ""
+      : state.groupByField || "";
+
+    this.populateGroupPopover(panel, config, viewType, groupValue, actions);
+    panel.scrollTop = scrollTop;
   }
 
   private renderGroupPopoverSection(panel: HTMLElement, title: string): void {
@@ -979,7 +998,7 @@ export class ToolbarRenderer {
     if (options.active) setIcon(row.createSpan({ cls: "db-group-popover-check" }), "check");
     row.onclick = () => {
       options.onClick();
-      this.closeGroupPopover();
+      this.rebuildGroupPopover();
     };
   }
 
@@ -1101,14 +1120,6 @@ export class ToolbarRenderer {
   private getSortRuleCount(state: DatabaseViewState): number {
     return state.sortRules.filter((rule) => rule.field && rule.direction).length ||
     (state.sortColumn ? 1 : 0);
-  }
-
-  private renderSyncButton(toolbar: HTMLElement, config: ViewConfig | undefined, actions: ToolbarActions): void {
-    const hasComputed = (config?.schema.computedFields.length || 0) > 0;
-    if (!hasComputed) return;
-    const syncBtn = this.createIconButton(toolbar, "", t("toolbar.syncFormulas"));
-    syncBtn.innerHTML = ToolbarRenderer.ICONS.refresh_fx;
-    syncBtn.onclick = () => actions.syncComputedFields();
   }
 
   private renderColumnButton(toolbar: HTMLElement, config: ViewConfig | undefined, state: DatabaseViewState, actions: ToolbarActions): void {

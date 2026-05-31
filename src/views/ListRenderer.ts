@@ -1,8 +1,10 @@
-import { App, Menu, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon } from "obsidian";
 import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
+import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
+import { renderMobileMoveIcon } from "./MobileMoveIcon";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -22,7 +24,16 @@ export interface ListRendererActions {
   toggleRowsSelected(rows: RowData[], selected: boolean): void;
   editCell(target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent): void;
   getColumns(config: ViewConfig): ColumnDef[];
+  moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void;
   moveRowsToGroup?(row: RowData, field: string, fromGroupKey: string, toGroupKey: string): void | Promise<void>;
+  moveRowToGroupAndPosition?(
+    row: RowData,
+    field: string,
+    fromGroupKey: string,
+    toGroupKey: string,
+    beforePath?: string,
+    afterPath?: string
+  ): void | Promise<void>;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
@@ -38,6 +49,7 @@ interface ParsedLink {
 
 export class ListRenderer {
   private rowByPath = new Map<string, RowData>();
+  private draggingPath: string | undefined;
 
   constructor(private app: App, private actions: ListRendererActions) {}
 
@@ -46,7 +58,7 @@ export class ListRenderer {
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
     this.renderTotalHeader(container, rows);
     const list = container.createDiv({ cls: "db-list" });
-    for (const row of rows) this.renderRow(list, config, row);
+    for (const row of rows) this.renderRow(list, config, row, undefined, undefined, undefined, rows);
     this.renderNewRow(list);
   }
 
@@ -77,7 +89,7 @@ export class ListRenderer {
       if (collapsed) continue;
       const list = section.createDiv({ cls: "db-list" });
       this.setupGroupDropTarget(list, groupField, group.key);
-      for (const row of group.rows) this.renderRow(list, config, row, groupField, group.key, groups);
+      for (const row of group.rows) this.renderRow(list, config, row, groupField, group.key, groups, group.rows);
       this.renderNewRow(list, { [groupField]: group.key || "" });
     }
   }
@@ -99,17 +111,16 @@ export class ListRenderer {
     checkbox.onchange = () => this.actions.toggleRowsSelected(rows, checkbox.checked);
   }
 
-  private renderRow(list: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: ListGroup[]): void {
+  private renderRow(list: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: ListGroup[], allRows?: RowData[]): void {
     const item = list.createDiv({
       cls: "db-list-row",
-      attr: { "data-note-database-row-path": row.file.path },
+      attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
     this.attachRowContextMenu(item, row);
-    this.setupGroupedRowDrag(item, row, groupField, groupKey);
-    if (!this.actions.isReadOnly && this.isPhoneLayout() && groupField && groupKey != null && groups?.length) {
-      this.renderMobileMoveButton(item, row, groupField, groupKey, groups);
+    if (allRows) {
+      if (this.canManualReorder(config)) this.setupReorderDrag(item, config, row, allRows, groupField, groupKey);
+      else this.setupGroupedRowDrag(item, row, groupField, groupKey);
     }
-
     const controls = item.createDiv({ cls: "db-list-row-controls" });
     if (!this.actions.isReadOnly) {
       const checkbox = controls.createEl("input", { cls: "db-list-row-checkbox", attr: { type: "checkbox" } });
@@ -129,6 +140,9 @@ export class ListRenderer {
       event.stopPropagation();
       this.actions.openRow(row);
     };
+    if (!this.actions.isReadOnly && this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
+      this.renderMobileMoveButton(controls, config, row, allRows || [], groupField, groupKey, groups);
+    }
 
     const columns = this.actions.getColumns(config);
     const main = item.createDiv({ cls: "db-list-row-main" });
@@ -136,7 +150,15 @@ export class ListRenderer {
     const titleCol = titleField ? config.schema.columns.find((col) => col.key === titleField) : undefined;
     const titleText = titleField ? this.getTitleText(config, row, titleField) : "";
     if (titleCol && titleText) {
-      const title = main.createDiv({ cls: "db-list-row-title", text: titleText, attr: { title: titleText } });
+      const title = main.createDiv({
+        cls: "db-list-row-title",
+        attr: { title: titleCol.key === "file.name" ? row.file.path : titleText },
+      });
+      if (titleCol.key === "file.name") {
+        renderStackedFileTitle(title, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
+      } else {
+        title.textContent = titleText;
+      }
       title.onclick = (event) => {
         if (this.actions.isReadOnly) return;
         event.stopPropagation();
@@ -148,14 +170,15 @@ export class ListRenderer {
     const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
-      const empty = this.isEmptyValue(value);
+      const empty = this.isEmptyValue(value) && col.type !== "checkbox";
       if (empty && config.showEmptyFields !== true) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
-      const field = meta.createDiv({ cls: "db-list-field" });
+      const field = meta.createDiv({ cls: "db-list-field", attr: { "data-note-database-column-key": col.key } });
       if (col.wrap) field.style.flex = "0 0 auto";
       else field.style.flexBasis = `${col.width || config.defaultColumnWidth || 180}px`;
       setFieldTooltip(field, displayValue, col.label);
       if (empty) field.addClass("is-empty-field");
+      if (col.type === "checkbox") field.addClass("is-checkbox-field");
       if (col.wrap) field.addClass("db-list-field-wrap");
       const label = field.createSpan({ cls: "db-list-field-label", text: col.label });
       this.attachColumnContextMenu(field, col);
@@ -181,26 +204,60 @@ export class ListRenderer {
     });
   }
 
-  private renderMobileMoveButton(item: HTMLElement, row: RowData, groupField: string, groupKey: string, groups: ListGroup[]): void {
-    if (!this.actions.moveRowsToGroup) return;
+  /** Phone layouts use a compact menu instead of HTML drag and drop. */
+  private renderMobileMoveButton(
+    item: HTMLElement,
+    config: ViewConfig,
+    row: RowData,
+    rows: RowData[],
+    groupField?: string,
+    groupKey?: string,
+    groups?: ListGroup[]
+  ): void {
     const button = item.createEl("button", {
       cls: "db-list-mobile-move-btn",
-      attr: { type: "button", title: t("mobile.moveToGroup"), "aria-label": t("mobile.moveToGroup") },
+      attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
     });
-    setIcon(button, "folder-input");
+    renderMobileMoveIcon(button);
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
       const menu = new Menu();
-      for (const group of groups) {
-        if (group.key === groupKey) continue;
-        menu.addItem((menuItem) => menuItem
-          .setTitle(group.key || t("common.uncategorized"))
-          .setIcon("folder-input")
-          .onClick(() => void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key)));
+      if (this.canManualReorder(config)) this.addMobilePositionItems(menu, row, rows);
+      if (groupField && groupKey != null && groups?.length) {
+        if (this.canManualReorder(config)) menu.addSeparator();
+        for (const group of groups) {
+          if (group.key === groupKey) continue;
+          menu.addItem((menuItem) => menuItem
+            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setIcon("folder-input")
+            .onClick(() => {
+              const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
+              if (this.actions.moveRowToGroupAndPosition) {
+                void this.actions.moveRowToGroupAndPosition(row, groupField, groupKey, group.key, paths[paths.length - 1], undefined);
+              } else {
+                void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key);
+              }
+            }));
+        }
       }
       menu.showAtMouseEvent(event);
     };
+  }
+
+  /** Add local rank movement actions shared by grouped and ungrouped list rows. */
+  private addMobilePositionItems(menu: Menu, row: RowData, rows: RowData[]): void {
+    const paths = rows.map((candidate) => candidate.file.path);
+    const index = paths.indexOf(row.file.path);
+    const move = (targetIndex: number) => {
+      const remaining = paths.filter((path) => path !== row.file.path);
+      const boundedIndex = Math.max(0, Math.min(targetIndex, remaining.length));
+      this.actions.moveRowToPosition(row.file.path, remaining[boundedIndex - 1], remaining[boundedIndex]);
+    };
+    menu.addItem((item) => item.setTitle(t("menu.moveUp")).setIcon("chevron-up").setDisabled(index <= 0).onClick(() => move(index - 1)));
+    menu.addItem((item) => item.setTitle(t("menu.moveDown")).setIcon("chevron-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(index + 1)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").setDisabled(index <= 0).onClick(() => move(0)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
   }
 
   private setupGroupedRowDrag(item: HTMLElement, row: RowData, groupField?: string, groupKey?: string): void {
@@ -218,6 +275,75 @@ export class ListRenderer {
       item.addClass("is-dragging");
     });
     item.addEventListener("dragend", () => item.removeClass("is-dragging"));
+  }
+
+  private setupReorderDrag(item: HTMLElement, config: ViewConfig, row: RowData, rows: RowData[], groupField?: string, groupKey?: string): void {
+    if (this.actions.isReadOnly || this.isPhoneLayout() || !this.canManualReorder(config)) return;
+    item.draggable = true;
+    item.addEventListener("dragstart", (event) => {
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer?.setData(ROW_MIME, row.file.path);
+      event.dataTransfer?.setData("text/plain", row.file.path);
+      if (groupKey != null) event.dataTransfer?.setData(ROW_FROM_GROUP_MIME, groupKey);
+      this.draggingPath = row.file.path;
+      item.addClass("is-dragging");
+    });
+    item.addEventListener("dragend", () => {
+      this.draggingPath = undefined;
+      item.removeClass("is-dragging");
+      this.clearDropTargets(item.parentElement);
+    });
+    item.addEventListener("dragover", (event) => {
+      const dragPath = this.draggingPath;
+      if (!dragPath || dragPath === row.file.path) return;
+      if (!this.isRowDrag(event)) return;
+      event.preventDefault();
+      const rect = item.getBoundingClientRect();
+      const isAfter = event.clientY > rect.top + rect.height / 2;
+      item.toggleClass("is-drop-after", isAfter);
+      item.toggleClass("is-drop-before", !isAfter);
+    });
+    item.addEventListener("dragleave", () => {
+      item.removeClass("is-drop-before", "is-drop-after");
+    });
+    item.addEventListener("drop", (event) => {
+      if (!this.isRowDrag(event)) return;
+      const dragPath = this.draggingPath || event.dataTransfer?.getData(ROW_MIME);
+      if (!dragPath || dragPath === row.file.path) return;
+      if (!this.rowByPath.has(dragPath)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.draggingPath = undefined;
+      this.clearDropTargets(item.parentElement);
+      const rect = item.getBoundingClientRect();
+      const isAfter = event.clientY > rect.top + rect.height / 2;
+      const currentPaths = rows.map((r) => r.file.path).filter((path) => path !== dragPath);
+      const targetIndex = currentPaths.indexOf(row.file.path);
+      const beforePath = isAfter ? row.file.path : (targetIndex > 0 ? currentPaths[targetIndex - 1] : undefined);
+      const afterPath = isAfter ? (targetIndex < currentPaths.length - 1 ? currentPaths[targetIndex + 1] : undefined) : row.file.path;
+      const fromGroupKey = event.dataTransfer?.getData(ROW_FROM_GROUP_MIME) || "";
+      const draggedRow = this.rowByPath.get(dragPath);
+      if (groupField && groupKey != null && fromGroupKey !== groupKey && draggedRow) {
+        if (this.actions.moveRowToGroupAndPosition) {
+          void this.actions.moveRowToGroupAndPosition(draggedRow, groupField, fromGroupKey, groupKey, beforePath, afterPath);
+        } else {
+          void Promise.resolve(this.actions.moveRowsToGroup?.(draggedRow, groupField, fromGroupKey, groupKey))
+            .then(() => this.actions.moveRowToPosition(dragPath, beforePath, afterPath));
+        }
+      } else {
+        this.actions.moveRowToPosition(dragPath, beforePath, afterPath);
+      }
+    });
+  }
+
+  private clearDropTargets(parent: HTMLElement | null): void {
+    if (!parent) return;
+    parent.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
+      el.classList.remove("is-drop-before", "is-drop-after");
+    });
   }
 
   private setupGroupDropTarget(target: HTMLElement, groupField: string, groupKey: string): void {
@@ -242,7 +368,12 @@ export class ListRenderer {
   }
 
   private isRowDrag(event: DragEvent): boolean {
-    return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+    return Boolean(this.draggingPath) || Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private canManualReorder(config: ViewConfig): boolean {
+    if (config.sortColumn) return false;
+    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
   }
 
   private isPhoneLayout(): boolean {
@@ -256,7 +387,7 @@ export class ListRenderer {
   }
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
-    if (col.key === "file.name") return row.file.name.replace(/\.md$/, "");
+    if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
     return row.frontmatter[col.key];
   }
@@ -285,8 +416,18 @@ export class ListRenderer {
       this.actions.editCell(valueEl, row, col, event);
     });
     if (col.type === "checkbox") {
-      valueEl.textContent = toBooleanValue(value) ? t("common.true") : t("common.false");
-      setFieldTooltip(valueEl, valueEl.textContent);
+      valueEl.addClass("db-checkbox-cell");
+      const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = toBooleanValue(value);
+      cb.onclick = (event) => event.stopPropagation();
+      if (!this.actions.isReadOnly) {
+        cb.onchange = () => {
+          void this.actions.editCell(valueEl, row, col);
+        };
+      } else {
+        cb.disabled = true;
+      }
+      setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;
     }
     if (col.type === "select" || col.type === "status") {
@@ -312,6 +453,26 @@ export class ListRenderer {
 
     valueEl.textContent = Array.isArray(value) ? value.join(", ") : String(value);
     valueEl.title = valueEl.textContent;
+  }
+
+  renderRowFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
+    const value = this.getCellValue(row, col);
+    const empty = this.isEmptyValue(value) && col.type !== "checkbox";
+    const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+    const field = document.createElement("div");
+    field.className = "db-list-field";
+    field.setAttribute("data-note-database-column-key", col.key);
+    if (col.wrap) field.style.flex = "0 0 auto";
+    else field.style.flexBasis = `${col.width || config.defaultColumnWidth || 180}px`;
+    setFieldTooltip(field, displayValue, col.label);
+    if (empty) field.classList.add("is-empty-field");
+    if (col.type === "checkbox") field.classList.add("is-checkbox-field");
+    if (col.wrap) field.classList.add("db-list-field-wrap");
+    const label = field.createSpan({ cls: "db-list-field-label", text: col.label });
+    this.attachColumnContextMenu(field, col);
+    this.attachColumnContextMenu(label, col);
+    this.renderValue(field, row, col, displayValue, empty);
+    return field;
   }
 
   private renderBadge(parent: HTMLElement, col: ColumnDef, value: string): void {

@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, setIcon } from "obsidian";
 import {
   cloneStatusPreset,
   getBuiltinStatusPresets,
@@ -84,21 +84,36 @@ export class StatusPresetManagerModal extends Modal {
       name.oninput = () => {
         preset.name = name.value.trim();
       };
-
       const preview = row.createDiv({ cls: "db-status-preset-preview" });
       for (const option of preset.options.slice(0, 5)) {
         preview.createSpan({ cls: `status-badge status-color-${option.color}`, text: option.value });
       }
       if (preset.options.length > 5) preview.createSpan({ cls: "db-status-preset-more", text: `+${preset.options.length - 5}` });
-      if (preset.id === this.defaultPresetId) preview.createSpan({ cls: "db-status-preset-default-badge", text: t("statusPresets.defaultShort") });
-
+      if (preset.id === this.defaultPresetId) {
+        preview.createSpan({ cls: "db-status-preset-default-badge", text: t("statusPresets.defaultShort") });
+        row.addClass("is-default");
+      }
       const controls = row.createDiv({ cls: "db-status-preset-manager-controls" });
-      controls.createEl("button", { text: t("statusPresets.useAsDefault") }).onclick = () => {
+      const star = row.createSpan({
+        cls: `db-status-preset-default-indicator${preset.id === this.defaultPresetId ? " is-active" : ""}`,
+        attr: { title: t("statusPresets.useAsDefault") }
+      });
+      setIcon(star, "star");
+      star.onclick = () => {
         this.defaultPresetId = preset.id;
+        this.renderList(); // 刷新所有行的星标状态
         this.onOpen();
       };
-      controls.createEl("button", { text: t("statusPresets.editOptions") }).onclick = () => this.openOptionEditor(preset);
-      controls.createEl("button", { text: t("common.delete") }).onclick = () => {
+      const editButton = controls.createEl("button", { cls: "edit-btn", attr: { title: t("common.edit"), "aria-label": t("common.edit") } });
+      setIcon(editButton, "edit");
+      editButton.onclick = () => this.openOptionEditor(preset);
+      this.contentEl.addClass("note-database-modal");
+      const deleteBtn = controls.createEl("button", {
+        cls: "delete-btn",
+        attr: { title: t("common.delete"), "aria-label": t("common.delete") },
+      });
+      setIcon(deleteBtn, "trash");
+      deleteBtn.onclick = () => {
         if (this.presets.length <= 1) {
           new Notice(t("statusPresets.keepOne"));
           return;

@@ -1,6 +1,6 @@
 import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, setIcon, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
-import { sortDatabaseFileEntries, moveDatabaseFilePath } from "./data/DatabaseFileOrder";
+import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { ComputedFieldEngine } from "./data/ComputedField";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
@@ -9,6 +9,7 @@ import { ColumnDef, DatabaseConfig, PluginSettings, SortRule, StatusOptionDef, V
 import { createOptionsFromValues, getStatusPresetOptions, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
 import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/EmbeddedDatabaseRenderer";
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
+import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
 
 /**
@@ -44,10 +45,8 @@ export default class NoteDatabasePlugin extends Plugin {
   private databaseFileConfigCache = new Map<string, DatabaseConfig>();
   private readonly commandNameKeys: Record<string, string> = {
     "open-dashboard": "command.openDashboard",
-    "create-database-file-from-settings": "command.createDatabaseFile",
     "convert-active-base-to-database": "command.convertBase",
     "show-database-files": "command.showDatabaseFiles",
-    "add-active-database-file-to-settings": "command.importDatabaseFile",
     "import-csv-markdown": "command.importCsvMarkdown",
     "export-current-view-as-csv-markdown-zip": "command.exportCsvMarkdown",
     "undo-last-database-edit": "command.undoDatabaseEdit",
@@ -87,7 +86,6 @@ export default class NoteDatabasePlugin extends Plugin {
               newRecordFolder: v.newRecordFolder,
               typeFilter: v.typeFilter,
               schema: v.schema,
-              syncComputedToFrontmatter: v.syncComputedToFrontmatter,
               views: [viewCopy],
             } as DatabaseConfig;
           });
@@ -120,7 +118,6 @@ export default class NoteDatabasePlugin extends Plugin {
 
         if (!rawSettings.databaseFolder) rawSettings.databaseFolder = DEFAULT_SETTINGS.databaseFolder;
         if (!Array.isArray(rawSettings.databaseFileOrder)) rawSettings.databaseFileOrder = [];
-        if (rawSettings.dashboardInitialSource !== "file") rawSettings.dashboardInitialSource = DEFAULT_SETTINGS.dashboardInitialSource;
         rawSettings.statusPresets = normalizeStatusPresets(rawSettings.statusPresets);
         rawSettings.defaultStatusPresetId = resolveDefaultStatusPresetId(rawSettings.statusPresets, rawSettings.defaultStatusPresetId);
         if (Array.isArray(rawSettings.databases)) {
@@ -180,6 +177,11 @@ export default class NoteDatabasePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
+      this.markDatabaseFilesInExplorer();
+      // Migrate legacy settings-based databases to files
+      if (!this.settings.databasesMigrated && Array.isArray(this.settings.databases) && this.settings.databases.length > 0) {
+        void this.migrateDatabasesToFiles();
+      }
     });
 
     // Register database view
@@ -189,14 +191,11 @@ export default class NoteDatabasePlugin extends Plugin {
         this.dbView = new DatabaseView(
           leaf,
           this.dataSource,
-          this.settings.databases,
           this.settings.databaseFileOrder || [],
           this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
           this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
           this.settings.defaultStatusPresetId,
-          () => this.saveSettings(),
-          [],
-          this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
+          () => this.saveSettings()
         );
         return this.dbView;
       }
@@ -239,13 +238,6 @@ export default class NoteDatabasePlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: "create-database-file-from-settings",
-      name: t("command.createDatabaseFile"),
-      callback: async () => {
-        await this.createDatabaseFileFromSettings();
-      },
-    });
-    this.addCommand({
       id: "convert-active-base-to-database",
       name: t("command.convertBase"),
       callback: async () => {
@@ -256,13 +248,6 @@ export default class NoteDatabasePlugin extends Plugin {
       id: "show-database-files",
       name: t("command.showDatabaseFiles"),
       callback: () => this.showDatabaseFiles(),
-    });
-    this.addCommand({
-      id: "add-active-database-file-to-settings",
-      name: t("command.importDatabaseFile"),
-      callback: async () => {
-        await this.importCurrentDatabaseFileToSettings();
-      },
     });
     this.addCommand({
       id: "import-csv-markdown",
@@ -412,15 +397,19 @@ export default class NoteDatabasePlugin extends Plugin {
     });
   }
 
+  /** Open the dashboard and switch to a specific file database. */
+  async openDashboardReference(sourcePath: string): Promise<void> {
+    await this.openDashboard();
+    this.dbView?.openViewReference(sourcePath);
+  }
+
   /** Notify the database view and status bar that settings have changed */
   notifyViewSettingsChanged(): void {
     if (this.dbView) {
       this.dbView.updateConfigs(
-        this.settings.databases,
         this.settings.databaseFileOrder || [],
         this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-        this.settings.defaultStatusPresetId,
-        this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
+        this.settings.defaultStatusPresetId
       );
     }
   }
@@ -440,85 +429,43 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   showDatabaseFiles(): void {
-    new DatabaseFilesModal(
-      this.app,
-      this.dataSource,
-      this.settings,
-      () => this.saveSettings(),
-      () => this.dbView?.updateConfigs(
-        this.settings.databases,
-        this.settings.databaseFileOrder || [],
-        this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-        this.settings.defaultStatusPresetId,
-        this.settings.dashboardInitialSource || DEFAULT_SETTINGS.dashboardInitialSource
-      )
-    ).open();
+    // 打开插件设置界面，定位到数据库列表分组
+    const setting = (this.app as any).setting;
+    if (setting) {
+      setting.open();
+      setting.openTabById(this.manifest.id);
+      // 等待 DOM 渲染后滚动到数据库列表分组
+      requestAnimationFrame(() => {
+        const el = document.getElementById("db-settings-database-group");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    }
   }
 
   private getEmbeddedDatabaseEntries(): EmbeddedDatabaseEntry[] {
-    const entries: EmbeddedDatabaseEntry[] = this.settings.databases.map((config) => ({
-      config,
-      sourcePath: null,
-    }));
+    const entries: EmbeddedDatabaseEntry[] = [];
     for (const entry of sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.settings.databaseFileOrder || [])) {
       entries.push({ config: entry.config, sourcePath: entry.file.path });
     }
     return entries;
   }
 
-  private async createDatabaseFileFromSettings(): Promise<void> {
-    // Check if the active editor file is a database file
-    const activeFile = this.app.workspace.getActiveFile();
-    if (activeFile) {
-      const fm = this.app.metadataCache.getFileCache(activeFile)?.frontmatter as Record<string, unknown> | undefined;
-      if (fm?.["db_view"] === true) {
-        new Notice(t("notice.alreadyDbFile"));
-        return;
-      }
-    }
-
-    // Try to get the currently active database from dashboard
-    let db: DatabaseConfig | null = null;
-    const dbView = this.getActiveDatabaseView();
-    if (dbView) {
-      const activeInfo = dbView.getActiveDatabaseConfig();
-      if (activeInfo?.isFileBased) {
-        new Notice(t("notice.alreadyFileDb"));
-        return;
-      }
-      if (activeInfo?.db) {
-        db = activeInfo.db;
-      }
-    }
-
-    // Fallback to first settings database if dashboard not active
-    if (!db) {
-      db = this.settings.databases[0];
-    }
-    if (!db) {
-      new Notice(t("notice.noExportableDb"));
-      return;
-    }
-    const uniqueName = this.getUniqueDatabaseName(db.name || "Database", new Set([db.name]));
-    const file = await this.dataSource.createViewDefFile(
-      this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
-      uniqueName,
-      db
-    );
-    new Notice(t("notice.createdDbFile", { path: file.path }));
-    this.dataSource.openNote(file);
-  }
-
   private getActiveDatabaseView(): DatabaseView | null {
-    for (const leaf of this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE)) {
-      if ((leaf as any).active && leaf.view instanceof DatabaseView) {
-        return leaf.view;
+    // Check both dashboard view and single-file view types
+    const viewTypes = [DATABASE_VIEW_TYPE, DATABASE_FILE_VIEW_TYPE];
+    for (const viewType of viewTypes) {
+      for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
+        if ((leaf as any).active && leaf.view instanceof DatabaseView) {
+          return leaf.view;
+        }
       }
-    }
-    // Fallback: check if any DatabaseView leaf exists
-    const leaves = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE);
-    if (leaves.length > 0 && leaves[0].view instanceof DatabaseView) {
-      return leaves[0].view;
+      // Fallback: check if any leaf of this type exists
+      const leaves = this.app.workspace.getLeavesOfType(viewType);
+      if (leaves.length > 0 && leaves[0].view instanceof DatabaseView) {
+        return leaves[0].view;
+      }
     }
     return null;
   }
@@ -548,7 +495,7 @@ export default class NoteDatabasePlugin extends Plugin {
       schemaCol.type = col.type;
       // If user changed to an option-based type, collect unique values as options
       if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && originalType !== col.type) {
-        const uniqueValues = this.collectUniqueStringValues(col.key, config.sourceFolder, config.sourceRules);
+        const uniqueValues = collectUniqueStringValues(this.app, col.key, config.sourceFolder, config.sourceRules);
         if (uniqueValues.length > 0) {
           (schemaCol as any).statusOptions = uniqueValues.map((val: string, i: number) => ({
             value: val,
@@ -595,51 +542,11 @@ export default class NoteDatabasePlugin extends Plugin {
   private getUniqueDatabaseName(baseName: string, excludeNames?: Set<string>): string {
     const existing = new Set<string>();
     if (excludeNames) for (const n of excludeNames) existing.add(n);
-    for (const db of this.settings.databases) existing.add(db.name);
     for (const entry of this.dataSource.getViewDefFiles()) existing.add(entry.config.name);
     if (!existing.has(baseName)) return baseName;
     let i = 1;
     while (existing.has(`${baseName} ${i}`)) i++;
     return `${baseName} ${i}`;
-  }
-
-  private async addDatabaseFileToSettings(file: TFile): Promise<void> {
-    const entry = this.dataSource.getViewDefFiles().find((candidate) => candidate.file.path === file.path);
-    if (!entry) {
-      new Notice(t("notice.notValidDbFile"));
-      return;
-    }
-    // Check if already in settings
-    const exists = this.settings.databases.some((db) => db.name === entry.config.name);
-    if (exists) {
-      new Notice(t("notice.dbAlreadyExists", { name: entry.config.name }));
-      return;
-    }
-    this.settings.databases.push(JSON.parse(JSON.stringify(entry.config)) as DatabaseConfig);
-    await this.saveSettings();
-    new Notice(t("notice.addedToSettings", { name: entry.config.name }));
-  }
-
-  private async importCurrentDatabaseFileToSettings(): Promise<void> {
-    const activeFile = this.app.workspace.getActiveFile();
-    const fm = activeFile
-      ? this.app.metadataCache.getFileCache(activeFile)?.frontmatter as Record<string, unknown> | undefined
-      : undefined;
-    if (activeFile instanceof TFile && fm?.["db_view"] === true) {
-      await this.addDatabaseFileToSettings(activeFile);
-      return;
-    }
-
-    const activeInfo = this.getActiveDatabaseView()?.getActiveDatabaseConfig();
-    if (activeInfo?.isFileBased && activeInfo.sourcePath) {
-      const file = this.app.vault.getAbstractFileByPath(activeInfo.sourcePath);
-      if (file instanceof TFile) {
-        await this.addDatabaseFileToSettings(file);
-        return;
-      }
-    }
-
-    new Notice(t("notice.noActiveDbFileToImport"));
   }
 
   async exportCurrentViewAsCsvMarkdownZip(): Promise<void> {
@@ -844,7 +751,6 @@ export default class NoteDatabasePlugin extends Plugin {
         sourceFolder: folder,
         newRecordFolder: folder,
         schema,
-        syncComputedToFrontmatter: true,
         views: views.length > 0 ? views : [{
           id: generateId(),
           name: t("common.tableView"),
@@ -1098,7 +1004,6 @@ export default class NoteDatabasePlugin extends Plugin {
       newRecordFolder: db.newRecordFolder,
       typeFilter: db.typeFilter,
       schema: db.schema,
-      syncComputedToFrontmatter: db.syncComputedToFrontmatter,
     };
   }
 
@@ -1134,17 +1039,17 @@ export default class NoteDatabasePlugin extends Plugin {
     // Scan source folder for additional frontmatter properties and collect value samples
     const sampleValues = new Map<string, unknown[]>();
     const fileCounts = new Map<string, number>();
-    this.collectFileFrontmatterKeys(sourceFolder, parsed.sourceRules, allColumnKeys, sampleValues, fileCounts);
+    collectFileFrontmatterKeys(this.app, sourceFolder, parsed.sourceRules, allColumnKeys, sampleValues, fileCounts);
 
     const STATUS_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
     const inferredColumns: BaseImportColumn[] = [];
     const schema = {
       columns: Array.from(allColumnKeys.entries()).map(([key, label]) => {
-        const type = this.inferColumnType(key, sampleValues.get(key) || []);
+        const type = inferColumnType(key, sampleValues.get(key) || []);
         const col: any = { key, label, type };
         // For tags field, pre-populate options from vault tags
         if ((key === "tags" || key === "tag") && type === "multi-select") {
-          const vaultTags = this.getVaultTags(sourceFolder, parsed.sourceRules);
+          const vaultTags = getVaultTags(this.app, sourceFolder, parsed.sourceRules);
           if (vaultTags.length > 0) {
             col.statusOptions = vaultTags.map((tag: string, i: number) => ({
               value: tag,
@@ -1154,7 +1059,7 @@ export default class NoteDatabasePlugin extends Plugin {
         }
         // For other multi-select fields inferred from list data, collect unique values as options
         if (type === "multi-select" && key !== "tags" && key !== "tag") {
-          const uniqueValues = this.collectUniqueListValues(key, sourceFolder, parsed.sourceRules);
+          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, parsed.sourceRules);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({
               value: val,
@@ -1256,7 +1161,6 @@ export default class NoteDatabasePlugin extends Plugin {
       sourceLogic: "and",
       newRecordFolder: createFolder,
       schema,
-      syncComputedToFrontmatter: true,
       views,
     };
     return { config, inferredColumns };
@@ -1517,43 +1421,6 @@ export default class NoteDatabasePlugin extends Plugin {
     }
   }
 
-  private collectFileFrontmatterKeys(
-    sourceFolder: string,
-    sourceRules: NonNullable<ViewConfig["sourceRules"]>,
-    allKeys: Map<string, string>,
-    sampleValues: Map<string, unknown[]>,
-    fileCounts: Map<string, number> = new Map()
-  ): void {
-    if (!sourceFolder) return;
-    const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(sourceFolder + "/"));
-    for (const f of files) {
-      const cache = this.app.metadataCache.getFileCache(f);
-      const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-      if (!fm) continue;
-      // Apply type filter if present in sourceRules
-      let skip = false;
-      for (const rule of sourceRules) {
-        if (rule.op === "eq" && rule.field === "type" && fm["type"] !== rule.value) { skip = true; break; }
-      }
-      if (skip) continue;
-      for (const key of Object.keys(fm)) {
-        if (!key || key.startsWith("_") || key === "db_view") continue;
-        if (!allKeys.has(key)) {
-          allKeys.set(key, key);
-        }
-        // Collect up to 10 sample values per key for type inference
-        if (!sampleValues.has(key)) sampleValues.set(key, []);
-        const samples = sampleValues.get(key)!;
-        if (samples.length < 10 && fm[key] != null) {
-          samples.push(fm[key]);
-        }
-        // Count files per key
-        fileCounts.set(key, (fileCounts.get(key) || 0) + 1);
-      }
-    }
-  }
-
   private extractListSectionValues(source: string, sectionName: string): string[] {
     const lines = source.split("\n");
     const values: string[] = [];
@@ -1575,115 +1442,6 @@ export default class NoteDatabasePlugin extends Plugin {
     return values.filter(Boolean);
   }
 
-  private getVaultTags(sourceFolder: string, sourceRules: NonNullable<ViewConfig["sourceRules"]>): string[] {
-    const tagSet = new Set<string>();
-    const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(sourceFolder + "/"));
-    for (const f of files) {
-      const cache = this.app.metadataCache.getFileCache(f);
-      const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-      if (!fm) continue;
-      for (const rule of sourceRules) {
-        if (rule.op === "eq" && rule.field === "type" && fm["type"] !== rule.value) continue;
-      }
-      const tags = fm?.["tags"];
-      if (Array.isArray(tags)) {
-        for (const t of tags) if (typeof t === "string") tagSet.add(t);
-      } else if (typeof tags === "string") {
-        for (const t of tags.split(/[,\\s]+/).filter(Boolean)) tagSet.add(t);
-      }
-      // Also collect from frontmatter tags (Obsidian metadataCache.tags)
-      const fmTags = cache?.frontmatter?.tags;
-      if (Array.isArray(fmTags)) {
-        for (const t of fmTags) if (typeof t === "string") tagSet.add(t.replace(/^#/, ""));
-      }
-    }
-    return Array.from(tagSet).sort();
-  }
-
-  /** Collect unique string values for a field across all source files (for status/select options). */
-  private collectUniqueStringValues(
-    fieldKey: string,
-    sourceFolder: string,
-    sourceRules: NonNullable<ViewConfig["sourceRules"]> | undefined
-  ): string[] {
-    const valueSet = new Set<string>();
-    if (!sourceFolder) return [];
-    const rules = sourceRules || [];
-    const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(sourceFolder + "/"));
-    for (const f of files) {
-      const cache = this.app.metadataCache.getFileCache(f);
-      const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-      if (!fm) continue;
-      let skip = false;
-      for (const rule of rules) {
-        if (rule.op === "eq" && rule.field === "type" && fm["type"] !== rule.value) { skip = true; break; }
-      }
-      if (skip) continue;
-      const val = fm[fieldKey];
-      if (val == null || val === "") continue;
-      if (Array.isArray(val)) {
-        for (const item of val) if (typeof item === "string" && item) valueSet.add(item);
-      } else if (typeof val === "string") {
-        valueSet.add(val);
-      }
-    }
-    return Array.from(valueSet).sort();
-  }
-
-  private collectUniqueListValues(
-    fieldKey: string,
-    sourceFolder: string,
-    sourceRules: NonNullable<ViewConfig["sourceRules"]>
-  ): string[] {
-    const valueSet = new Set<string>();
-    const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(sourceFolder + "/"));
-    for (const f of files) {
-      const cache = this.app.metadataCache.getFileCache(f);
-      const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-      if (!fm) continue;
-      let skip = false;
-      for (const rule of sourceRules) {
-        if (rule.op === "eq" && rule.field === "type" && fm["type"] !== rule.value) { skip = true; break; }
-      }
-      if (skip) continue;
-      const val = fm[fieldKey];
-      if (Array.isArray(val)) {
-        for (const item of val) if (typeof item === "string" && item) valueSet.add(item);
-      }
-    }
-    return Array.from(valueSet).sort();
-  }
-
-  private inferColumnType(key: string, sampleValues: unknown[] = []): ColumnDef["type"] {
-    // Data-driven inference from sampled frontmatter values
-    if (sampleValues.length > 0) {
-      const nonNull = sampleValues.filter((v) => v != null && v !== "");
-      if (nonNull.length > 0) {
-        // Obsidian tags → always multi-select
-        if (key === "tags") return "multi-select";
-        // Array values → multi-select (Obsidian list fields)
-        if (nonNull.some((v) => Array.isArray(v))) return "multi-select";
-        // All values are valid dates → date
-        if (nonNull.every((v) => typeof v === "string" && /\d{4}-\d{2}-\d{2}/.test(v) && !isNaN(Date.parse(v)))) return "date";
-        // All values are numbers → number
-        if (nonNull.every((v) => typeof v === "number" || (typeof v === "string" && !isNaN(Number(v)) && v.trim() !== ""))) return "number";
-        // All values are booleans → checkbox
-        if (nonNull.every((v) => typeof v === "boolean")) return "checkbox";
-      }
-    }
-
-    // Fallback: key name heuristics (more conservative to avoid false positives)
-    const lower = key.toLowerCase();
-    if (lower === "file.name") return "text";
-    if (lower.includes("date") || lower.includes("time") || key.includes("日期") || key.includes("时间")) return "date";
-    if (lower.includes("price") || lower.includes("cost") || lower.includes("amount") || key.includes("费用") || key.includes("金额") || key.includes("花费")) return "currency";
-    if (lower.includes("count") || lower.includes("days") || key.includes("天数")) return "number";
-    return "text";
-  }
-
   private markDatabaseFileTabs(): void {
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view as any;
@@ -1696,20 +1454,50 @@ export default class NoteDatabasePlugin extends Plugin {
       tabHeaderEl?.toggleClass("note-database-file-tab", isDatabaseFile);
       view?.containerEl?.toggleClass("note-database-file-leaf", isDatabaseFile);
     }
+    // 标记文件列表中的数据库文件
+    this.markDatabaseFilesInExplorer();
+  }
+
+  private markDatabaseFilesInExplorer(): void {
+    const fileExplorers = this.app.workspace.getLeavesOfType("file-explorer");
+    for (const leaf of fileExplorers) {
+      const container = leaf.view.containerEl;
+      // 查找所有文件条目：.tree-item.nav-file > .tree-item-self[data-path]
+      const fileItems = container.querySelectorAll<HTMLElement>(".tree-item.nav-file");
+      for (const item of fileItems) {
+        const self = item.querySelector<HTMLElement>(".tree-item-self[data-path]");
+        const path = self?.getAttribute("data-path");
+        if (!path) continue;
+        const file = this.app.vault.getAbstractFileByPath(path);
+        const fm = file instanceof TFile
+          ? this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined
+          : undefined;
+        const isDb = file instanceof TFile && fm?.["db_view"] === true;
+
+        const existingBadge = item.querySelector(".nav-file-tag.note-database-tag");
+        if (isDb && !existingBadge) {
+          if (self) {
+            const badge = document.createElement("div");
+            badge.className = "nav-file-tag note-database-tag";
+            badge.textContent = "DB";
+            self.appendChild(badge);
+          }
+        } else if (!isDb && existingBadge) {
+          existingBadge.remove();
+        }
+      }
+    }
   }
 
   private async syncComputedForOpenedFile(file: TFile): Promise<void> {
     if (file.extension !== "md") return;
-    const allDatabases = [
-      ...this.settings.databases,
-      ...this.dataSource.getViewDefFiles().map((entry) => entry.config),
-    ];
+    const allDatabases = this.dataSource.getViewDefFiles().map((entry) => entry.config);
     // Collect computed updates from all matching databases and merge into a single write
     const mergedUpdates: Record<string, unknown> = {};
     for (const db of allDatabases) {
       const view = db.views[0];
       if (!view) continue;
-      if (db.syncComputedToFrontmatter === false || db.schema.computedFields.length === 0) continue;
+      if (db.schema.computedFields.length === 0) continue;
       if (!this.dataSource.getRecordsForConfig(db).some((record) => record.file.path === file.path)) continue;
       const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
       if (!fm) continue;
@@ -1723,6 +1511,52 @@ export default class NoteDatabasePlugin extends Plugin {
     }
     if (Object.keys(mergedUpdates).length > 0) {
       await this.dataSource.updateFrontmatter(file, mergedUpdates);
+    }
+  }
+
+  /** Migrate legacy settings-based databases to vault files. */
+  private async migrateDatabasesToFiles(): Promise<void> {
+    const databases = this.settings.databases;
+    if (!databases || databases.length === 0) return;
+
+    let migrated = 0;
+    for (const db of databases) {
+      try {
+        // Migrate dashboardDisplayWidth → displayWidth on each view
+        for (const view of db.views || []) {
+          if ((view as any).dashboardDisplayWidth && !view.displayWidth) {
+            view.displayWidth = (view as any).dashboardDisplayWidth;
+          }
+          delete (view as any).dashboardDisplayWidth;
+        }
+        const uniqueName = this.getUniqueDatabaseName(db.name || t("common.database"));
+        db.name = uniqueName;
+        await this.dataSource.createViewDefFile(
+          this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+          uniqueName,
+          db
+        );
+        migrated++;
+      } catch (err) {
+        console.error(`Note Database: failed to migrate database "${db.name}":`, err);
+      }
+    }
+
+    this.settings.databases = [];
+    this.settings.databasesMigrated = true;
+    delete (this.settings as any).dashboardInitialSource;
+    await this.saveSettings();
+
+    if (migrated > 0) {
+      new Notice(t("notice.databasesMigrated", { count: migrated }));
+      // Refresh the dashboard view if open
+      if (this.dbView) {
+        this.dbView.updateConfigs(
+          this.settings.databaseFileOrder || [],
+          this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
+          this.settings.defaultStatusPresetId
+        );
+      }
     }
   }
 
@@ -1910,119 +1744,5 @@ class BaseFileSuggestModal extends FuzzySuggestModal<TFile> {
 
   onChooseItem(file: TFile): void {
     this.onChoose(file);
-  }
-}
-
-class DatabaseFilesModal extends Modal {
-  private draggedIndex: number | null = null;
-
-  constructor(
-    app: App,
-    private dataSource: DataSource,
-    private settings: PluginSettings,
-    private onSettingsChanged: () => void | Promise<void>,
-    private onChanged: () => void
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.render();
-  }
-
-  private render(): void {
-    this.contentEl.empty();
-    this.contentEl.addClass("note-database-modal");
-    this.contentEl.createEl("h3", { text: t("settings.databaseFiles.modalTitle") });
-    const files = sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.settings.databaseFileOrder || []);
-    if (files.length === 0) {
-      this.contentEl.createDiv({ cls: "db-panel-empty", text: t("settings.databaseFiles.emptyHint") });
-      return;
-    }
-    const list = this.contentEl.createDiv({ cls: "db-file-list" });
-    files.forEach((entry, index) => {
-      const row = list.createDiv({ cls: "db-file-list-row" });
-      row.ondragover = (event) => {
-        if (this.draggedIndex == null || this.draggedIndex === index) return;
-        event.preventDefault();
-        row.addClass("is-drop-target");
-      };
-      row.ondragleave = () => row.removeClass("is-drop-target");
-      row.ondrop = (event) => {
-        event.preventDefault();
-        row.removeClass("is-drop-target");
-        if (this.draggedIndex == null || this.draggedIndex === index) {
-          this.finishDrag();
-          return;
-        }
-        void this.moveFile(this.draggedIndex, index);
-      };
-      const drag = row.createSpan({
-        cls: "db-file-list-drag",
-        text: "⋮⋮",
-        attr: { title: t("panel.dragToSort") },
-      });
-      drag.draggable = true;
-      drag.ondragstart = (event) => {
-        this.draggedIndex = index;
-        row.addClass("is-dragging");
-        event.dataTransfer?.setData("text/plain", String(index));
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      };
-      drag.ondragend = () => this.finishDrag();
-      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
-      const upBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
-      });
-      setIcon(upBtn, "arrow-up");
-      upBtn.disabled = index === 0;
-      upBtn.onclick = (event) => {
-        event.preventDefault();
-        void this.moveFile(index, index - 1);
-      };
-      const downBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
-      });
-      setIcon(downBtn, "arrow-down");
-      downBtn.disabled = index >= files.length - 1;
-      downBtn.onclick = (event) => {
-        event.preventDefault();
-        void this.moveFile(index, index + 1);
-      };
-      const info = row.createDiv({ cls: "db-file-list-info" });
-      info.createDiv({ cls: "db-file-list-title", text: entry.config.name || entry.file.basename });
-      info.createDiv({ cls: "db-file-list-path", text: entry.file.path });
-      row.createEl("button", { text: t("common.open") }).onclick = () => this.dataSource.openNote(entry.file);
-      row.createEl("button", { text: t("common.delete") }).onclick = () => { void this.deleteFile(entry.file); };
-    });
-  }
-
-  private async moveFile(fromIndex: number, toIndex: number): Promise<void> {
-    const files = sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.settings.databaseFileOrder || []);
-    if (fromIndex < 0 || fromIndex >= files.length || toIndex < 0 || toIndex >= files.length) return;
-    const paths = moveDatabaseFilePath(
-      files.map((entry) => entry.file.path),
-      files[fromIndex].file.path,
-      files[toIndex].file.path
-    );
-    this.settings.databaseFileOrder = paths;
-    this.finishDrag();
-    await this.onSettingsChanged();
-    this.onChanged();
-    this.render();
-  }
-
-  private finishDrag(): void {
-    this.draggedIndex = null;
-    this.contentEl.querySelectorAll(".db-file-list-row").forEach((row) => row.removeClass("is-dragging", "is-drop-target"));
-  }
-
-  private async deleteFile(file: TFile): Promise<void> {
-    if (!window.confirm(t("confirm.deleteDbFile", { path: file.path }))) return;
-    await this.dataSource.trashNote(file);
-    this.settings.databaseFileOrder = (this.settings.databaseFileOrder || []).filter((path) => path !== file.path);
-    await this.onSettingsChanged();
-    this.onChanged();
-    this.render();
   }
 }

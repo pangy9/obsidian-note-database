@@ -3,6 +3,8 @@ import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/C
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
+import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
+import { renderMobileMoveIcon } from "./MobileMoveIcon";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -23,7 +25,16 @@ export interface GalleryRendererActions {
   editCell(target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent): void;
   getColumns(config: ViewConfig): ColumnDef[];
   updateCardSize(width: number): void;
+  moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void;
   moveRowsToGroup?(row: RowData, field: string, fromGroupKey: string, toGroupKey: string): void | Promise<void>;
+  moveRowToGroupAndPosition?(
+    row: RowData,
+    field: string,
+    fromGroupKey: string,
+    toGroupKey: string,
+    beforePath?: string,
+    afterPath?: string
+  ): void | Promise<void>;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
@@ -48,6 +59,7 @@ interface ParsedImage {
 export class GalleryRenderer {
   private resizeState?: { startX: number; startWidth: number; gallery: HTMLElement };
   private rowByPath = new Map<string, RowData>();
+  private draggingPath: string | undefined;
 
   constructor(private app: App, private actions: GalleryRendererActions) {}
 
@@ -56,7 +68,7 @@ export class GalleryRenderer {
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
     this.renderTotalHeader(container, rows);
     const gallery = this.createGallery(container, config);
-    for (const row of rows) this.renderCard(gallery, config, row);
+    for (const row of rows) this.renderCard(gallery, config, row, undefined, undefined, undefined, rows);
     this.renderNewCard(gallery);
   }
 
@@ -86,7 +98,7 @@ export class GalleryRenderer {
       if (collapsed) continue;
       const gallery = this.createGallery(section, config);
       this.setupGroupDropTarget(gallery, groupField, group.key);
-      for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key, groups);
+      for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key, groups, group.rows);
       this.renderNewCard(gallery, { [groupField]: group.key || "" });
     }
   }
@@ -114,15 +126,15 @@ export class GalleryRenderer {
     return gallery;
   }
 
-  private renderCard(gallery: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: GalleryGroup[]): void {
+  private renderCard(gallery: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: GalleryGroup[], allRows?: RowData[]): void {
     const card = gallery.createDiv({
       cls: "db-gallery-card",
-      attr: { "data-note-database-row-path": row.file.path },
+      attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
     this.attachRowContextMenu(card, row);
-    this.setupGroupedCardDrag(card, row, groupField, groupKey);
-    if (!this.actions.isReadOnly && this.isPhoneLayout() && groupField && groupKey != null && groups?.length) {
-      this.renderMobileMoveButton(card, config, row, groupField, groupKey, groups);
+    if (allRows) {
+      if (this.canManualReorder(config)) this.setupReorderDrag(card, config, row, allRows, groupField, groupKey);
+      else this.setupGroupedCardDrag(card, row, groupField, groupKey);
     }
     if (!this.isPhoneLayout()) {
       const resizeHandle = card.createDiv({ cls: "db-gallery-card-resize-handle" });
@@ -154,24 +166,37 @@ export class GalleryRenderer {
       event.stopPropagation();
       this.actions.openRow(row);
     };
+    if (!this.actions.isReadOnly && this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
+      this.renderMobileMoveButton(controls, config, row, allRows || [], groupField, groupKey, groups);
+    }
 
     const columns = this.actions.getColumns(config);
     const titleField = this.getTitleField(config, columns);
+    const titleCol = titleField ? columns.find((col) => col.key === titleField) : undefined;
     const title = titleField ? this.getTitleText(config, row, titleField) : "";
-    if (title) {
-      body.createDiv({ cls: "db-gallery-card-title", text: title, attr: { title } });
+    if (title && titleCol) {
+      const titleEl = body.createDiv({
+        cls: "db-gallery-card-title",
+        attr: { title: titleCol.key === "file.name" ? row.file.path : title },
+      });
+      if (titleCol.key === "file.name") {
+        renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
+      } else {
+        titleEl.textContent = title;
+      }
     }
     const meta = body.createDiv({ cls: "db-gallery-meta" });
     const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
-      const empty = this.isEmptyValue(value);
+      const empty = this.isEmptyValue(value) && col.type !== "checkbox";
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
-      const item = meta.createDiv({ cls: "db-gallery-field" });
+      const item = meta.createDiv({ cls: "db-gallery-field", attr: { "data-note-database-column-key": col.key } });
       item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
+      if (col.type === "checkbox") item.addClass("is-checkbox-field");
       if (col.wrap) item.addClass("db-gallery-field-wrap");
       const label = item.createSpan({ cls: "db-gallery-field-label", text: col.label });
       this.attachColumnContextMenu(item, col);
@@ -197,26 +222,60 @@ export class GalleryRenderer {
     });
   }
 
-  private renderMobileMoveButton(card: HTMLElement, config: ViewConfig, row: RowData, groupField: string, groupKey: string, groups: GalleryGroup[]): void {
-    if (!this.actions.moveRowsToGroup) return;
+  /** Phone layouts use a compact menu instead of HTML drag and drop. */
+  private renderMobileMoveButton(
+    card: HTMLElement,
+    config: ViewConfig,
+    row: RowData,
+    rows: RowData[],
+    groupField?: string,
+    groupKey?: string,
+    groups?: GalleryGroup[]
+  ): void {
     const button = card.createEl("button", {
       cls: "db-card-mobile-move-btn",
-      attr: { type: "button", title: t("mobile.moveToGroup"), "aria-label": t("mobile.moveToGroup") },
+      attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
     });
-    setIcon(button, "folder-input");
+    renderMobileMoveIcon(button);
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
       const menu = new Menu();
-      for (const group of groups) {
-        if (group.key === groupKey) continue;
-        menu.addItem((item) => item
-          .setTitle(group.key || t("common.uncategorized"))
-          .setIcon("folder-input")
-          .onClick(() => void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key)));
+      if (this.canManualReorder(config)) this.addMobilePositionItems(menu, row, rows);
+      if (groupField && groupKey != null && groups?.length) {
+        if (this.canManualReorder(config)) menu.addSeparator();
+        for (const group of groups) {
+          if (group.key === groupKey) continue;
+          menu.addItem((item) => item
+            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setIcon("folder-input")
+            .onClick(() => {
+              const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
+              if (this.actions.moveRowToGroupAndPosition) {
+                void this.actions.moveRowToGroupAndPosition(row, groupField, groupKey, group.key, paths[paths.length - 1], undefined);
+              } else {
+                void this.actions.moveRowsToGroup?.(row, groupField, groupKey, group.key);
+              }
+            }));
+        }
       }
       menu.showAtMouseEvent(event);
     };
+  }
+
+  /** Add local rank movement actions shared by grouped and ungrouped cards. */
+  private addMobilePositionItems(menu: Menu, row: RowData, rows: RowData[]): void {
+    const paths = rows.map((candidate) => candidate.file.path);
+    const index = paths.indexOf(row.file.path);
+    const move = (targetIndex: number) => {
+      const remaining = paths.filter((path) => path !== row.file.path);
+      const boundedIndex = Math.max(0, Math.min(targetIndex, remaining.length));
+      this.actions.moveRowToPosition(row.file.path, remaining[boundedIndex - 1], remaining[boundedIndex]);
+    };
+    menu.addItem((item) => item.setTitle(t("menu.moveUp")).setIcon("chevron-up").setDisabled(index <= 0).onClick(() => move(index - 1)));
+    menu.addItem((item) => item.setTitle(t("menu.moveDown")).setIcon("chevron-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(index + 1)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").setDisabled(index <= 0).onClick(() => move(0)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
   }
 
   private setupGroupedCardDrag(card: HTMLElement, row: RowData, groupField?: string, groupKey?: string): void {
@@ -234,6 +293,75 @@ export class GalleryRenderer {
       card.addClass("is-dragging");
     });
     card.addEventListener("dragend", () => card.removeClass("is-dragging"));
+  }
+
+  private setupReorderDrag(card: HTMLElement, config: ViewConfig, row: RowData, rows: RowData[], groupField?: string, groupKey?: string): void {
+    if (this.actions.isReadOnly || this.isPhoneLayout() || !this.canManualReorder(config)) return;
+    card.draggable = true;
+    card.addEventListener("dragstart", (event) => {
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer?.setData(ROW_MIME, row.file.path);
+      event.dataTransfer?.setData("text/plain", row.file.path);
+      if (groupKey != null) event.dataTransfer?.setData(ROW_FROM_GROUP_MIME, groupKey);
+      this.draggingPath = row.file.path;
+      card.addClass("is-dragging");
+    });
+    card.addEventListener("dragend", () => {
+      this.draggingPath = undefined;
+      card.removeClass("is-dragging");
+      this.clearDropTargets(card.parentElement);
+    });
+    card.addEventListener("dragover", (event) => {
+      const dragPath = this.draggingPath;
+      if (!dragPath || dragPath === row.file.path) return;
+      if (!this.isRowDrag(event)) return;
+      event.preventDefault();
+      const rect = card.getBoundingClientRect();
+      const isAfter = event.clientX > rect.left + rect.width / 2;
+      card.toggleClass("is-drop-after", isAfter);
+      card.toggleClass("is-drop-before", !isAfter);
+    });
+    card.addEventListener("dragleave", () => {
+      card.removeClass("is-drop-before", "is-drop-after");
+    });
+    card.addEventListener("drop", (event) => {
+      if (!this.isRowDrag(event)) return;
+      const dragPath = this.draggingPath || event.dataTransfer?.getData(ROW_MIME);
+      if (!dragPath || dragPath === row.file.path) return;
+      if (!this.rowByPath.has(dragPath)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.draggingPath = undefined;
+      this.clearDropTargets(card.parentElement);
+      const rect = card.getBoundingClientRect();
+      const isAfter = event.clientX > rect.left + rect.width / 2;
+      const currentPaths = rows.map((r) => r.file.path).filter((path) => path !== dragPath);
+      const targetIndex = currentPaths.indexOf(row.file.path);
+      const beforePath = isAfter ? row.file.path : (targetIndex > 0 ? currentPaths[targetIndex - 1] : undefined);
+      const afterPath = isAfter ? (targetIndex < currentPaths.length - 1 ? currentPaths[targetIndex + 1] : undefined) : row.file.path;
+      const fromGroupKey = event.dataTransfer?.getData(ROW_FROM_GROUP_MIME) || "";
+      const draggedRow = this.rowByPath.get(dragPath);
+      if (groupField && groupKey != null && fromGroupKey !== groupKey && draggedRow) {
+        if (this.actions.moveRowToGroupAndPosition) {
+          void this.actions.moveRowToGroupAndPosition(draggedRow, groupField, fromGroupKey, groupKey, beforePath, afterPath);
+        } else {
+          void Promise.resolve(this.actions.moveRowsToGroup?.(draggedRow, groupField, fromGroupKey, groupKey))
+            .then(() => this.actions.moveRowToPosition(dragPath, beforePath, afterPath));
+        }
+      } else {
+        this.actions.moveRowToPosition(dragPath, beforePath, afterPath);
+      }
+    });
+  }
+
+  private clearDropTargets(parent: HTMLElement | null): void {
+    if (!parent) return;
+    parent.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
+      el.classList.remove("is-drop-before", "is-drop-after");
+    });
   }
 
   private setupGroupDropTarget(target: HTMLElement, groupField: string, groupKey: string): void {
@@ -258,7 +386,12 @@ export class GalleryRenderer {
   }
 
   private isRowDrag(event: DragEvent): boolean {
-    return Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+    return Boolean(this.draggingPath) || Array.from(event.dataTransfer?.types || []).includes(ROW_MIME);
+  }
+
+  private canManualReorder(config: ViewConfig): boolean {
+    if (config.sortColumn) return false;
+    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
   }
 
   private isPhoneLayout(): boolean {
@@ -302,7 +435,7 @@ export class GalleryRenderer {
   }
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
-    if (col.key === "file.name") return row.file.name.replace(/\.md$/, "");
+    if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
     return row.frontmatter[col.key];
   }
@@ -331,8 +464,18 @@ export class GalleryRenderer {
       this.actions.editCell(valueEl, row, col, event);
     });
     if (col.type === "checkbox") {
-      valueEl.textContent = toBooleanValue(value) ? t("common.true") : t("common.false");
-      setFieldTooltip(valueEl, valueEl.textContent);
+      valueEl.addClass("db-checkbox-cell");
+      const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = toBooleanValue(value);
+      cb.onclick = (event) => event.stopPropagation();
+      if (!this.actions.isReadOnly) {
+        cb.onchange = () => {
+          void this.actions.editCell(valueEl, row, col);
+        };
+      } else {
+        cb.disabled = true;
+      }
+      setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;
     }
     if (col.type === "select" || col.type === "status") {
@@ -358,6 +501,25 @@ export class GalleryRenderer {
 
     valueEl.textContent = Array.isArray(value) ? value.join(", ") : String(value);
     setFieldTooltip(valueEl, valueEl.textContent);
+  }
+
+  renderCardFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
+    const value = this.getCellValue(row, col);
+    const empty = this.isEmptyValue(value) && col.type !== "checkbox";
+    const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+    const item = document.createElement("div");
+    item.className = "db-gallery-field";
+    item.setAttribute("data-note-database-column-key", col.key);
+    item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
+    setFieldTooltip(item, displayValue, col.label);
+    if (empty) item.classList.add("is-empty-field");
+    if (col.type === "checkbox") item.classList.add("is-checkbox-field");
+    if (col.wrap) item.classList.add("db-gallery-field-wrap");
+    const label = item.createSpan({ cls: "db-gallery-field-label", text: col.label });
+    this.attachColumnContextMenu(item, col);
+    this.attachColumnContextMenu(label, col);
+    this.renderValue(item, row, col, displayValue, empty);
+    return item;
   }
 
   private isEmptyValue(value: unknown): boolean {

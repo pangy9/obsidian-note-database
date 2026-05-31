@@ -4,6 +4,7 @@ import { QueryEngine } from "./QueryEngine";
 import { RowData, ViewConfig } from "./types";
 import { DatabaseViewState } from "../views/ViewStateStore";
 import { getEffectiveFilterRules } from "./FilterRules";
+import { sortByManualRank } from "./ManualOrder";
 
 export class RowPipeline {
   private queryEngine = new QueryEngine();
@@ -16,6 +17,8 @@ export class RowPipeline {
     } else if (state.sortColumn) {
       const col = config.schema.columns.find((c) => c.key === state.sortColumn);
       if (col) rows = this.queryEngine.sort(rows, col, state.sortDirection || "asc");
+    } else if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) {
+      rows = sortByManualRank(rows, config.manualOrder.ranks);
     }
 
     if (state.searchText) {

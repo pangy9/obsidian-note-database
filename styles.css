@@ -68,8 +68,8 @@
   --db-group-table-head-top: calc(var(--db-group-header-top) + var(--db-group-header-height));
   --db-board-header-top: calc(var(--db-table-header-top) - 25px);
   --db-selection-status-offset: 0px;
-  --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 62%, transparent);
-  --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  --db-scrollbar-thumb: color-mix(in srgb, var(--text-muted) 36%, transparent);
+  --db-scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 56%, transparent);
   --db-radius-sm: 4px;
   --db-radius-md: 6px;
   --db-radius-lg: 8px;
@@ -114,8 +114,6 @@
   font-family: var(--font-interface);
   font-size: 13px;
   line-height: 1.4;
-  scrollbar-color: var(--db-scrollbar-thumb) transparent;
-  scrollbar-width: thin;
 }
 
 .note-database-modal {
@@ -140,10 +138,6 @@
   --status-color-fg-rose: #e11d48;
 }
 
-.note-database-container * {
-  scrollbar-color: var(--db-scrollbar-thumb) transparent;
-  scrollbar-width: thin;
-}
 
 .note-database-container::-webkit-scrollbar,
 .note-database-container *::-webkit-scrollbar {
@@ -221,6 +215,19 @@
   max-width: var(--file-line-width, 760px);
   margin-left: auto;
   margin-right: auto;
+}
+
+.note-database-container:not(.is-scrolling)::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.note-database-container:not(.is-scrolling)::-webkit-scrollbar-thumb:horizontal,
+.note-database-container:not(.is-scrolling) *::-webkit-scrollbar-thumb:horizontal {
+  background: var(--db-scrollbar-thumb);
+}
+
+.note-database-container:not(.is-scrolling)::-webkit-scrollbar-thumb:hover {
+  background: var(--db-scrollbar-thumb-hover);
 }
 
 /* 宽屏模式：突破行宽限制，占满可用空间 */
@@ -988,6 +995,97 @@
   background: var(--interactive-accent-hover);
 }
 
+/* 设置页 CSS 变量（设置页不在 .note-database-container 内，需单独定义） */
+.note-database-settings {
+  --db-radius-sm: 4px;
+  --db-radius-md: 6px;
+  --db-radius-lg: 8px;
+}
+
+/* 设置页分组卡片 */
+.note-database-settings .setting-group {
+  background: var(--background-primary-alt);
+  border-radius: var(--db-radius-lg);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  border: 1px solid var(--background-modifier-border);
+}
+.note-database-settings .setting-group-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.note-database-settings .setting-group-desc {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.note-database-settings .setting-group-body .setting-item {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.note-database-settings .setting-group-body .setting-item + .setting-item {
+  border-top: 1px solid var(--background-modifier-border-hover);
+}
+.note-database-settings .setting-group-body .setting-item .setting-item-control select,
+.note-database-settings .setting-group-body .setting-item .setting-item-control input[type="text"],
+.note-database-settings .setting-group-body .setting-item .setting-item-control button {
+  height: 30px;
+  min-height: 30px;
+  border-radius: var(--db-radius-md);
+}
+
+/* 数据库元信息 */
+.note-database-settings .db-settings-database-meta {
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 数据库文件路径 */
+.note-database-settings .db-settings-database-path {
+  color: var(--text-faint);
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* 新建数据库按钮 */
+.note-database-settings .db-settings-add-database {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 6px 14px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  box-shadow: none;
+  --button-shadow: none;
+  --button-shadow-hover: none;
+}
+.note-database-settings .db-settings-add-database:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  border-color: var(--interactive-accent);
+}
+.note-database-settings .db-settings-add-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
 .note-database-settings .db-settings-empty {
   border: 1px dashed var(--background-modifier-border);
   border-radius: var(--db-radius-lg);
@@ -1029,73 +1127,159 @@
 .note-database-settings .db-settings-database-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   margin-bottom: 12px;
 }
 
 .note-database-settings .db-settings-database-card {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
+  border-bottom: 1px solid var(--background-modifier-border);
   margin: 0;
-  padding: 12px;
+  padding: 8px;
 }
 
-.note-database-settings .db-settings-database-card.is-dragging {
-  opacity: 0.55;
-}
-
-.note-database-settings .db-settings-database-card.is-drop-target {
-  background: var(--background-modifier-hover);
-  box-shadow: inset 0 0 0 1px var(--interactive-accent);
-}
-
+/* heading  6 列网格 */
 .note-database-settings .db-settings-database-heading {
-  display: flex;
+  display: grid;
+  /* 拖拽 | 标题(弹性) | 路径(最多200px) | 元信息(固定90px) | 打开按钮 | 删除按钮 */
+  grid-template-columns: 24px minmax(0, 1fr) minmax(0, 200px) 90px 30px 30px;
   align-items: center;
   gap: 8px;
-  width: 100%;
 }
 
-.note-database-settings .db-settings-database-heading h4 {
-  margin: 0;
-}
-
-.note-database-settings .db-settings-database-title {
+/* 所有子元素默认：超出截断，不撑破网格 */
+.note-database-settings .db-settings-database-heading > * {
   min-width: 0;
-  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* 拖拽手柄 */
 .note-database-settings .db-settings-database-drag {
   color: var(--text-faint);
   cursor: grab;
   font-weight: 700;
   user-select: none;
+  text-align: center;
 }
 
+/* 标题：弹性占据剩余空间，过长自动截断 */
+.note-database-settings .db-settings-database-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-database-settings .db-settings-database-title h4 {
+  margin: 0;
+  font-size: 1em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 文件路径：固定槽位，过长截断，颜色淡化 */
+.note-database-settings .db-settings-database-path {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 元信息：固定宽度，强制右对齐，这是"整齐"的关键 */
+.note-database-settings .db-settings-database-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: right;
+  white-space: nowrap;
+  justify-self: end;      /* 在 grid 单元格内右对齐 */
+  width: 100%;            /* 填满 90px 的格子 */
+}
+
+/* 操作按钮：去掉之前的 margin-left: auto，在 grid 里自然居中 */
+.note-database-settings .db-settings-open-button,
 .note-database-settings .db-settings-delete-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 30px;
   height: 30px;
-  margin-left: auto;
   border: 0;
   border-radius: var(--db-radius-sm);
   background: transparent;
-  color: var(--text-muted);
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0;
   padding: 6px;
   box-shadow: none;
   --button-shadow: none;
   --button-shadow-hover: none;
+  transition: opacity 0.15s ease;
+  margin-left: 0;         /* 覆盖原来的 auto */
+  justify-self: center;   /* 在 grid 单元格内居中 */
 }
 
-.note-database-settings .db-settings-delete-button:hover,
-.note-database-settings .db-settings-database-card:hover .db-settings-delete-button {
-  background: var(--background-modifier-hover);
+.note-database-settings .db-settings-open-button {
+  color: var(--text-muted);
+}
+.note-database-settings .db-settings-delete-button {
   color: var(--text-error);
+}
+
+/* hover 时显示按钮 */
+.note-database-settings .db-settings-database-card:hover .db-settings-open-button,
+.note-database-settings .db-settings-database-card:hover .db-settings-delete-button {
   opacity: 0.9;
+}
+
+.note-database-settings .db-settings-open-button:hover {
+  color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+.note-database-settings .db-settings-delete-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+
+.note-database-settings .db-settings-file-database-section {
+  margin: 14px 0 12px;
+}
+
+.note-database-settings .db-settings-file-database-section h4 {
+  margin: 0 0 8px;
+}
+
+.note-database-settings .db-settings-file-database-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-database-settings .db-settings-file-database-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.6fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  padding: 8px 10px;
+}
+
+.note-database-settings .db-settings-file-database-name,
+.note-database-settings .db-settings-file-database-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-settings .db-settings-file-database-name {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.note-database-settings .db-settings-file-database-path {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .note-database-settings .db-settings-trash-row {
@@ -1103,11 +1287,11 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  margin: 10px 0;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
-  background: var(--background-primary);
-  padding: 10px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+.note-database-settings .db-settings-trash-row:last-child {
+  border-bottom: none;
 }
 
 .note-database-settings .db-settings-trash-info {
@@ -1134,33 +1318,129 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 6px;
   margin-left: auto;
   white-space: nowrap;
 }
 
-.note-database-settings .db-settings-trash-restore,
-.note-database-settings .db-settings-trash-danger {
-  min-height: 28px;
+/* 回收站 icon 按钮：与数据库卡片操作按钮风格统一 */
+.note-database-settings .db-settings-trash-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border: 0;
   border-radius: var(--db-radius-sm);
   background: transparent;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 12px;
-  padding: 4px 6px;
+  padding: 4px;
   box-shadow: none;
   --button-shadow: none;
   --button-shadow-hover: none;
 }
 
-.note-database-settings .db-settings-trash-restore:hover {
-  background: transparent;
+.note-database-settings .db-settings-trash-icon-btn:hover {
+  background: var(--background-modifier-hover);
   color: var(--interactive-accent);
 }
 
-.note-database-settings .db-settings-trash-danger:hover {
+.note-database-settings .db-settings-trash-icon-btn.db-settings-trash-danger:hover {
+  color: var(--text-error);
+}
+
+/* 回收站管理弹窗 */
+.note-database-modal .db-trash-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow: auto;
+  margin: 12px 0;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 70%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.note-database-modal .db-trash-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--db-radius-md);
+  transition: background-color 120ms ease;
+}
+.note-database-modal .db-trash-manager-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .db-trash-manager-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.note-database-modal .db-trash-manager-name {
+  font-weight: 600;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-trash-manager-desc {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-trash-manager-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.note-database-modal .db-trash-manager-date {
+  color: var(--text-faint);
+}
+
+.note-database-modal .db-trash-manager-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* 弹窗内的 icon 按钮样式（与设置页一致） */
+.note-database-modal .db-settings-trash-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--db-radius-sm);
   background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  box-shadow: none;
+  --button-shadow: none;
+  --button-shadow-hover: none;
+}
+.note-database-modal .db-settings-trash-icon-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--interactive-accent);
+}
+.note-database-modal .db-settings-trash-icon-btn.db-settings-trash-danger:hover {
   color: var(--text-error);
 }
 
@@ -1314,6 +1594,12 @@
   padding-right: 32px;
 }
 
+.note-database-container.is-row-dragging .db-table th:hover {
+  background: var(--background-primary);
+  color: var(--text-muted);
+  padding-right: 8px;
+}
+
 /* "..." 菜单按钮（悬停时才显示） */
 .note-database-container .db-column-menu-trigger {
   position: absolute;
@@ -1335,6 +1621,11 @@
 .note-database-container .db-table th:hover .db-column-menu-trigger {
   opacity: 1;
   pointer-events: auto;
+}
+
+.note-database-container.is-row-dragging .db-table th:hover .db-column-menu-trigger {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .note-database-container .db-column-menu-trigger:hover {
@@ -1433,15 +1724,172 @@
 
 /* 笔记名称列的链接样式 */
 .note-database-container .db-title-cell a {
+  display: inline-flex;
+  width: 100%;
+  max-width: 100%;
   color: var(--text-normal);
   font-weight: 500;
   text-decoration: none;
+  vertical-align: bottom;
 }
 
 .note-database-container .db-title-cell a:hover {
   color: var(--text-accent);
   text-decoration: underline;
 }
+
+.note-database-container .db-file-title-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 0px;
+  overflow: hidden;
+  flex-wrap: nowrap;
+}
+
+.note-database-container .db-file-title-inline .db-file-title-prefix {
+  flex: 0 0 auto;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: opacity 0.2s ease, max-width 0.2s ease;
+}
+
+/* ========== 自动换行模式下的表格视图（零抖动方案） ========== */
+
+/* 1. 容器允许换行 */
+.note-database-container .db-table td.db-cell-wrap .db-file-title-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+/* 2. 路径前缀：始终占宽，始终可见（但存在感极低） */
+.note-database-container .db-table td.db-cell-wrap .db-file-title-prefix {
+  flex: 0 1 auto;
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  opacity: 0.5;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  transition: opacity 0.2s ease;
+}
+
+/* 3. 文件名：正常换行 */
+.note-database-container .db-table td.db-cell-wrap .db-file-title-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 4. Hover 时前缀变明显（仅透明度变化，无宽度变化） */
+.note-database-container .db-table td.db-cell-wrap:hover .db-file-title-prefix {
+  opacity: 0.7;
+}
+
+.note-database-container .db-title-cell:hover .db-file-title-inline .db-file-title-prefix,
+.note-database-container .db-list-row:hover .db-file-title-inline .db-file-title-prefix {
+  opacity: 0.5;
+  max-width: 100%;
+}
+
+.note-database-container .db-file-title-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-board-card-title .db-file-title-name,
+.note-database-container .db-gallery-card-title .db-file-title-name {
+  white-space: normal;
+  display: flex;
+  flex-wrap: wrap;         /* 允许换行 */
+  align-items: baseline;
+}
+
+.note-database-container .db-file-title-stacked {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.note-database-container .db-file-title-stacked .db-file-title-name {
+  display: block;
+  margin-left: 0;
+  text-align: inherit;
+  white-space: normal;
+}
+
+.note-database-container .db-file-title-stacked .db-file-title-prefix {
+  display: block;
+  order: -1;
+  width: 100%;
+  font-size: 0.7em;
+  opacity: 0;
+  margin-bottom: -2px;
+}
+
+.note-database-container .db-board-card:hover .db-file-title-prefix,
+.note-database-container .db-gallery-card:hover .db-file-title-prefix {
+  opacity: 0.6;
+}
+/* ========== 列表视图：路径前缀放在文件名前面，hover 滑入展开 ========== */
+
+/* 1. 强制列表行的标题变为 flex 行内布局 */
+.note-database-container .db-list-row .db-file-title-stacked,
+.note-database-container .db-list-row .db-file-title-inline {
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  flex-wrap: nowrap;
+  gap: 0px;
+}
+
+/* 2. 路径前缀：放在左侧，默认宽度为 0（隐藏） */
+.note-database-container .db-list-row .db-file-title-prefix {
+  display: inline;
+  order: 0;
+  width: auto;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 1em;
+  color: var(--text-muted);
+  transition: opacity 0.2s ease, max-width 0.2s ease;
+  margin-bottom: 0;            /* 覆盖 stacked 的 margin-bottom */
+}
+
+/* 3. hover 整行时滑入展开 */
+.note-database-container .db-list-row:hover .db-file-title-prefix {
+  opacity: 0.5;
+  max-width: 100%;
+}
+
+/* 4. 文件名：允许收缩，确保 ellipsis 生效 */
+.note-database-container .db-list-row .db-file-title-name {
+  display: inline;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  order: 1;
+}
+
 
 .note-database-container .db-editable-cell {
   cursor: text;
@@ -1502,6 +1950,31 @@
 .note-database-container .db-gallery-card.is-dragging,
 .note-database-container .db-list-row.is-dragging {
   opacity: 0.45;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+}
+
+.note-database-container .db-table tr.is-manual-row-draggable {
+  cursor: grab;
+}
+
+.note-database-container .db-table tr.is-manual-row-draggable:active {
+  cursor: grabbing;
+}
+
+.note-database-container .db-table tr.is-drop-before td,
+.note-database-container .db-table tr.is-drop-after td {
+  position: relative;
+  background: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-primary));
+}
+
+.note-database-container .db-table tr.is-drop-before td {
+  box-shadow: inset 0 3px 0 -1px var(--interactive-accent),
+    inset 0 18px 14px -18px var(--interactive-accent);
+}
+
+.note-database-container .db-table tr.is-drop-after td {
+  box-shadow: inset 0 -3px 0 -1px var(--interactive-accent),
+    inset 0 -18px 14px -18px var(--interactive-accent);
 }
 
 .note-database-container .db-group-header.is-drop-target,
@@ -1606,10 +2079,58 @@
   line-height: 26px;
 }
 
+/* 日期 popover 编辑器：三段式输入弹窗 */
+.db-cell-edit-popover.db-date-edit-popover {
+  padding: 8px 10px;
+  min-width: 170px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-segments {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  height: 34px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-seg {
+  height: 34px;
+  border: 0;
+  border-radius: var(--db-radius-sm);
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 14px;
+  outline: 0;
+  padding: 0 3px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-seg:first-child {
+  width: 50px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-seg:not(:first-child) {
+  width: 28px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-seg::placeholder {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-date-sep {
+  color: var(--text-faint);
+  font-size: 14px;
+  flex-shrink: 0;
+  line-height: 34px;
+}
+
 /* ============================================================================
  *  7. 下拉选项弹出框（状态/选择类型单元格的选项列表）
  * ============================================================================ */
 
+/* 状态、选择、多选的编辑弹窗 */
 .note-database-container .db-cell-option-popover {
   position: absolute;
   z-index: 1000;
@@ -1635,7 +2156,6 @@
   width: 100%;
   min-height: 34px;
   border: 0;
-  border-radius: var(--db-radius-md);
   background: transparent;
   box-shadow: none;
   color: var(--text-normal);
@@ -1644,6 +2164,26 @@
   text-align: left;
   box-sizing: border-box;
   transition: background-color 120ms ease, color 120ms ease;
+  /* 移除独立阴影，改为底部细线分隔 */
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0;           /* 直角，与容器圆角呼应 */
+  margin: 0;                  /* 贴边，由容器控制内边距 */
+}
+
+.note-database-container .db-cell-option-item:first-child {
+  border-radius: var(--db-radius-md) var(--db-radius-md) 0 0;  /* 顶部继承容器圆角 */
+}
+
+.note-database-container .db-cell-option-item:last-of-type {
+  border-bottom: 0;
+  border-radius: 0 0 var(--db-radius-md) var(--db-radius-md);
+}
+
+.note-database-container .db-cell-option-item:hover,
+.note-database-container .db-cell-option-item:focus-visible {
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+  outline: none;
 }
 
 .note-database-container .db-option-drag-handle {
@@ -1673,10 +2213,18 @@
   flex: 1;
   min-width: 0;
   height: 20px;
-  border: 1px solid var(--interactive-accent);
+  border: 0;
   border-radius: 3px;
   padding: 0 4px;
   font-size: 12px;
+  box-shadow: none;
+}
+
+.note-database-container .db-option-rename-input:hover,
+.note-database-container .db-option-rename-input:focus-visible {
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+  outline: none;
 }
 
 .note-database-container .db-option-check {
@@ -1685,34 +2233,30 @@
 }
 
 .note-database-container .db-cell-option-add {
-  width: 100%;
-  box-sizing: border-box;
+  margin: 0px 0 0;        /* 只保留顶部间距，左右贴边 */
+  padding: 6px 10px 8px;  /* 左侧与选项文字对齐（10px ≈ 色块宽度 + 间距） */
+  border-top: 1px solid var(--background-modifier-border);  /* 用顶线分隔列表和输入区 */
 }
 
 .note-database-container .db-cell-option-add input {
-  width: 100%;
-  height: 34px;
-  padding: 4px 10px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-md);
-  background: var(--background-primary);
+  width: 100%;            /* 全宽 */
+  border: 0;
+  border-bottom: 1px solid var(--background-modifier-border);  /* 默认灰色细线 */
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 0;
+  text-align: left;
+  font-size: 14px;
   color: var(--text-normal);
-  font-size: inherit;
-  box-sizing: border-box;
+  transition: border-color 120ms ease;
 }
 
-.note-database-container .db-cell-option-add input:focus,
-.note-database-container .db-cell-option-add input:focus-visible {
-  border-color: var(--background-modifier-border);
-  box-shadow: none;
-  outline: none;
-}
 
-.note-database-container .db-cell-option-item:hover,
-.note-database-container .db-cell-option-item:focus-visible {
-  background: var(--background-modifier-hover);
-  box-shadow: none;
-  outline: none;
+/* placeholder 样式弱化 */
+.note-database-container .db-cell-option-add input::placeholder {
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: left;
 }
 
 .note-database-container .db-option-delete {
@@ -1764,7 +2308,9 @@
 }
 
 .note-database-container .db-checkbox-cell input {
-  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 /* 编辑态单元格：蓝色内边框 */
@@ -1817,6 +2363,36 @@
   outline: none;
   overflow-y: hidden;
   padding: 8px 10px;
+}
+
+.note-database-container .db-cell-line-edit-popover,
+.db-cell-line-edit-popover {
+  min-width: 180px;
+  max-width: 320px;
+}
+
+.note-database-container .db-cell-line-input,
+.db-cell-line-input {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  padding: 8px 10px;
+}
+
+.note-database-container .db-cell-line-input:focus,
+.note-database-container .db-cell-line-input:focus-visible,
+.db-cell-line-input:focus,
+.db-cell-line-input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
 }
 
 .db-cell-edit-popover.is-mobile {
@@ -2258,6 +2834,122 @@
   gap: 8px;
   margin-top: 16px;
 }
+/* ============================================================
+ *  分组排序 Popover — 与筛选/排序面板风格统一
+ * ============================================================ */
+
+/* 1. 外壳：定位由 PopoverPosition 统一计算，避免贴近视口边缘时被裁切 */
+.note-database-container .db-group-order-popover,
+.note-database-modal .db-group-order-popover {
+  z-index: 1000;
+  min-width: 260px;
+  max-width: min(360px, calc(100vw - 48px));
+  max-height: min(480px, calc(100vh - 120px));
+  overflow: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-lg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  padding: 8px;
+  margin: 0;
+}
+
+/* 2. 标题：统一为面板标题（13px 加粗），降低视觉权重 */
+.note-database-container .db-group-order-popover h3,
+.note-database-modal .db-group-order-popover h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-group-order-popover .db-group-order-list,
+.note-database-modal .db-group-order-popover .db-group-order-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 360px;
+  overflow: auto;
+}
+
+/* 3. 列表项：不用卡片边框，改为下划线分隔，和 toolbar popover 保持轻量 */
+.note-database-container .db-group-order-popover .db-group-order-row,
+.note-database-modal .db-group-order-popover .db-group-order-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 10px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0;
+  transition: background-color 120ms ease;
+  margin: 0 6px;
+}
+
+.note-database-container .db-group-order-popover .db-group-order-row:first-child,
+.note-database-modal .db-group-order-popover .db-group-order-row:first-child {
+  border-radius: var(--db-radius-md) var(--db-radius-md) 0 0;
+}
+.note-database-container .db-group-order-popover .db-group-order-row:last-child,
+.note-database-modal .db-group-order-popover .db-group-order-row:last-child {
+  border-radius: 0 0 var(--db-radius-md) var(--db-radius-md);
+  border-bottom: 0;
+}
+
+.note-database-container .db-group-order-popover .db-group-order-row:hover,
+.note-database-modal .db-group-order-popover .db-group-order-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-group-order-popover.is-dragging-order .db-group-order-row:hover,
+.note-database-modal .db-group-order-popover.is-dragging-order .db-group-order-row:hover {
+  background: transparent;
+}
+
+.note-database-container .db-group-order-popover .db-group-order-row.is-dragging,
+.note-database-modal .db-group-order-popover .db-group-order-row.is-dragging {
+  opacity: 0.55;
+}
+
+.note-database-container .db-group-order-popover .db-group-order-drop-line,
+.note-database-modal .db-group-order-popover .db-group-order-drop-line {
+  height: 2px;
+  margin: -1px 6px 0;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+
+/* 拖拽手柄 */
+.note-database-container .db-group-order-popover .db-group-order-drag,
+.note-database-modal .db-group-order-popover .db-group-order-drag {
+  color: var(--text-faint);
+  cursor: grab;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+  font-size: 12px;
+}
+
+/* 名称：降低字重，避免过粗 */
+.note-database-container .db-group-order-popover .db-group-order-name,
+.note-database-modal .db-group-order-popover .db-group-order-name {
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 4. 底部轻量操作：复用排序面板文本按钮的低干扰风格 */
+.note-database-container .db-group-order-popover .db-group-order-reset,
+.note-database-modal .db-group-order-popover .db-group-order-reset {
+  margin-top: 10px;
+  padding: 0 8px;
+  width: auto;
+  text-align: left;
+  margin-bottom: 4px;
+}
 
 .db-migrate-help-icon {
   display: inline-flex;
@@ -2306,32 +2998,217 @@
   flex: 0 0 auto;
   margin-left: auto;
 }
+/* ============================================================
+ *  Base Import Confirm Modal — 确认导入属性
+ * ============================================================ */
 
-/* .base import confirmation modal table */
+/* 1. 表格整体：用 separate + 固定表头，增加纵向间距 */
 .note-database-modal .base-import-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
+  margin: 10px 0 16px;
 }
-.note-database-modal .base-import-table th {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 2px solid var(--background-modifier-border);
-  color: var(--text-muted);
-  font-weight: 500;
-}
-.note-database-modal .base-import-table td {
-  padding: 5px 8px;
+
+/* 2. 表头：Sticky 固定 + 更柔和的分隔线 */
+.note-database-modal .base-import-table thead th {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  text-align: center;
 }
-.note-database-modal .base-import-table select {
-  height: 26px;
+
+/* 表头特殊列宽 */
+.note-database-modal .base-import-table thead th:nth-child(1) { width: 110px; text-align: left; }
+.note-database-modal .base-import-table thead th:nth-child(4) { width: 52px; text-align: center; }
+.note-database-modal .base-import-table thead th:nth-child(5) { width: 56px; text-align: center; }
+
+/* 3. 表格行：增加高度 + hover 反馈 */
+.note-database-modal .base-import-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.note-database-modal .base-import-table tbody tr:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-modal .base-import-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+  vertical-align: middle;
+}
+
+/* 4. 属性名（key）：等宽字体 + 弱化，让它退居次要 */
+.note-database-modal .base-import-table td:first-child {
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+
+/* 5. 显示名称输入框：Obsidian 标准输入框风格 */
+.note-database-modal .base-import-table td:nth-child(2) input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-sm);
+  border-radius: var(--db-radius-md);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: 13px;
-  padding: 0 4px;
+  padding: 0 8px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.note-database-modal .base-import-table tr.base-import-excluded td:nth-child(2) input {
+  background-color: var(--background-secondary);
+  color: var(--text-faint);
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+.note-database-modal .base-import-table td:nth-child(2) input:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+
+.note-database-modal .base-import-table td:nth-child(2) input:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+  outline: none;
+}
+
+/* 6. 类型选择器：图标 */
+.note-database-modal .base-import-type-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-database-modal .base-import-type-cell svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.note-database-modal .base-import-type-cell select {
+  height: 32px;
+  min-width: 110px;
+  max-width: 140px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+  padding: 0 24px 0 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.note-database-modal .base-import-table tr.base-import-excluded .base-import-type-cell select {
+  background-color: var(--background-secondary);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.note-database-modal .base-import-type-cell select:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+
+.note-database-modal .base-import-type-cell select:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+  outline: none;
+}
+
+/* 7. 复选框列：居中 + 统一 accent 色 */
+.note-database-modal .base-import-check-cell {
+  text-align: center;
+}
+
+.note-database-modal .base-import-check-cell input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--interactive-accent);
+}
+
+/* 8. 文件数列：等宽数字 + 弱化 */
+.note-database-modal .base-import-table td:nth-child(5) {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 9. 排除行：灰色背景 + 删除线（排除操作列本身） */
+.note-database-modal .base-import-table tr.base-import-excluded {
+  background: var(--background-secondary);
+}
+
+.note-database-modal .base-import-table tr.base-import-excluded td {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+/* 操作列（checkbox、select）不参与删除线 */
+.note-database-modal .base-import-table tr.base-import-excluded td.base-import-check-cell,
+.note-database-modal .base-import-table tr.base-import-excluded td .base-import-type-cell {
+  text-decoration: none;
+}
+
+/* 10. 底部按钮：独立区域 + 顶部边框分隔 */
+.note-database-modal .base-import-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .base-import-buttons button {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--db-radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.note-database-modal .base-import-buttons button:not(.mod-cta) {
+  border: 1px solid var(--background-modifier-border);
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+.note-database-modal .base-import-buttons button:not(.mod-cta):hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  border-color: var(--background-modifier-border-hover);
+}
+
+.note-database-modal .base-import-buttons button.mod-cta {
+  border: 0;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.note-database-modal .base-import-buttons button.mod-cta:hover {
+  background: var(--interactive-accent-hover);
 }
 
 /* ============================================================================
@@ -2586,6 +3463,7 @@
 
 /* 卡片标题（笔记名） */
 .note-database-container .db-board-card-title {
+  min-width: 0;
   color: var(--text-normal);
   font-size: 13px;
   font-weight: 600;
@@ -2663,8 +3541,8 @@
   word-break: break-word;
 }
 
-.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field) .db-board-card-value:not(.has-badges),
-.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field) .db-board-card-link {
+.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field):not(.is-checkbox-field) .db-board-card-value:not(.has-badges),
+.note-database-container .db-board-card-field:not(.db-board-card-field-wrap):not(.is-image-field):not(.is-checkbox-field) .db-board-card-link {
   display: -webkit-box;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2679,6 +3557,17 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.note-database-container .db-board-card-field.is-checkbox-field .db-board-card-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.note-database-container .db-board-card-field.is-checkbox-field .db-checkbox-cell input {
+  margin: 0;
 }
 
 /* 卡片内图片网格 */
@@ -2869,6 +3758,25 @@
   transform: translateY(-1px);
 }
 
+.note-database-container .db-gallery-card.is-drop-before,
+.note-database-container .db-gallery-card.is-drop-after {
+  border-color: color-mix(in srgb, var(--interactive-accent) 72%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+  transition: none;
+}
+
+.note-database-container .db-gallery-card.is-drop-before {
+  box-shadow: inset 4px 0 0 -2px var(--interactive-accent),
+    inset 20px 0 14px -18px var(--interactive-accent),
+    0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.note-database-container .db-gallery-card.is-drop-after {
+  box-shadow: inset -4px 0 0 -2px var(--interactive-accent),
+    inset -20px 0 14px -18px var(--interactive-accent),
+    0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
 .note-database-container .db-gallery-cover {
   position: relative;
   overflow: hidden;
@@ -2949,6 +3857,7 @@
 }
 
 .note-database-container .db-gallery-card-title {
+  min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text-normal);
   font-size: 13px;
@@ -2999,8 +3908,8 @@
   overflow-wrap: anywhere;
 }
 
-.note-database-container .db-gallery-field:not(.db-gallery-field-wrap) .db-gallery-field-value:not(.has-badges),
-.note-database-container .db-gallery-field:not(.db-gallery-field-wrap) .db-gallery-link {
+.note-database-container .db-gallery-field:not(.db-gallery-field-wrap):not(.is-checkbox-field) .db-gallery-field-value:not(.has-badges),
+.note-database-container .db-gallery-field:not(.db-gallery-field-wrap):not(.is-checkbox-field) .db-gallery-link {
   display: -webkit-box;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3011,6 +3920,17 @@
 
 .note-database-container .db-gallery-field-wrap .db-gallery-field-value {
   text-align: left;
+}
+
+.note-database-container .db-gallery-field.is-checkbox-field .db-gallery-field-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.note-database-container .db-gallery-field.is-checkbox-field .db-checkbox-cell input {
+  margin: 0;
 }
 
 .note-database-container .db-gallery-field-value.db-cell-editing {
@@ -3152,10 +4072,30 @@
   background: var(--background-primary);
   cursor: pointer;
   padding: 8px 10px;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
 .note-database-container .db-list-row:hover {
   background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-list-row.is-drop-before,
+.note-database-container .db-list-row.is-drop-after {
+  border-color: color-mix(in srgb, var(--interactive-accent) 72%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+  transition: none;
+}
+
+.note-database-container .db-list-row.is-drop-before {
+  box-shadow: inset 0 4px 0 -2px var(--interactive-accent),
+    inset 0 20px 14px -18px var(--interactive-accent),
+    0 5px 16px rgba(0, 0, 0, 0.08);
+}
+
+.note-database-container .db-list-row.is-drop-after {
+  box-shadow: inset 0 -4px 0 -2px var(--interactive-accent),
+    inset 0 -20px 14px -18px var(--interactive-accent),
+    0 5px 16px rgba(0, 0, 0, 0.08);
 }
 
 .note-database-container .db-list-row-controls {
@@ -3172,6 +4112,7 @@
 }
 
 .note-database-container .db-list-row-title {
+  min-width: 0;
   color: var(--text-normal);
   font-size: 14px;
   font-weight: 600;
@@ -3223,6 +4164,17 @@
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
+}
+
+.note-database-container .db-list-field.is-checkbox-field .db-list-field-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.note-database-container .db-list-field.is-checkbox-field .db-checkbox-cell input {
+  margin: 0;
 }
 
 .note-database-container .db-list-badges {
@@ -3342,22 +4294,6 @@
   max-height: min(520px, calc(100vh - 140px));
 }
 
-.note-database-container .db-database-popover-section-title {
-  border-top: 1px solid var(--background-modifier-border);
-  color: var(--text-faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  margin: 6px 0 3px;
-  padding: 7px 4px 0;
-}
-
-.note-database-container .db-database-popover-section-title:first-of-type {
-  border-top: 0;
-  margin-top: 2px;
-  padding-top: 0;
-}
-
 .note-database-container .db-database-popover-row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 16px;
@@ -3374,10 +4310,6 @@
   font-size: 12px;
   text-align: left;
   padding: 4px 6px;
-}
-
-.note-database-container .db-database-popover-row.has-source {
-  grid-template-columns: 18px minmax(0, 1fr) minmax(112px, 0.7fr) 16px;
 }
 
 .note-database-container .db-database-popover-row:hover,
@@ -3401,16 +4333,10 @@
   user-select: none;
 }
 
-.note-database-container .db-database-popover-label,
-.note-database-container .db-database-popover-source {
+.note-database-container .db-database-popover-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.note-database-container .db-database-popover-source {
-  color: var(--text-faint);
-  font-size: 11px;
 }
 
 .note-database-container .db-database-popover-check {
@@ -3572,13 +4498,9 @@
 .note-database-container .db-view-config-row {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   gap: 10px;
   padding: 7px 0;
-}
-
-.note-database-container .db-view-config-row-top {
-  align-items: start;
 }
 
 .note-database-container .db-view-config-label {
@@ -3630,10 +4552,9 @@
 }
 
 .note-database-container .db-view-config-range {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .note-database-container .db-view-config-number {
@@ -4746,15 +5667,20 @@
  *  19. 状态选项编辑器（颜色 + 名称 + 拖拽排序）
  * ============================================================================ */
 
+/* ── 预设标签区 ── */
 .note-database-modal .db-status-preset-list {
-  margin-top: 10px;
+  margin: 0 0 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .note-database-modal .db-status-preset-title {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 6px;
+  /* 增加与按钮区的间距 */
+  margin-bottom: 10px;
+  /* 字号稍微缩小，降低标题视觉权重，让按钮更突出 */
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .note-database-modal .db-status-preset-buttons {
@@ -4764,12 +5690,16 @@
 }
 
 .note-database-modal .db-status-preset-button {
+  height: 32px;
   margin: 0;
   border: 0;
-  box-shadow: none;
+  border-radius: var(--db-radius-md);
   background: var(--background-secondary);
+  box-shadow: none;
   color: var(--text-normal);
-  font-size: 12px;
+  font-size: 13px;
+  padding: 0 12px;
+  transition: background-color 120ms ease;
 }
 
 .note-database-modal .db-status-preset-button:hover {
@@ -4778,7 +5708,7 @@
 
 .note-database-modal .db-status-preset-default-row {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(260px, 1fr) auto;
   align-items: center;
   gap: 8px;
   margin: 10px 0;
@@ -4824,9 +5754,9 @@
 .note-database-modal .db-status-preset-manager-row {
   display: grid;
   grid-template-areas:
-    "name controls"
-    "preview controls";
-  grid-template-columns: minmax(260px, 1fr) auto;
+    "icon name controls"
+    "abc preview empty";
+  grid-template-columns: 15px minmax(260px, 1fr) 100px;
   align-items: center;
   gap: 8px 14px;
   padding: 12px 0;
@@ -4836,6 +5766,39 @@
 .note-database-modal .db-status-preset-manager-row:last-child {
   border-bottom: 0;
 }
+
+/* 默认指示器：放在名称输入框左侧，更醒目 */
+.db-status-preset-default-indicator {
+  color: var(--interactive-accent);
+  font-size: 14px;
+  margin-right: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  grid-area: icon;
+  padding-left: 7px;
+  align-items: center;
+}
+
+.db-status-preset-default-indicator.is-active svg {
+  fill: currentColor;
+}
+.db-status-preset-default-indicator:hover {
+  opacity: 1;
+}
+.note-database-modal .db-status-preset-manager-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+
+.db-status-preset-default-indicator.is-active {
+  opacity: 1;
+}
+
+.note-database-modal .db-status-preset-manager-row:hover .db-status-preset-default-indicator {
+  opacity: 1;
+}
+
 
 .note-database-modal .db-status-preset-name-input {
   grid-area: name;
@@ -4875,129 +5838,206 @@
   display: flex;
   align-items: center;
   grid-area: controls;
-  gap: 4px;
+  gap: 10px;
 }
 
 .note-database-modal .db-status-preset-manager-controls button {
   margin: 0;
   box-shadow: none;
   padding: 4px 8px;
+  background: transparent;
 }
 
 .note-database-modal .db-status-preset-manager-controls button:hover {
   box-shadow: none;
 }
 
+.note-database-modal .db-status-preset-manager-controls button.delete-btn {
+  background: none;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.note-database-modal .db-status-preset-manager-row:hover .delete-btn {
+  opacity: 1;
+}
+.note-database-modal .db-status-preset-manager-controls button.delete-btn:hover {
+  color: var(--text-error);
+  background: none;
+}
+
+.note-database-modal .db-status-preset-manager-controls button.edit-btn {
+  background: none;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.note-database-modal .db-status-preset-manager-row:hover .edit-btn {
+  opacity: 1;
+}
+.note-database-modal .db-status-preset-manager-controls button.edit-btn:hover {
+  color: var(--text-normal);
+  background: none;
+}
+
+
+/* 激活态：主色填充 + 文字反色，形成强烈对比 */
+.note-database-modal .db-status-preset-button.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--interactive-accent), 0 2px 8px rgba(0,0,0,0.12);
+}
+
+.note-database-modal .db-status-preset-button.is-active:hover {
+  filter: brightness(1.1);
+}
+
+/* ── 选项列表容器 ── */
 .note-database-modal .db-status-option-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 10px 0;
+  margin: 0;
 }
 
+/* ── 单行选项：统一网格布局 ── */
 .note-database-modal .db-status-option-row {
   display: grid;
+  grid-template-columns: 28px 120px 1fr 36px;   /* 拖拽 | 预览标签 | 编辑区 | 删除 */
+  grid-template-rows: auto auto;                 /* 输入框一行 | 色板一行 */
   grid-template-areas:
-    "drag preview input controls"
-    "drag palette palette .";
-  grid-template-columns: 22px minmax(120px, auto) minmax(180px, 1fr) auto;
+    "drag preview input  delete"
+    "drag palette palette delete";
   align-items: center;
-  gap: 8px;
-  padding-bottom: 6px;
+  gap: 6px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  transition: background-color 120ms ease;
 }
 
-.note-database-modal .db-status-option-row.is-dragging {
-  opacity: 0.55;
+.note-database-modal .db-status-option-row:last-child {
+  border-bottom: 0;
 }
 
-.note-database-modal .db-status-option-row.is-drop-target {
-  border-radius: var(--db-radius-lg);
+.note-database-modal .db-status-option-row:hover {
   background: var(--background-modifier-hover);
 }
 
+/* ── 拖拽柄 ── */
 .note-database-modal .db-status-option-drag {
   grid-area: drag;
+  justify-self: center;
+  align-self: center;
   color: var(--text-faint);
   cursor: grab;
-  font-weight: 700;
-  text-align: center;
+  font-size: 16px;
+  line-height: 1;
   user-select: none;
 }
 
+/* ── 左侧预览标签（只读展示） ── */
 .note-database-modal .db-status-option-preview {
   grid-area: preview;
-  align-self: center;
   justify-self: start;
+  align-self: center;
 }
 
+/* ── 输入框：扁平下划线风格 ── */
 .note-database-modal .db-status-option-input {
   grid-area: input;
   align-self: center;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.note-database-modal .db-status-option-row input,
-.note-database-modal .db-status-option-row select {
-  margin-top: 0;
+.note-database-modal .db-status-option-input input {
+  width: 100%;
+  height: 28px;
+  border: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 2px 0;
+  outline: none;
+  transition: border-color 120ms ease;
 }
 
-/* 颜色选择调色板 */
+.note-database-modal .db-status-option-input input:focus {
+  border-bottom-color: var(--interactive-accent);
+  box-shadow: none;
+  outline: none;
+  border-radius: 0;
+  border: 0;
+}
+
+.note-database-modal .db-status-option-input input::placeholder {
+  color: var(--text-faint);
+}
+
+/* ── 色板：紧凑网格 ── */
 .note-database-modal .db-status-color-palette {
+  grid-area: palette;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  grid-area: palette;
-  min-width: 0;
+  padding: 2px 0;
 }
 
-.note-database-modal .db-status-option-controls {
-  display: flex;
-  grid-area: controls;
-  gap: 4px;
-}
-
-.note-database-modal .db-status-delete-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-
-.note-database-modal .db-status-delete-btn:hover {
-  color: var(--text-error);
-}
-
-/* 单个颜色按钮 */
 .note-database-modal .db-status-color-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 22px;
   height: 22px;
   margin: 0;
-  border: 1px solid transparent;
-  border-radius: var(--db-radius-md);
+  border: 2px solid transparent;           /* 透明边框占位，避免选中时跳动 */
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 80ms ease, border-color 120ms ease;
+}
+
+.note-database-modal .db-status-color-button:hover {
+  transform: scale(1.15);
+}
+
+/* 选中态：内嵌白圈，不外扩 */
+.note-database-modal .db-status-color-button.is-selected {
+  border-color: var(--text-normal);
+  box-shadow: inset 0 0 0 2px var(--background-primary);
+}
+
+/* ── 删除按钮 ── */
+.note-database-modal .db-status-delete-btn {
+  grid-area: delete;
+  justify-self: center;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--db-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
   cursor: pointer;
   padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
 }
 
-.note-database-modal .db-status-color-button.is-selected {
-  border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 1px var(--interactive-accent);
+.note-database-modal .db-status-option-row:hover .db-status-delete-btn {
+  opacity: 1;
 }
 
-/* 颜色指示圆点 */
-.note-database-modal .db-status-color-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: var(--db-radius-sm);
-  background: currentColor;
+.note-database-modal .db-status-delete-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-error);
 }
 
 /* ============================================================================
@@ -5906,6 +6946,11 @@
   box-shadow: inset 2px 0 0 var(--interactive-accent);
 }
 
+.note-database-container.is-row-dragging .db-table th.db-drop-target {
+  background: var(--background-primary);
+  box-shadow: 0 1px 0 var(--background-modifier-border);
+}
+
 /* ============================================================================
  *  23. 数据库文件列表 Modal（查看/打开/删除数据库文件）
  * ============================================================================ */
@@ -5923,7 +6968,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
   border-radius: var(--db-radius-lg);
 }
 
@@ -6155,14 +7200,9 @@
   top: var(--db-table-header-top);
 }
 
-/* ============================================================================
- *  25. 数据库文件视图（db_view: true 的 frontmatter 文件）
- *  在阅读视图中以全宽表格形式渲染
- * ============================================================================ */
-
 
 /* ============================================================================
- *  26. 响应式适配（窄屏/移动端）
+ *  25. 响应式适配（窄屏/移动端）
  *  减小 padding，工具栏纵向排列，搜索框全宽
  * ============================================================================ */
 
@@ -6210,6 +7250,11 @@
   align-items: stretch;
   flex-direction: column;
   gap: 6px;
+}
+
+/* 手机端增大底部留白，避免被 Obsidian 底部导航栏遮挡 */
+.is-phone .note-database-container {
+  padding-bottom: 80px;
 }
 
 .is-phone .note-database-container .db-toolbar-left,
@@ -6264,6 +7309,23 @@
   display: inline-flex;
 }
 
+.is-phone .note-database-settings .setting-group {
+  padding: 12px 14px;
+}
+
+.is-phone .note-database-settings .setting-group-body .setting-item {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.is-phone .note-database-settings .db-settings-delete-button {
+  opacity: 0.55;
+}
+
+.is-phone .note-database-settings .db-settings-database-card .db-settings-delete-button {
+  opacity: 0.55;
+}
+
 .is-phone .note-database-container .db-panel-drag,
 .is-phone .note-database-container .db-column-drag,
 .is-phone .note-database-container .db-database-popover-drag,
@@ -6279,12 +7341,19 @@
   display: none;
 }
 
-.is-phone .note-database-container .db-database-popover-row {
-  grid-template-columns: auto minmax(0, 1fr) 16px;
+/* 手机端数据库列表：简化网格，优先显示排序按钮和标题 */
+.is-phone .note-database-settings .db-settings-database-heading {
+  grid-template-columns: auto minmax(0, 1fr) 30px 30px;
+  gap: 6px;
 }
 
-.is-phone .note-database-container .db-database-popover-row.has-source {
-  grid-template-columns: auto minmax(0, 1fr) minmax(96px, 0.7fr) 16px;
+.is-phone .note-database-settings .db-settings-database-path,
+.is-phone .note-database-settings .db-settings-database-meta {
+  display: none;
+}
+
+.is-phone .note-database-container .db-database-popover-row {
+  grid-template-columns: auto minmax(0, 1fr) 16px;
 }
 
 .is-phone .note-database-container .db-column-manager-row {
@@ -6318,44 +7387,95 @@
 }
 
 .note-database-container .db-card-mobile-move-btn,
-.note-database-container .db-list-mobile-move-btn {
+.note-database-container .db-list-mobile-move-btn,
+.note-database-container .db-table-mobile-move-btn {
   display: none;
 }
 
-.is-phone .note-database-container .db-card-mobile-move-btn,
-.is-phone .note-database-container .db-list-mobile-move-btn {
+.is-phone .note-database-container .db-card-mobile-move-btn {
   display: inline-flex;
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 3;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: 1px solid var(--background-modifier-border);
+  border: 0;
   border-radius: var(--db-radius-md);
   color: var(--text-muted);
-  background: var(--background-primary);
+  background: transparent;
 }
 
-.is-phone .note-database-container .db-card-mobile-move-btn:active,
+.is-phone .note-database-container .db-card-mobile-move-btn:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.is-phone .note-database-container .db-list-mobile-move-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--db-radius-md);
+  color: var(--text-faint);
+  background: transparent;
+}
+
 .is-phone .note-database-container .db-list-mobile-move-btn:active {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
+}
+
+.is-phone .note-database-container .db-table col.db-select-colgroup,
+.is-phone .note-database-container .db-table th.db-select-col,
+.is-phone .note-database-container .db-table td.db-select-col {
+  width: 62px;
+  min-width: 62px;
+  max-width: 62px;
+}
+
+.is-phone .note-database-container .db-table td.db-select-col input[type="checkbox"] {
+  display: inline-block;
+  margin: 0 3px 0 0;
+  vertical-align: middle;
+}
+
+.is-phone .note-database-container .db-table-mobile-move-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--db-radius-md);
+  color: var(--text-muted);
+  background: transparent;
+  vertical-align: middle;
+}
+
+.is-phone .note-database-container .db-table-mobile-move-btn:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.is-phone .note-database-container .db-card-mobile-move-btn svg,
+.is-phone .note-database-container .db-list-mobile-move-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.is-phone .note-database-container .db-table-mobile-move-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .is-phone .note-database-container .db-board-card,
 .is-phone .note-database-container .db-gallery-card,
 .is-phone .note-database-container .db-list-row {
   position: relative;
-}
-
-.is-phone .note-database-container .db-board-card-controls,
-.is-phone .note-database-container .db-gallery-card-controls,
-.is-phone .note-database-container .db-list-row-controls {
-  padding-right: 34px;
 }
 
 /* 手机端 popover 底部额外留空，防止被 Obsidian 底部导航栏遮挡 */
@@ -6366,7 +7486,7 @@
 .is-phone .note-database-container .db-group-popover,
 .is-phone .note-database-container .db-export-popover,
 .is-phone .note-database-container .db-view-tab-popover {
-  max-height: min(560px, calc(100vh - 210px));
+  max-height: min(380px, calc(100vh - 240px));
 }
 
 /* 移动端内联编辑器覆盖层 */

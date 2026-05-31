@@ -56,8 +56,12 @@ export class ColumnRenameModal extends Modal {
       attr: { style: "display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px;" },
     });
     const migrateCheckbox = migrateRow.createEl("input", { attr: { type: "checkbox" } });
-    migrateCheckbox.checked = canMigrate;
+    migrateCheckbox.checked = !canMigrate;
     migrateCheckbox.disabled = !canMigrate;
+    if (this.col.type === "computed") {
+      migrateCheckbox.title = t("modal.migrateComputedDisabled");
+      migrateRow.title = t("modal.migrateComputedDisabled");
+    }
     migrateRow.createSpan({ text: t("modal.migrateValues") });
     const helpIcon = migrateRow.createSpan({
       cls: "db-migrate-help-icon",

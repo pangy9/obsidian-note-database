@@ -19,7 +19,7 @@ export class DatabaseFileDashboardView extends DatabaseView {
     defaultStatusPresetId: string | undefined,
     onConfigChanged: () => Promise<void>,
   ) {
-    super(leaf, dataSource, databases, [], databaseFolder, statusPresets, defaultStatusPresetId, onConfigChanged, [filePath]);
+    super(leaf, dataSource, [], databaseFolder, statusPresets, defaultStatusPresetId, onConfigChanged);
     this.filePath = filePath;
   }
 
@@ -32,7 +32,7 @@ export class DatabaseFileDashboardView extends DatabaseView {
   }
 
   getDisplayText(): string {
-    return this.filePath ? this.filePath.split("/").pop()?.replace(/\.md$/, "") || t("app.name") : t("app.name");
+    return this.filePath ? this.filePath.replace(/\.md$/, "") : t("app.name");
   }
 
   getIcon(): string {
@@ -42,5 +42,9 @@ export class DatabaseFileDashboardView extends DatabaseView {
   async onOpen(): Promise<void> {
     await super.onOpen();
     this.contentEl.addClass("note-database-file-view");
+    // Navigate to the database matching this file
+    if (this.filePath) {
+      this.openViewReference(this.filePath);
+    }
   }
 }

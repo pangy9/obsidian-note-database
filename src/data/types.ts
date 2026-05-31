@@ -111,7 +111,6 @@ export interface DatabaseConfig {
   newRecordFolder?: string;
   typeFilter?: string;
   schema: RecordSchema;
-  syncComputedToFrontmatter?: boolean;
   /** Database-specific status presets. Global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
   /** Default status preset id for new status properties in this database. */
@@ -142,8 +141,6 @@ export interface ViewConfig {
   sortDirection?: "asc" | "desc";
   /** Ordered multi-sort rules. Preferred over legacy sortColumn/sortDirection. */
   sortRules?: SortRule[];
-  /** Sync computed column results back to note frontmatter when the view is rendered. */
-  syncComputedToFrontmatter?: boolean;
   /** View-specific status presets. Database/global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
   /** Default status preset id for new status properties created while this view is active. */
@@ -151,7 +148,6 @@ export interface ViewConfig {
   /** Current visual representation for this view. */
   viewType?: DatabaseViewType;
   displayWidth?: "default" | "wide";
-  dashboardDisplayWidth?: "default" | "wide";
   /** Board grouping property. Falls back to groupByField/status when absent. */
   boardGroupField?: string;
   /** Optional secondary board grouping property rendered inside each board column. */
@@ -178,6 +174,8 @@ export interface ViewConfig {
   collapsedGroups?: Record<string, string[]>;
   /** Manual board card order keyed by board group field and group key. */
   boardCardOrders?: Record<string, Record<string, string[]>>;
+  /** Manual row ordering. Key = file.path, value = base62 rank string. */
+  manualOrder?: { ranks?: Record<string, string> };
   /** Gallery cover image property. */
   galleryImageField?: string;
   /** Optional card/list title property. When absent, renderers fall back to visible file.name. */
@@ -199,14 +197,16 @@ export interface ViewConfig {
 }
 
 export interface PluginSettings {
+  /** @deprecated Always empty after migration to file-based storage. Kept for migration read-back. */
   databases: DatabaseConfig[];
   databaseFolder: string;
   databaseFileOrder?: string[];
-  dashboardInitialSource?: "settings" | "file";
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
   language?: LocaleCode;
   trashedDatabases?: TrashedDatabase[];
+  /** Set to true after databases have been migrated from settings to files. */
+  databasesMigrated?: boolean;
 }
 
 export interface TrashedDatabase {

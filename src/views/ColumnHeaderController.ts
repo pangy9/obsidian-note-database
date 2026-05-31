@@ -144,10 +144,15 @@ export class ColumnHeaderController {
   private setupDragToReorder(th: HTMLElement, col: ColumnDef): void {
     th.draggable = true;
     th.addEventListener("dragstart", (e) => {
+      if (th.closest(".note-database-container.is-row-dragging")) {
+        e.preventDefault();
+        return;
+      }
       e.dataTransfer?.setData("text/plain", col.key);
       th.addClass("db-dragging");
     });
     th.addEventListener("dragover", (e) => {
+      if (th.closest(".note-database-container.is-row-dragging")) return;
       e.preventDefault();
       th.addClass("db-drop-target");
     });
@@ -155,6 +160,7 @@ export class ColumnHeaderController {
       th.removeClass("db-drop-target");
     });
     th.addEventListener("drop", (e) => {
+      if (th.closest(".note-database-container.is-row-dragging")) return;
       e.preventDefault();
       th.removeClass("db-drop-target");
       const draggedKey = e.dataTransfer?.getData("text/plain");

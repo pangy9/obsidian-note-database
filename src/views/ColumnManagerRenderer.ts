@@ -33,6 +33,7 @@ export class ColumnManagerRenderer {
     anchorEl?: HTMLElement
   ): void {
     const existing = containerEl.querySelector(".db-column-manager");
+    const savedScroll = (existing as HTMLElement | null)?.scrollTop ?? 0;
     if (existing) existing.remove();
     if (!visible) return;
 
@@ -57,6 +58,7 @@ export class ColumnManagerRenderer {
       addColumnBtn.onclick = () => actions.addColumn();
     }
     positionToolbarPopover(panel, anchorEl);
+    if (savedScroll) panel.scrollTop = savedScroll;
     this.updateToolbarButton(containerEl, state, columns);
   }
 

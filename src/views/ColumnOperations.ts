@@ -123,7 +123,7 @@ export class ColumnOperations {
       await this.deps.saveCurrentViewConfig();
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
-      new Notice(t("column.updatedProperty", { label: newLabel, migration: migrationNotice }));
+      new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
     } catch (err) {
       console.error("Note Database: failed to rename column", err);
       new Notice(t("column.renameFailed", { error: String(err) }));
@@ -209,7 +209,7 @@ export class ColumnOperations {
         : await this.propertySync.delete(config, col);
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
-      new Notice(col.type === "computed" ? t("column.deletedComputed") : t("column.deletedColumn", { count: result.changed }));
+      new Notice(col.type === "computed" ? t("column.deletedComputed") : t("column.deletedColumn", { key: col.key, count: result.changed }));
     } catch (err) {
       console.error("Note Database: failed to delete column", err);
       new Notice(t("column.deleteFailed", { error: String(err) }));
@@ -328,7 +328,7 @@ export class ColumnOperations {
       if (col.type !== "computed") changed = (await this.propertySync.copy(config, col.key, copyKey)).changed;
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
-      new Notice(col.type === "computed" ? t("column.copiedComputed") : t("column.copiedColumn", { count: changed }));
+      new Notice(col.type === "computed" ? t("column.copiedComputed") : t("column.copiedColumn", { source: col.key, target: copyKey, count: changed }));
     } catch (err) {
       console.error("Note Database: failed to duplicate column", err);
       new Notice(t("column.copyColumnFailed", { error: String(err) }));
@@ -345,7 +345,7 @@ export class ColumnOperations {
     const previousOptions = target.statusOptions?.map((option) => ({ ...option }));
 
     const inferredOptions = isOptionColumnType(type)
-      ? createOptionsFromValues(this.deps.dataSource.getRecordsForConfig(this.deps.getActiveDb()).map((record) => record.frontmatter[target.key]))
+      ? createOptionsFromValues(this.getRecords(config).map((record) => record.frontmatter[target.key]))
       : [];
     target.type = type;
     if (isOptionColumnType(type)) {
@@ -392,7 +392,7 @@ export class ColumnOperations {
       }
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
-      new Notice(type === "computed" ? t("column.changedToComputed") : t("column.changedType", { count: changed }));
+      new Notice(type === "computed" ? t("column.changedToComputed") : t("column.changedType", { key: target.key, count: changed }));
     } catch (err) {
       console.error("Note Database: failed to change column type", err);
       new Notice(t("column.changeTypeFailed", { error: String(err) }));
@@ -423,7 +423,7 @@ export class ColumnOperations {
       const result = await this.propertySync.ensure(config, col);
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
-      new Notice(t("column.addedProperty", { prefix: successPrefix, count: result.changed }));
+      new Notice(t("column.addedProperty", { prefix: successPrefix, key: col.key, count: result.changed }));
     } catch (err) {
       console.error(`Note Database: failed to ${actionName}`, err);
       new Notice(t("column.actionFailed", { action: actionName, error: String(err) }));

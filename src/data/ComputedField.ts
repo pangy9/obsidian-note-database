@@ -336,6 +336,21 @@ export class ComputedFieldEngine {
     return context;
   }
 
+  /**
+   * Extract field dependencies from a formula expression.
+   * After normalizeFormula(), `[field]` becomes `field("field")`,
+   * so we only need to match the `field("...")` pattern.
+   */
+  static extractDependencies(expression: string): string[] {
+    const deps: string[] = [];
+    const re = /field\(\s*["']([^"']+)["']\s*\)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(expression)) !== null) {
+      if (!deps.includes(m[1])) deps.push(m[1]);
+    }
+    return deps;
+  }
+
   private isIdentifierSafe(name: string): boolean {
     return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name) &&
            !ComputedFieldEngine.RESERVED.has(name);

@@ -8,28 +8,16 @@ It is useful for project tracking, reading plans, subscription lists, content li
 
 ![Table view](assets/screenshots/en-table-view.png)
 
-## What's New In 1.0.4 (Compared To 1.0.3)
+## What's New In 1.0.5 (Compared To 1.0.4)
 
-- **Mobile adaptation**: the toolbar, views, property panels, cell editing, and formula editor are now fully usable on phones and tablets.
-- **Mobile-friendly reordering**: drag-only lists (property columns, sort rules, database lists, status options, cell options, group order) now include up/down move buttons for touch, while drag handles are hidden on mobile.
-- **Mobile table selection**: Dashboard and embedded tables use tap-to-select mode on mobile — tap a cell to set the anchor, tap another to extend the selection; row checkboxes use the last-selected row as the range anchor.
-- **Mobile card move**: board cards get a touch-friendly move menu (top/bottom, before/after another card, move to another group/subgroup) instead of drag-and-drop.
-- **Disabled unreliable mobile drag**: column-header drag sort, column resize, row group drag, cell fill handle, board column drag/resize, and gallery width drag are hidden on mobile.
-- **Mobile toolbar**: search box moves to the view-tab row; toolbar buttons wrap to a second scrollable row; view tabs disable drag reorder and use a menu with move-to-top/move-up/move-down/move-to-bottom.
-- **Mobile formula editor**: inline autocomplete popup is disabled on mobile to avoid keyboard overlap; the bottom field/function panel remains available for search and tap-to-insert.
-- **Refined cell text editing**: on desktop, text cell editing is now a contextual floating layer that appears at the cell position, instead of a modal card with title bar and Cancel/Save buttons.
-- **Improved adaptive column width**: auto-fit now uses `canvas.measureText()` for lightweight measurement, with separate estimates for headers, text, and option badges — producing more compact and accurate results.
-- **Visual polish**: cell option popovers use flat, pill-shaped items with better spacing; toolbar search focus no longer shows a highlighted background block; database description editor auto-grows with content height.
-- **Bug fixes**: mobile floating editor positioning; property edit window element misalignment; formula error preview duplication.
-
-## What's New In 1.0.3 (Compared To 1.0.1)
-
-- **More reliable writes and refresh**: frontmatter writes are serialized per file to reduce race conditions; computed sync and embedded refresh are more consistent.
-- **Database-file experience is closer to the dashboard**: opening a `db_view: true` database file now automatically switches into the dedicated database view instead of relying on Markdown preview.
-- **Better embedded views**: embedded tables support cell-range selection and clipboard copy; CSV + Markdown ZIP export is available in embedded views too.
-- **Batch editing and undo**: tables support drag-to-select cell ranges and copy as TSV/Markdown/CSV; batch fill/clear/paste can be undone and will report skipped non-editable fields.
-- **Smoother formula editor**: narrow/short windows no longer overlap; the help categories can scroll horizontally; preview sections scroll and avoid content overlap.
-- **New dashboard start-page setting**: choose whether the dashboard opens on the first settings database or the first database file (with safe fallback).
+- **Markdown database files as the single storage model**: every database is now stored as a normal `db_view: true` Markdown file. Existing settings-based databases are migrated automatically when the plugin loads.
+- **Manual ordering across all four views**: table rows, board cards, gallery cards, and list rows share a LexoRank-like view order. Drag to place items precisely on desktop; explicit property sorting still takes precedence.
+- **Touch-friendly manual ordering**: phone layouts expose move menus instead of relying on free-form drag. Table, gallery, and list views support up/down/top/bottom and cross-group moves; board cards can also move before or after a specific card.
+- **More precise computed-field sync**: computed values update on relevant save events instead of depending on periodic full refreshes, reducing unnecessary work.
+- **Faster inline editing**: ordinary property edits and card checkboxes use optimistic local updates where possible, reducing full-view flicker while values are written back to Markdown frontmatter.
+- **Better creation flow**: creating a database can scan existing frontmatter and open a property confirmation dialog. Newly created databases open immediately.
+- **Refined grouping and file navigation**: custom group order is now an immediately saved popover; database files receive a `DB` marker in the file explorer; file-name fields reveal folder prefixes on hover.
+- **Interaction polish**: date editing uses the same contextual popover language as text and number fields, horizontal scrolling is easier to discover, and wide lists reveal newly created entries from their leading edge.
 
 ## Highlights
 
@@ -37,9 +25,9 @@ It is useful for project tracking, reading plans, subscription lists, content li
 - **Inline property editing**: edit text, numbers, dates, currency, checkboxes, select, multi-select, status, and file names directly from the view. Changes are written back to Markdown frontmatter, and the file-name column can rename notes.
 - **Complete property management**: add properties, rename labels, change keys, change types, hide or show fields, resize and reorder columns, manage option colors, configure status presets, and sync property types with Obsidian.
 - **Stronger filters, sorting, and grouping**: combine AND/OR filter rules, use type-aware sorting, group tables, group board columns, add board subgroups, collapse groups, customize group order, and batch-select records.
-- **Computed fields and formulas**: write formulas with field references, helper functions, syntax highlighting, live results, referenced-field values, and step-by-step calculation previews. Formula results can also be synced back to frontmatter.
-- **Embed views in notes**: embed a database view in any Markdown note. Embedded views keep records read-only while still allowing view switching, filters, sorting, grouping, visible properties, formula sync, and copy/export actions.
-- **Database files or settings databases**: keep databases in plugin settings, or generate `db_view: true` Markdown database files so the database configuration can live as a normal note.
+- **Computed fields and formulas**: write formulas with field references, helper functions, syntax highlighting, live results, referenced-field values, and step-by-step calculation previews. Computed results are synchronized back to frontmatter at relevant save events.
+- **Embed views in notes**: embed a database view in any Markdown note. Embedded views keep records read-only while still allowing view switching, filters, sorting, grouping, visible properties, computed fields, and copy/export actions.
+- **Markdown database files**: each database configuration lives in a normal `db_view: true` Markdown file, making it easy to organize, open, and manage alongside notes.
 - **Import, export, and migration**: import or export CSV + Markdown ZIP files, optionally include frontmatter in exported Markdown files, and convert Obsidian `.base` files into Note Database databases.
 - **Local-first and localized**: the plugin runs inside Obsidian and does not upload vault content, metadata, formulas, or settings. The interface supports System, English, Simplified Chinese, and Traditional Chinese.
 
@@ -69,11 +57,11 @@ Click the database icon in the left ribbon, or run `Note database: Open dashboar
 
 After creating a database, choose a source folder, then add properties and views. The source folder decides which Markdown notes belong to the database; view settings decide how those notes are presented.
 
-The full dashboard settings panel separates "Current database" and "Current view": database settings cover the name, description, source folder, new-note folder, and formula sync; view settings cover the title field, default field width, gallery cover, board subgroup, status presets, and layout behavior.
+The full dashboard settings panel separates "Current database" and "Current view": database settings cover the name, description, source folder, and new-note folder; view settings cover the title field, default field width, gallery cover, board subgroup, status presets, and layout behavior.
 
 ![Settings panel](assets/screenshots/en-settings-panel.png)
 
-The plugin settings page manages global options such as language, the default database-file folder, global status presets, and settings-based databases.
+The plugin settings page manages global options such as language, the default database-file folder, global status presets, database files, import/export, and the plugin trash.
 
 ![Plugin settings](assets/screenshots/en-settings.png)
 
@@ -83,7 +71,7 @@ Right-click a view tab in the full dashboard, or use the export menu to copy the
 
 ![Copy to clipboard](assets/screenshots/en-copy-to-clipboard.png)
 
-Paste the code into any Obsidian note to get a read-only embedded database view. Embedded views still include view switching, filters, sorting, grouping, visible properties, formula sync, and copy/export tools.
+Paste the code into any Obsidian note to get a read-only embedded database view. Embedded views still include view switching, filters, sorting, grouping, visible properties, computed fields, and copy/export tools.
 
 ![Embedded view](assets/screenshots/en-embed-view.png)
 
@@ -96,7 +84,7 @@ viewId: mh2g9dz3_abcd123
 ```
 ~~~
 
-If you want the database configuration itself to be saved as a Markdown file, use "Generate or open database file". The generated file uses `db_view: true` and stores its configuration in the frontmatter `database` object.
+Every database configuration is saved as a Markdown file with `db_view: true`, with its configuration stored in the frontmatter `database` object. Existing settings-based databases from earlier versions are migrated automatically.
 
 ![Generate or open database file](assets/screenshots/en-generate-or-open-database-file.png)
 

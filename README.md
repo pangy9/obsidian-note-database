@@ -8,11 +8,12 @@ It is useful for project tracking, reading plans, subscription lists, content li
 
 ![Table view](assets/screenshots/en-table-view.png)
 
-## What's New In 1.0.6
+## What's New In 1.0.7
 
-1.0.6 is a hotfix for data-safety and first-run polish:
+1.0.7 is a hotfix for data-safety and first-run polish:
 
-- Computed fields now sync only to notes that match the database source boundary, instead of leaking into unrelated Markdown files.
+- Opening unrelated Markdown files no longer triggers computed-field writeback.
+- Computed-field refresh now respects legacy view-level source folders instead of widening to the whole vault.
 - Deleted properties no longer reappear after restarting Obsidian.
 - Empty dashboards now show a centered first-database button instead of a render error.
 - CSV + Markdown ZIP export now lets you choose the output location and confirms the saved path.

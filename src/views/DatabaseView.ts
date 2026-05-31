@@ -1984,9 +1984,15 @@ export class DatabaseView extends ItemView {
     return normalizePath(config.newRecordFolder || config.sourceFolder || folderRule?.value || this.databaseFolder || "");
   }
 
-  /** Empty sourceFolder means vault root for querying; newRecordFolder controls only where new notes are created. */
-  private getEffectiveConfig(dbConfig: DatabaseConfig): DatabaseConfig {
-    return { ...dbConfig, sourceFolder: this.normalizeVaultFolder(dbConfig.sourceFolder || "") };
+  /** Resolve legacy view-level source settings without widening a database query to the vault root. */
+  private getEffectiveConfig(dbConfig: DatabaseConfig, viewConfig: ViewConfig = this.getConfig()): DatabaseConfig {
+    return {
+      ...dbConfig,
+      sourceFolder: this.normalizeVaultFolder(dbConfig.sourceFolder || viewConfig.sourceFolder || ""),
+      sourceRules: dbConfig.sourceRules || viewConfig.sourceRules,
+      sourceLogic: dbConfig.sourceLogic || viewConfig.sourceLogic,
+      typeFilter: dbConfig.typeFilter || viewConfig.typeFilter,
+    };
   }
 
   /** Show relative paths only when duplicate filenames would otherwise be ambiguous. */
@@ -4458,7 +4464,7 @@ export class DatabaseView extends ItemView {
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
       const db = this.getCurrentEntry()?.config;
-      const records = db ? this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db)) : this.rows.map((row) => ({
+      const records = db ? this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config)) : this.rows.map((row) => ({
         file: row.file,
         frontmatter: row.frontmatter,
       }));

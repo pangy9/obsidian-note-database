@@ -1,7 +1,6 @@
 import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, setIcon, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
-import { ComputedFieldEngine } from "./data/ComputedField";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
@@ -162,7 +161,6 @@ export default class NoteDatabasePlugin extends Plugin {
     this.dataSource = new DataSource(this.app);
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
-      if (file instanceof TFile) this.syncComputedForOpenedFile(file).catch(console.error);
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFileTabs();
     }));
@@ -1495,57 +1493,6 @@ export default class NoteDatabasePlugin extends Plugin {
         }
       }
     }
-  }
-
-  private async syncComputedForOpenedFile(file: TFile): Promise<void> {
-    if (file.extension !== "md") return;
-    const allDatabases = this.dataSource.getViewDefFiles().map((entry) => entry.config);
-    // Collect computed updates from all matching databases and merge into a single write
-    const mergedUpdates: Record<string, unknown> = {};
-    for (const db of allDatabases) {
-      const scopedDb = this.getComputedSyncScope(db);
-      if (!scopedDb) continue;
-      if ((scopedDb.schema.computedFields || []).length === 0) continue;
-      if (!this.dataSource.getRecordsForConfig(scopedDb).some((record) => record.file.path === file.path)) continue;
-      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
-      if (!fm) continue;
-      if (scopedDb.typeFilter && fm["type"] !== scopedDb.typeFilter) continue;
-      const computed = new ComputedFieldEngine(scopedDb.schema.computedFields, scopedDb.schema.columns).evaluate(fm);
-      for (const col of scopedDb.schema.columns.filter((candidate) => candidate.type === "computed")) {
-        const value = computed[col.computedKey || col.key];
-        const next = value == null ? "" : value;
-        if (String(fm[col.key] ?? "") !== String(next ?? "")) mergedUpdates[col.key] = next;
-      }
-    }
-    if (Object.keys(mergedUpdates).length > 0) {
-      await this.dataSource.updateFrontmatter(file, mergedUpdates);
-    }
-  }
-
-  private getComputedSyncScope(db: DatabaseConfig): DatabaseConfig | null {
-    // Opening any Markdown file is a global event. Only databases with an
-    // explicit source boundary should write computed fields in that background
-    // path; unscoped databases still sync from their own rendered rows.
-    if (this.hasExplicitRecordScope(db)) return db;
-    const firstView = db.views?.[0];
-    if (!firstView || !this.hasExplicitRecordScope(firstView)) return null;
-    return {
-      ...db,
-      sourceFolder: firstView.sourceFolder || "",
-      sourceRules: firstView.sourceRules,
-      sourceLogic: firstView.sourceLogic || "and",
-      newRecordFolder: firstView.newRecordFolder,
-      typeFilter: firstView.typeFilter,
-    };
-  }
-
-  private hasExplicitRecordScope(scope: Pick<DatabaseConfig, "sourceFolder" | "sourceRules" | "typeFilter">): boolean {
-    const sourceFolder = normalizePath(scope.sourceFolder || "").replace(/^\/+/, "");
-    return Boolean(
-      sourceFolder ||
-      scope.typeFilter ||
-      (Array.isArray(scope.sourceRules) && scope.sourceRules.length > 0)
-    );
   }
 
   /** Migrate legacy settings-based databases to vault files. */

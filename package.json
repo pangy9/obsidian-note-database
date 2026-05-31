@@ -1,6 +1,6 @@
 {
   "name": "obsidian-note-database",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Database views for notes with table, board, gallery, and list layouts.",
   "main": "main.js",
   "scripts": {

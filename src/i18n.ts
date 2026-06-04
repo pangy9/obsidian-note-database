@@ -1959,7 +1959,7 @@ export function getLocale(): LocaleCode {
 
 export function getEffectiveLocale(locale: LocaleCode = currentLocale): Exclude<LocaleCode, "system"> {
   if (locale !== "system") return locale;
-  const lang = (document.documentElement.lang || navigator.language || "").toLowerCase();
+  const lang = (window.activeDocument.documentElement.lang || navigator.language || "").toLowerCase();
   if (lang.includes("zh-tw") || lang.includes("zh-hk") || lang.includes("zh-hant")) return "zh-TW";
   if (lang.startsWith("zh")) return "zh-CN";
   return "en";

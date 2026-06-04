@@ -975,7 +975,6 @@ function maskStringLiterals(expression: string): string {
 
 function createBaseContext(context: BaseExpressionContext): Record<string, unknown> {
   const cache = context.app.metadataCache.getFileCache(context.file);
-  const tags = getFileTags(cache, context.frontmatter);
   const properties = normalizeBasePropertyRecord(context, context.frontmatter);
   const note = createPropertyProxy(properties);
   const formulaValues = context.computedValues || evaluateFormulaValues(context);

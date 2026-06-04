@@ -63,6 +63,7 @@ describe("ColumnOperations", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     (globalThis as any).window = {
+      activeDocument: { documentElement: { lang: "en" } },
       confirm: vi.fn().mockReturnValue(true),
     };
   });

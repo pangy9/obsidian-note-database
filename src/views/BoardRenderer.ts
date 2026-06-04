@@ -326,7 +326,7 @@ export class BoardRenderer {
         if (!this.canReorderCards(config)) return;
         const count = (this.dragEnterCount.get(card) || 1) - 1;
         this.dragEnterCount.set(card, count);
-        setTimeout(() => {
+        window.setTimeout(() => {
           if ((this.dragEnterCount.get(card) || 0) <= 0) {
             this.clearCardDropTarget(card);
           }
@@ -645,7 +645,7 @@ export class BoardRenderer {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private highlightCardDropZone(source: HTMLElement): void {
@@ -774,7 +774,7 @@ export class BoardRenderer {
     const displayType = this.getDisplayType(config, col);
     const empty = this.isEmptyValue(value) && displayType !== "checkbox";
     const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
-    const item = document.createElement("div");
+    const item = window.activeDocument.createElement("div");
     item.className = "db-board-card-field";
     item.setAttribute("data-note-database-column-key", col.key);
     item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
@@ -829,8 +829,8 @@ export class BoardRenderer {
       startWidth: this.getBoardColumnWidth(config),
       board,
     };
-    document.addEventListener("mousemove", this.handleColumnResize);
-    document.addEventListener("mouseup", this.finishColumnResize);
+    window.activeDocument.addEventListener("mousemove", this.handleColumnResize);
+    window.activeDocument.addEventListener("mouseup", this.finishColumnResize);
   }
 
   private readonly handleColumnResize = (event: MouseEvent): void => {
@@ -842,8 +842,8 @@ export class BoardRenderer {
   private readonly finishColumnResize = (event: MouseEvent): void => {
     if (!this.resizeState) return;
     const width = this.clampBoardColumnWidth(this.resizeState.startWidth + event.clientX - this.resizeState.startX);
-    document.removeEventListener("mousemove", this.handleColumnResize);
-    document.removeEventListener("mouseup", this.finishColumnResize);
+    window.activeDocument.removeEventListener("mousemove", this.handleColumnResize);
+    window.activeDocument.removeEventListener("mouseup", this.finishColumnResize);
     this.resizeState = undefined;
     this.actions.updateColumnWidth(width);
   };

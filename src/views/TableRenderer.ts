@@ -517,7 +517,7 @@ export class TableRenderer {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private getGroupDefaults(config: ViewConfig, groupField: string, groupKey: string): Record<string, unknown> {

@@ -447,7 +447,7 @@ class TrashManagerModal extends Modal {
 
       // 左侧信息区
       const info = row.createDiv({ cls: "db-trash-manager-info" });
-      const nameEl = info.createDiv({ cls: "db-trash-manager-name", text: item.database.name || t("common.untitled") });
+      info.createDiv({ cls: "db-trash-manager-name", text: item.database.name || t("common.untitled") });
 
       // 描述（最多 100 字）
       if (item.database.description) {

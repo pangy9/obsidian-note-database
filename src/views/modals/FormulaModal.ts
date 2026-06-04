@@ -1221,7 +1221,7 @@ export class FormulaModal extends Modal {
   }
 
   private shouldDisableInlineSuggestions(): boolean {
-    if (document.body.classList.contains("is-phone")) return true;
+    if (window.activeDocument.body.classList.contains("is-phone")) return true;
     const width = this.modalEl?.getBoundingClientRect().width || this.contentEl?.getBoundingClientRect().width || 0;
     return width > 0 && width < 760;
   }
@@ -1248,7 +1248,7 @@ export class FormulaModal extends Modal {
     const textBeforeCursor = this.textarea.value.slice(0, cursor);
 
     // Build a hidden mirror div that replicates the textarea layout
-    const mirror = document.createElement("div");
+    const mirror = window.activeDocument.createElement("div");
     const style = getComputedStyle(this.textarea);
     const copyStyles = [
       "fontFamily", "fontSize", "fontWeight", "letterSpacing",
@@ -1263,17 +1263,17 @@ export class FormulaModal extends Modal {
     mirror.textContent = textBeforeCursor;
 
     // Add a span at the caret position to measure it
-    const caretSpan = document.createElement("span");
+    const caretSpan = window.activeDocument.createElement("span");
     caretSpan.textContent = "|";
     mirror.appendChild(caretSpan);
 
-    document.body.appendChild(mirror);
+    window.activeDocument.body.appendChild(mirror);
     const caretOffset = caretSpan.offsetLeft - mirror.scrollLeft;
     const caretLineTop = caretSpan.offsetTop - mirror.scrollTop;
-    document.body.removeChild(mirror);
+    window.activeDocument.body.removeChild(mirror);
 
     const editorBox = this.textarea.getBoundingClientRect();
-    const modalBox = this.textarea.closest(".modal")?.getBoundingClientRect() || editorBox;
+    const _modalBox = this.textarea.closest(".modal")?.getBoundingClientRect() || editorBox;
 
     return {
       left: Math.min(

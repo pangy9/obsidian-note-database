@@ -212,7 +212,7 @@ export class ToolbarRenderer {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private renderComputedSyncButton(toolbar: HTMLElement, actions: ToolbarActions): void {
@@ -252,11 +252,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeDatabasePopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeDatabasePopover() });
     this.removeDatabasePopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -295,7 +295,7 @@ export class ToolbarRenderer {
       cls: `db-database-popover-row${index === currentDbIndex ? " is-active" : ""}${canMove && actions.moveDatabase ? " is-draggable" : ""}`,
       attr: { type: "button" },
     });
-    const drag = row.createSpan({ cls: "db-database-popover-drag", text: canMove && actions.moveDatabase ? "⋮⋮" : "" });
+    row.createSpan({ cls: "db-database-popover-drag", text: canMove && actions.moveDatabase ? "⋮⋮" : "" });
     if (canMove && actions.moveDatabase) {
       const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
       const sameSourceIndexes = viewEntries
@@ -441,11 +441,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeTitleActionsPopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeTitleActionsPopover() });
     this.removeTitleActionsPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -527,7 +527,7 @@ export class ToolbarRenderer {
       this.resizeObserver = new ResizeObserver(() => checkOverflow());
       this.resizeObserver.observe(toolbar);
       // Initial run after layout
-      requestAnimationFrame(() => requestAnimationFrame(() => checkOverflow()));
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => checkOverflow()));
     }
   }
 
@@ -689,11 +689,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || tab.contains(target))) return;
       this.closeViewTabPopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl: tab, close: () => this.closeViewTabPopover() });
     this.removeViewTabPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -748,11 +748,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeViewTabPopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeViewTabPopover() });
     this.removeViewTabPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -796,7 +796,7 @@ export class ToolbarRenderer {
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    const input = multiline ? document.createElement("textarea") : document.createElement("input");
+    const input = multiline ? window.activeDocument.createElement("textarea") : window.activeDocument.createElement("input");
     input.className = multiline ? "db-heading-edit db-heading-edit-description" : "db-heading-edit";
     if (!multiline) (input as HTMLInputElement).type = "text";
     input.value = value;
@@ -863,11 +863,11 @@ export class ToolbarRenderer {
     searchInput.value = state.searchText;
     button.onclick = () => {
       wrap.addClass("is-active");
-      requestAnimationFrame(() => searchInput.focus());
+      window.requestAnimationFrame(() => searchInput.focus());
     };
     searchInput.addEventListener("focus", () => wrap.addClass("is-active"));
     searchInput.addEventListener("input", () => {
-      wrap.toggleClass("is-active", searchInput.value.length > 0 || document.activeElement === searchInput);
+      wrap.toggleClass("is-active", searchInput.value.length > 0 || window.activeDocument.activeElement === searchInput);
       actions.setSearchText(searchInput.value);
     });
     searchInput.addEventListener("blur", () => {
@@ -932,11 +932,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeGroupPopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeGroupPopover() });
     this.removeGroupPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -1197,11 +1197,11 @@ export class ToolbarRenderer {
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
       this.closeExportPopover();
     };
-    const popoverTimer = setTimeout(() => document.addEventListener("mousedown", onOutside, true), 0);
+    const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
     const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeExportPopover() });
     this.removeExportPopoverListener = () => {
-      clearTimeout(popoverTimer);
-      document.removeEventListener("mousedown", onOutside, true);
+      window.clearTimeout(popoverTimer);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
   }
@@ -1266,8 +1266,8 @@ export class ToolbarRenderer {
   }
 
   private markLatestMenu(className: string, icons?: string[]): void {
-    requestAnimationFrame(() => {
-      const menus = Array.from(document.querySelectorAll(".menu")) as HTMLElement[];
+    window.requestAnimationFrame(() => {
+      const menus = Array.from(window.activeDocument.querySelectorAll(".menu")) as HTMLElement[];
       const menu = menus[menus.length - 1];
       if (!menu) return;
       menu.addClass(className);

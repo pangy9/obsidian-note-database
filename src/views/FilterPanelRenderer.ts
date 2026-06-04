@@ -260,7 +260,7 @@ export class FilterPanelRenderer {
     wrap.createSpan({ cls: "db-date-sep", text: "-" });
     const dayInp = wrap.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
     let committedValue = String(rule.value || "").substring(0, 10);
-    const inputs = [yearInp, monthInp, dayInp];
+    const _inputs = [yearInp, monthInp, dayInp];
     const setInputsFromValue = (value: string) => {
       const parts = value.split("-");
       yearInp.value = parts[0] || "";

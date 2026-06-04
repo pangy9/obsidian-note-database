@@ -299,7 +299,6 @@ function linkTargetsEqual(left: string, right: string): boolean {
 }
 
 function replaceExpressionKeyReference(expression: string, oldKey: string, newKey: string): string {
-  const oldJson = JSON.stringify(oldKey);
   const newJson = JSON.stringify(newKey);
   const escaped = oldKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let next = expression

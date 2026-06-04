@@ -325,7 +325,7 @@ export class CellRenderer {
   }
 
   private selectCell(td: HTMLElement): void {
-    document.querySelectorAll(".note-database-container .db-cell-selected")
+    window.activeDocument.querySelectorAll(".note-database-container .db-cell-selected")
       .forEach((el) => el.removeClass("db-cell-selected"));
     this.addTransientClass(td, "db-cell-selected", 1200);
     td.focus();
@@ -340,7 +340,7 @@ export class CellRenderer {
     anchorPoint?: { x: number; y: number }
   ): void {
     const container = td.closest(".note-database-container") as HTMLElement | null;
-    const host = container || document.body;
+    const host = container || window.activeDocument.body;
     host.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
     const originalValues = multiple
       ? toMultiSelectValuesForKey(col.key, currentValue)
@@ -351,10 +351,10 @@ export class CellRenderer {
 
     const close = () => {
       popover.remove();
-      // Clean up any leaked color picker popups on document.body
-      document.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
-      document.removeEventListener("mousedown", onOutside, true);
-      document.removeEventListener("keydown", onKeydown, true);
+      // Clean up any leaked color picker popups on window.activeDocument.body
+      window.activeDocument.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
+      window.activeDocument.removeEventListener("keydown", onKeydown, true);
     };
     const onOutside = (event: MouseEvent) => {
       const target = event.target as Node | null;
@@ -484,12 +484,12 @@ export class CellRenderer {
               commitOptions();
               renderOptionList();
             }
-            document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
+            window.activeDocument.removeEventListener("mousemove", onMove);
+            window.activeDocument.removeEventListener("mouseup", onUp);
           };
 
-          document.addEventListener("mousemove", onMove);
-          document.addEventListener("mouseup", onUp);
+          window.activeDocument.addEventListener("mousemove", onMove);
+          window.activeDocument.addEventListener("mouseup", onUp);
         };
 
         const moveControls = item.createSpan({ cls: "db-mobile-reorder-controls" });
@@ -537,7 +537,7 @@ export class CellRenderer {
         label.ondblclick = (e) => {
           e.stopPropagation();
           e.preventDefault();
-          const input = document.createElement("input");
+          const input = window.activeDocument.createElement("input");
           input.type = "text";
           input.value = opt.value;
           input.className = "db-option-rename-input";
@@ -617,8 +617,8 @@ export class CellRenderer {
 
     // Color picker popup — always on body to avoid container overflow/transform issues
     const showColorPicker = (anchor: HTMLElement, opt: StatusOptionDef, onUpdate: () => void) => {
-      document.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
-      const picker = document.body.createDiv({ cls: "db-color-picker-popup" });
+      window.activeDocument.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
+      const picker = window.activeDocument.body.createDiv({ cls: "db-color-picker-popup" });
       picker.setCssProps({ position: "fixed", display: "flex", flexWrap: "wrap", gap: "4px", padding: "6px", background: "var(--background-primary)", border: "1px solid var(--background-modifier-border)", borderRadius: "6px", boxShadow: "0 4px 14px rgba(0,0,0,.15)", zIndex: "1002", width: "124px" });
       OPTION_COLORS.forEach(color => {
         const swatch = picker.createSpan();
@@ -645,10 +645,10 @@ export class CellRenderer {
       const closePicker = (e: MouseEvent) => {
         if (!picker.contains(e.target as Node)) {
           picker.remove();
-          document.removeEventListener("mousedown", closePicker, true);
+          window.activeDocument.removeEventListener("mousedown", closePicker, true);
         }
       };
-      setTimeout(() => document.addEventListener("mousedown", closePicker, true), 0);
+      window.setTimeout(() => window.activeDocument.addEventListener("mousedown", closePicker, true), 0);
     };
 
     // New option input
@@ -698,8 +698,8 @@ export class CellRenderer {
     renderOptionList();
     this.positionOptionPopover(popover, td, container, anchorPoint);
     window.requestAnimationFrame(() => this.positionOptionPopover(popover, td, container, anchorPoint));
-    document.addEventListener("mousedown", onOutside, true);
-    document.addEventListener("keydown", onKeydown, true);
+    window.activeDocument.addEventListener("mousedown", onOutside, true);
+    window.activeDocument.addEventListener("keydown", onKeydown, true);
   }
 
   private editNumber(
@@ -802,7 +802,7 @@ export class CellRenderer {
     };
 
     // Use relatedTarget to detect if focus is moving to another segment.
-    // During blur, document.activeElement hasn't updated yet, so isInternalFocus()
+    // During blur, window.activeDocument.activeElement hasn't updated yet, so isInternalFocus()
     // using activeElement would fail for user-initiated focus changes (clicks).
     const isMovingToSegment = (e: FocusEvent) =>
       inputs.includes(e.relatedTarget as HTMLInputElement);
@@ -879,8 +879,8 @@ export class CellRenderer {
     currentValue: unknown,
   ): void {
     const container = td.closest(".note-database-container") as HTMLElement | null;
-    const isMobile = Platform.isMobile || document.body.classList.contains("is-phone");
-    const host = isMobile ? null : (container || document.body);
+    const isMobile = Platform.isMobile || window.activeDocument.body.classList.contains("is-phone");
+    const host = isMobile ? null : (container || window.activeDocument.body);
 
     this.activeTextEditClose?.();
     td.addClass("db-cell-editing");
@@ -897,7 +897,7 @@ export class CellRenderer {
     if (isMobile) {
       editScrollContainer = td.closest(".note-database-container")
         || td.closest(".markdown-preview-view")
-        || document.body;
+        || window.activeDocument.body;
 
       popover = editScrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay db-date-edit-popover" });
 
@@ -938,8 +938,8 @@ export class CellRenderer {
     const close = () => {
       popover.remove();
       td.removeClass("db-cell-editing");
-      document.removeEventListener("mousedown", onOutside, true);
-      document.removeEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
+      window.activeDocument.removeEventListener("keydown", onDocumentKeydown, true);
       if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
     };
     this.activeTextEditClose = close;
@@ -1064,15 +1064,15 @@ export class CellRenderer {
         yearInp.select();
       });
     } else {
-      setTimeout(() => {
+      window.setTimeout(() => {
         yearInp.focus();
         yearInp.select();
       }, 50);
     }
 
     window.setTimeout(() => {
-      document.addEventListener("mousedown", onOutside, true);
-      document.addEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.addEventListener("mousedown", onOutside, true);
+      window.activeDocument.addEventListener("keydown", onDocumentKeydown, true);
     }, 0);
   }
 
@@ -1113,7 +1113,7 @@ export class CellRenderer {
       this.editTextPopover(td, row, col, valueText);
       return;
     }
-    const inp = document.createElement("input");
+    const inp = window.activeDocument.createElement("input");
     inp.className = "db-cell-input";
     inp.type = "text";
     inp.value = valueText;
@@ -1148,8 +1148,8 @@ export class CellRenderer {
     currentValue: string
   ): void {
     const container = td.closest(".note-database-container") as HTMLElement | null;
-    const isMobile = Platform.isMobile || document.body.classList.contains("is-phone");
-    const host = isMobile ? null : (container || document.body);
+    const isMobile = Platform.isMobile || window.activeDocument.body.classList.contains("is-phone");
+    const host = isMobile ? null : (container || window.activeDocument.body);
 
     // 清理之前的编辑器
     this.activeTextEditClose?.();
@@ -1166,7 +1166,7 @@ export class CellRenderer {
 
       editScrollContainer = td.closest(".note-database-container")
         || td.closest(".markdown-preview-view")
-        || document.body;
+        || window.activeDocument.body;
       
       // 创建内联编辑器包装器
       popover = editScrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay" });
@@ -1190,7 +1190,7 @@ export class CellRenderer {
       setIcon(closeBtn, "x");
       
       // 文本输入区
-      textarea = document.createElement("textarea");
+      textarea = window.activeDocument.createElement("textarea");
       textarea.className = "db-cell-textarea db-mobile-textarea";
       textarea.value = currentValue;
       popover.appendChild(textarea);
@@ -1199,7 +1199,7 @@ export class CellRenderer {
       // ========== 桌面端：原有 Fixed Popover 方案 ==========
       popover = (host as HTMLElement).createDiv({ cls: "db-cell-edit-popover" });
       
-      textarea = document.createElement("textarea");
+      textarea = window.activeDocument.createElement("textarea");
       textarea.className = "db-cell-textarea";
       textarea.value = currentValue;
       textarea.rows = 1;
@@ -1211,8 +1211,8 @@ export class CellRenderer {
     const close = () => {
       popover.remove();
       td.removeClass("db-cell-editing");
-      document.removeEventListener("mousedown", onOutside, true);
-      document.removeEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
+      window.activeDocument.removeEventListener("keydown", onDocumentKeydown, true);
       if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
     };
     this.activeTextEditClose = close;
@@ -1275,12 +1275,12 @@ export class CellRenderer {
       this.autoGrowTextarea(textarea, 320);
       
       // 延迟聚焦，等待 DOM 稳定
-      setTimeout(() => {
+      window.setTimeout(() => {
         textarea.focus();
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
         
         // 关键：键盘弹出后，滚动编辑器到可视区域中心
-        setTimeout(() => {
+        window.setTimeout(() => {
           // 重新计算位置（因为聚焦可能导致布局变化）
           const newTdRect = td.getBoundingClientRect();
           const viewportHeight = window.visualViewport?.height || window.innerHeight;
@@ -1318,8 +1318,8 @@ export class CellRenderer {
 
     // 绑定全局关闭事件
     window.setTimeout(() => {
-      document.addEventListener("mousedown", onOutside, true);
-      document.addEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.addEventListener("mousedown", onOutside, true);
+      window.activeDocument.addEventListener("keydown", onDocumentKeydown, true);
     }, 0);
   }
 
@@ -1339,7 +1339,7 @@ export class CellRenderer {
     restore: () => void
   ): void {
     const container = td.closest(".note-database-container") as HTMLElement | null;
-    const host = container || document.body;
+    const host = container || window.activeDocument.body;
     this.activeTextEditClose?.();
     td.addClass("db-cell-popover-editing");
 
@@ -1355,8 +1355,8 @@ export class CellRenderer {
     const close = () => {
       popover.remove();
       td.removeClass("db-cell-popover-editing");
-      document.removeEventListener("mousedown", onOutside, true);
-      document.removeEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.removeEventListener("mousedown", onOutside, true);
+      window.activeDocument.removeEventListener("keydown", onDocumentKeydown, true);
       if (this.activeTextEditClose === close) this.activeTextEditClose = undefined;
     };
     this.activeTextEditClose = close;
@@ -1401,8 +1401,8 @@ export class CellRenderer {
       input.select();
     });
     window.setTimeout(() => {
-      document.addEventListener("mousedown", onOutside, true);
-      document.addEventListener("keydown", onDocumentKeydown, true);
+      window.activeDocument.addEventListener("mousedown", onOutside, true);
+      window.activeDocument.addEventListener("keydown", onDocumentKeydown, true);
     }, 0);
   }
 

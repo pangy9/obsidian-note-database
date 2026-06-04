@@ -53,7 +53,7 @@ import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportCon
 import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey } from "../data/ColumnDisplay";
-import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
+import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
@@ -535,7 +535,7 @@ export class DatabaseView extends ItemView {
     const db = this.getActiveDb();
     const config = this.getConfig();
     if (!db || !config) return null;
-    const state = this.vs();
+    const _state = this.vs();
     const rows = this.rows.length > 0 ? this.rows : this.getRowsForView(this.currentViewIndex);
     if (rows.length === 0) {
       new Notice(t("errors.noDataExport"));
@@ -727,7 +727,7 @@ export class DatabaseView extends ItemView {
     if (this.containerEl_.parentElement) {
       this.registerDomEvent(this.containerEl_.parentElement, "wheel", (event) => this.forwardOuterWheelScroll(event));
     }
-    document.addEventListener("mousedown", this.handleOutsideClickBound, true);
+    window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
     this.registerDomEvent(document, "keydown", (event) => this.handleDatabaseKeydown(event));
     this.registerDomEvent(window, "focus", () => this.refreshOnActivation());
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
@@ -755,13 +755,13 @@ export class DatabaseView extends ItemView {
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
     this.closeGroupOrderPopover();
-    document.removeEventListener("mousedown", this.handleOutsideClickBound, true);
+    window.activeDocument.removeEventListener("mousedown", this.handleOutsideClickBound, true);
     if (this.scrollbarIdleTimer !== null) {
-      clearTimeout(this.scrollbarIdleTimer);
+      window.clearTimeout(this.scrollbarIdleTimer);
       this.scrollbarIdleTimer = null;
     }
     if (this.computedSyncTimer !== null) {
-      clearTimeout(this.computedSyncTimer);
+      window.clearTimeout(this.computedSyncTimer);
       this.computedSyncTimer = null;
     }
     if (this.configSaveTimer !== null) {
@@ -772,7 +772,7 @@ export class DatabaseView extends ItemView {
   /** Default-width dashboards hide the vertical scrollbar again shortly after scrolling. */
   private markContainerScrolling(): void {
     this.containerEl_?.addClass("is-scrolling");
-    if (this.scrollbarIdleTimer !== null) clearTimeout(this.scrollbarIdleTimer);
+    if (this.scrollbarIdleTimer !== null) window.clearTimeout(this.scrollbarIdleTimer);
     this.scrollbarIdleTimer = window.setTimeout(() => {
       this.containerEl_?.removeClass("is-scrolling");
       this.scrollbarIdleTimer = null;
@@ -793,7 +793,7 @@ export class DatabaseView extends ItemView {
 
   private handleDatabaseKeydown(event: KeyboardEvent): void {
     if (!this.containerEl_?.isConnected) return;
-    const active = document.activeElement;
+    const active = window.activeDocument.activeElement;
     const target = event.target;
     const eventTarget = target instanceof HTMLElement ? target : null;
     const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
@@ -1145,7 +1145,7 @@ export class DatabaseView extends ItemView {
     this.closeGroupOrderPopover();
 
     const triggerBtn = this.headerPopoverAnchorEl || this.containerEl_?.querySelector(".db-group-btn");
-    const host = this.containerEl_ || document.body;
+    const host = this.containerEl_ || window.activeDocument.body;
     const anchorEl = triggerBtn instanceof HTMLElement ? triggerBtn : undefined;
 
     const popover = host.createDiv({ cls: "db-group-order-popover" });
@@ -1279,11 +1279,11 @@ export class DatabaseView extends ItemView {
       if (target && (popover.contains(target) || anchorEl?.contains(target))) return;
       this.closeGroupOrderPopover();
     };
-    outsideTimer = window.setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+    outsideTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", closeOnOutside, true), 0);
     removeAutoClose = installPopoverAutoClose({ panel: popover, anchorEl, close: () => this.closeGroupOrderPopover() });
     this.removeGroupOrderPopoverListener = () => {
       if (outsideTimer !== undefined) window.clearTimeout(outsideTimer);
-      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.activeDocument.removeEventListener("mousedown", closeOnOutside, true);
       removeAutoClose?.();
     };
     positionPopover();
@@ -2258,9 +2258,9 @@ export class DatabaseView extends ItemView {
       this.renderSelectionStatusBar();
       const onMouseUp = () => {
         this.isSelectingCells = false;
-        document.removeEventListener("mouseup", onMouseUp, true);
+        window.activeDocument.removeEventListener("mouseup", onMouseUp, true);
       };
-      document.addEventListener("mouseup", onMouseUp, true);
+      window.activeDocument.addEventListener("mouseup", onMouseUp, true);
     });
     td.addEventListener("mouseenter", () => {
       if (!this.isSelectingCells || !this.cellSelection) return;
@@ -2274,7 +2274,7 @@ export class DatabaseView extends ItemView {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private isInteractiveCellTarget(target: EventTarget | null): boolean {
@@ -2875,7 +2875,7 @@ export class DatabaseView extends ItemView {
 
   private async saveConfigImmediately(): Promise<void> {
     if (this.configSaveTimer !== null) {
-      clearTimeout(this.configSaveTimer);
+      window.clearTimeout(this.configSaveTimer);
       this.configSaveTimer = null;
     }
     const pending = this.pendingConfigSave;
@@ -3003,7 +3003,7 @@ export class DatabaseView extends ItemView {
       }
       : { entry, mutation, ...metadata };
     if (this.configSaveTimer !== null) {
-      clearTimeout(this.configSaveTimer);
+      window.clearTimeout(this.configSaveTimer);
     }
     this.configSaveTimer = window.setTimeout(() => {
       this.configSaveTimer = null;
@@ -3215,7 +3215,7 @@ export class DatabaseView extends ItemView {
       }
     };
     apply.onclick = (event) => event.stopPropagation();
-    requestAnimationFrame(() => input.focus());
+    window.requestAnimationFrame(() => input.focus());
   }
 
   private syncSelectionControls(): void {
@@ -3497,7 +3497,7 @@ export class DatabaseView extends ItemView {
       return;
     }
 
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       if (!target.isConnected) {
         this.schedulePendingNewRowRevealRetry();
         return;
@@ -3555,7 +3555,7 @@ export class DatabaseView extends ItemView {
     this.pendingNewFilePath = undefined;
     this.pendingNewRecord = undefined;
     if (clearTimer && this.pendingNewRevealTimer !== null) {
-      clearTimeout(this.pendingNewRevealTimer);
+      window.clearTimeout(this.pendingNewRevealTimer);
       this.pendingNewRevealTimer = null;
     }
   }
@@ -3736,7 +3736,7 @@ export class DatabaseView extends ItemView {
       return;
     }
 
-    const newTd = document.createElement("td");
+    const newTd = window.activeDocument.createElement("td");
     newTd.setAttribute("data-note-database-row-path", row.file.path);
     newTd.setAttribute("data-note-database-column-key", col.key);
     if (oldTd.hasClass("db-cell-range-selected")) {
@@ -3771,7 +3771,7 @@ export class DatabaseView extends ItemView {
       targetCells = [];
     };
     const updateTargets = (clientX: number, clientY: number) => {
-      const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      const element = window.activeDocument.elementFromPoint(clientX, clientY) as HTMLElement | null;
       const targetCell = element?.closest<HTMLElement>("td[data-note-database-row-path][data-note-database-column-key]");
       if (!targetCell || targetCell.closest("tbody") !== tbody) {
         clearTargets();
@@ -3787,16 +3787,16 @@ export class DatabaseView extends ItemView {
       updateTargets(moveEvent.clientX, moveEvent.clientY);
     };
     const onUp = () => {
-      document.removeEventListener("mousemove", onMove, true);
-      document.removeEventListener("mouseup", onUp, true);
+      window.activeDocument.removeEventListener("mousemove", onMove, true);
+      window.activeDocument.removeEventListener("mouseup", onUp, true);
       sourceCell.removeClass("is-fill-source");
       const plan = this.getFillTargetPlan(targetCells);
       clearTargets();
       if (plan.targets.length > 0) void this.applyTableFill(plan, sourceValue);
       else if (plan.skipped > 0) new Notice(t("notice.noEditableCellsSkipped", { skipped: plan.skipped }));
     };
-    document.addEventListener("mousemove", onMove, true);
-    document.addEventListener("mouseup", onUp, true);
+    window.activeDocument.addEventListener("mousemove", onMove, true);
+    window.activeDocument.addEventListener("mouseup", onUp, true);
     updateTargets(event.clientX, event.clientY);
   }
 
@@ -4789,7 +4789,7 @@ export class DatabaseView extends ItemView {
   /** Refresh after waiting for metadata cache to catch up */
   private async refreshAfterSave(): Promise<void> {
     // Yield to event loop so metadata cache can re-parse after processFrontMatter
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
     this.refresh();
   }
 
@@ -4833,7 +4833,7 @@ export class DatabaseView extends ItemView {
   }
 
   private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
-    if (this.computedSyncTimer !== null) clearTimeout(this.computedSyncTimer);
+    if (this.computedSyncTimer !== null) window.clearTimeout(this.computedSyncTimer);
     this.computedSyncTimer = null;
     if (config.schema.computedFields.length === 0 || !this.isAutomaticComputedSync()) return;
     const entry = this.getCurrentEntry();

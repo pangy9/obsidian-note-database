@@ -70,7 +70,7 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
     measureContext = null;
     return measureContext;
   }
-  measureContext = document.createElement("canvas").getContext("2d");
+  measureContext = window.activeDocument.createElement("canvas").getContext("2d");
   return measureContext;
 }
 
@@ -80,7 +80,7 @@ function getFontFamily(): string {
     cachedFontFamily = "system-ui, sans-serif";
     return cachedFontFamily;
   }
-  cachedFontFamily = window.getComputedStyle(document.body).fontFamily || "system-ui, sans-serif";
+  cachedFontFamily = window.getComputedStyle(window.activeDocument.body).fontFamily || "system-ui, sans-serif";
   return cachedFontFamily;
 }
 

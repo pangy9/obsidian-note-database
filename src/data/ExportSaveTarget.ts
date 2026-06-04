@@ -119,6 +119,5 @@ async function ensureFolder(app: App, folderPath: string): Promise<void> {
 
 function getRequire(): RequireFn | null {
   return (window as Window & { require?: RequireFn }).require ||
-    (globalThis as typeof globalThis & { require?: RequireFn }).require ||
     null;
 }

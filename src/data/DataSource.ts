@@ -37,7 +37,7 @@ export class DataSource {
   private listeners: DataChangeCallback[] = [];
   private viewConfigListeners: ViewConfigMutationCallback[] = [];
   private eventRefs: { offref: () => void }[] = [];
-  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyTimer: number | null = null;
   private frontmatterOverrides = new Map<string, { values: Record<string, unknown>; expiresAt: number }>();
   private viewDefOverrides = new Map<string, { config: DatabaseConfig; expiresAt: number }>();
   /** Per-file write queue to serialize processFrontMatter calls on the same file */
@@ -898,8 +898,8 @@ export class DataSource {
 
   /** Debounce rapid data change events into a single notification */
   private scheduleNotify(): void {
-    if (this.notifyTimer !== null) clearTimeout(this.notifyTimer);
-    this.notifyTimer = setTimeout(() => {
+    if (this.notifyTimer !== null) window.clearTimeout(this.notifyTimer);
+    this.notifyTimer = window.setTimeout(() => {
       this.notifyTimer = null;
       this.notify();
     }, 80);

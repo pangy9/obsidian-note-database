@@ -1,10 +1,10 @@
-import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, setIcon, stringifyYaml } from "obsidian";
+import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
-import { ColumnDef, ComputedFieldDef, DatabaseConfig, PluginSettings, SortRule, SourceRule, SourceRuleNode, StatusOptionDef, ViewConfig, generateId } from "./data/types";
+import { ColumnDef, ComputedFieldDef, DatabaseConfig, PluginSettings, SortRule, SourceRuleNode, StatusOptionDef, ViewConfig, generateId } from "./data/types";
 import {
   createOptionsFromValues,
   getStatusPresetOptions,
@@ -286,7 +286,7 @@ export default class NoteDatabasePlugin extends Plugin {
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
       ));
     });
-    setTimeout(() => this.markDatabaseFileTabs(), 1000);
+    window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
   }
 
   private scheduleDatabaseFileViewOpen(file: TFile, leaf?: WorkspaceLeaf, delay = 0): void {
@@ -423,8 +423,8 @@ export default class NoteDatabasePlugin extends Plugin {
       setting.open();
       setting.openTabById(this.manifest.id);
       // 等待 DOM 渲染后滚动到数据库列表分组
-      requestAnimationFrame(() => {
-        const el = document.getElementById("db-settings-database-group");
+      window.requestAnimationFrame(() => {
+        const el = window.activeDocument.getElementById("db-settings-database-group");
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
         }
@@ -2300,7 +2300,7 @@ export default class NoteDatabasePlugin extends Plugin {
         const existingBadge = item.querySelector(".nav-file-tag.note-database-tag");
         if (isDb && !existingBadge) {
           if (self) {
-            const badge = document.createElement("div");
+            const badge = window.activeDocument.createElement("div");
             badge.className = "nav-file-tag note-database-tag";
             badge.textContent = "DB";
             self.appendChild(badge);

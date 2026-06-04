@@ -380,7 +380,7 @@ export class ListRenderer {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private renderNewRow(list: HTMLElement, defaults?: Record<string, unknown>): void {
@@ -464,7 +464,7 @@ export class ListRenderer {
     const displayType = this.getDisplayType(config, col);
     const empty = this.isEmptyValue(value) && displayType !== "checkbox";
     const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
-    const field = document.createElement("div");
+    const field = window.activeDocument.createElement("div");
     field.className = "db-list-field";
     field.setAttribute("data-note-database-column-key", col.key);
     if (col.wrap) field.setCssProps({ flex: "0 0 auto" });

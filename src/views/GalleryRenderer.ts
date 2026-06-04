@@ -398,7 +398,7 @@ export class GalleryRenderer {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private renderCover(card: HTMLElement, config: ViewConfig, row: RowData): void {
@@ -513,7 +513,7 @@ export class GalleryRenderer {
     const displayType = this.getDisplayType(config, col);
     const empty = this.isEmptyValue(value) && displayType !== "checkbox";
     const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
-    const item = document.createElement("div");
+    const item = window.activeDocument.createElement("div");
     item.className = "db-gallery-field";
     item.setAttribute("data-note-database-column-key", col.key);
     item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
@@ -644,8 +644,8 @@ export class GalleryRenderer {
       startWidth: this.getCardSize(config),
       gallery,
     };
-    document.addEventListener("mousemove", this.handleCardResize);
-    document.addEventListener("mouseup", this.finishCardResize);
+    window.activeDocument.addEventListener("mousemove", this.handleCardResize);
+    window.activeDocument.addEventListener("mouseup", this.finishCardResize);
   }
 
   private readonly handleCardResize = (event: MouseEvent): void => {
@@ -661,8 +661,8 @@ export class GalleryRenderer {
     event.preventDefault();
     event.stopPropagation();
     const width = this.clampCardSize(this.resizeState.startWidth + event.clientX - this.resizeState.startX);
-    document.removeEventListener("mousemove", this.handleCardResize);
-    document.removeEventListener("mouseup", this.finishCardResize);
+    window.activeDocument.removeEventListener("mousemove", this.handleCardResize);
+    window.activeDocument.removeEventListener("mouseup", this.finishCardResize);
     this.resizeState = undefined;
     this.actions.updateCardSize(width);
   };

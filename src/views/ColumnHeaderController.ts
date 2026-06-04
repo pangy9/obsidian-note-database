@@ -69,14 +69,14 @@ export class ColumnHeaderController {
         this.syncTableColumnLayouts(th);
       };
       const onMouseUp = () => {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
+        window.activeDocument.removeEventListener("mousemove", onMouseMove);
+        window.activeDocument.removeEventListener("mouseup", onMouseUp);
         this.suppressSortUntil = Date.now() + 300;
         this.actions.setUndoLabel(t("undo.columnWidthConfig"));
         this.actions.saveConfig();
       };
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
+      window.activeDocument.addEventListener("mousemove", onMouseMove);
+      window.activeDocument.addEventListener("mouseup", onMouseUp);
     });
     handle.addEventListener("click", (e) => {
       e.preventDefault();
@@ -195,11 +195,11 @@ export class ColumnHeaderController {
     });
     th.addEventListener("dragend", () => {
       th.removeClass("db-dragging");
-      document.querySelectorAll(".db-drop-target").forEach((el) => el.classList.remove("db-drop-target"));
+      window.activeDocument.querySelectorAll(".db-drop-target").forEach((el) => el.classList.remove("db-drop-target"));
     });
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 }

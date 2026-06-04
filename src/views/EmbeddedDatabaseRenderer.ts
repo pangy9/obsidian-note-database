@@ -17,7 +17,7 @@ import {
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
-import { createCsvMarkdownZip, CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
+import { createCsvMarkdownZip } from "../data/CsvMarkdownZipExport";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
@@ -42,7 +42,7 @@ import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey } from "../data/ColumnDisplay";
-import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
+import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
 import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
@@ -234,8 +234,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.containerEl.addClass("note-database-embed");
     this.unsubscribe = this.dataSource.onDataChanged(() => this.handleDataChanged());
     this.unsubscribeViewConfig = this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation));
-    document.addEventListener("mousedown", this.handleOutsideClickBound, true);
-    document.addEventListener("mouseup", this.handleMouseUpBound);
+    window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
+    window.activeDocument.addEventListener("mouseup", this.handleMouseUpBound);
     window.addEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.addEventListener("keydown", this.handleEmbedKeydownBound);
     this.observeVisibility();
@@ -249,8 +249,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.closeGroupOrderPopover();
     this.unsubscribe?.();
     this.unsubscribeViewConfig?.();
-    document.removeEventListener("mousedown", this.handleOutsideClickBound, true);
-    document.removeEventListener("mouseup", this.handleMouseUpBound);
+    window.activeDocument.removeEventListener("mousedown", this.handleOutsideClickBound, true);
+    window.activeDocument.removeEventListener("mouseup", this.handleMouseUpBound);
     window.removeEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.removeEventListener("keydown", this.handleEmbedKeydownBound);
     this.intersectionObserver?.disconnect();
@@ -336,7 +336,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       this.showSortPanel ||
       this.showColumnManager ||
       this.showViewConfigPanel ||
-      this.containerEl.contains(document.activeElement);
+      this.containerEl.contains(window.activeDocument.activeElement);
   }
 
   private handleOutsideClick(event: MouseEvent): void {
@@ -1443,11 +1443,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (target && (popover.contains(target) || anchorEl?.contains(target))) return;
       this.closeGroupOrderPopover();
     };
-    outsideTimer = window.setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+    outsideTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", closeOnOutside, true), 0);
     removeAutoClose = installPopoverAutoClose({ panel: popover, anchorEl, close: () => this.closeGroupOrderPopover() });
     this.removeGroupOrderPopoverListener = () => {
       if (outsideTimer !== undefined) window.clearTimeout(outsideTimer);
-      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.activeDocument.removeEventListener("mousedown", closeOnOutside, true);
       removeAutoClose?.();
     };
     positionPopover();
@@ -2188,7 +2188,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private isPhoneLayout(): boolean {
-    return document.body.classList.contains("is-phone");
+    return window.activeDocument.body.classList.contains("is-phone");
   }
 
   private getSelectedEmbedCellAddresses(): CellAddress[] {
@@ -2269,9 +2269,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     copyCsvBtn.onclick = () => { void this.copySelectedEmbedCells("csv"); };
 
     // Edit-only buttons — rendered but hidden in embedded view via CSS
-    const pasteBtn = bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.pasteCells"), attr: { type: "button" } });
-    const fillBtn = bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.fillValue"), attr: { type: "button" } });
-    const clearBtn = bar.createEl("button", { cls: "db-selection-delete db-embed-hide", text: t("selection.clearCells"), attr: { type: "button" } });
+    bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.pasteCells"), attr: { type: "button" } });
+    bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.fillValue"), attr: { type: "button" } });
+    bar.createEl("button", { cls: "db-selection-delete db-embed-hide", text: t("selection.clearCells"), attr: { type: "button" } });
 
     const summary = this.containerEl.querySelector(".db-summary");
     if (summary) {

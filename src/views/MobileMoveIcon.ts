@@ -3,7 +3,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 /** Render the compact outline caret icon used by phone-only manual-order controls. */
 export function renderMobileMoveIcon(target: HTMLElement): void {
   target.empty();
-  const svg = document.createElementNS(SVG_NS, "svg");
+  const svg = window.activeDocument.createElementNS(SVG_NS, "svg");
   svg.setAttribute("width", "24");
   svg.setAttribute("height", "24");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -21,7 +21,7 @@ export function renderMobileMoveIcon(target: HTMLElement): void {
 }
 
 function appendPath(svg: SVGSVGElement, d: string): void {
-  const path = document.createElementNS(SVG_NS, "path");
+  const path = window.activeDocument.createElementNS(SVG_NS, "path");
   path.setAttribute("d", d);
   path.setAttribute("fill", "none");
   svg.appendChild(path);

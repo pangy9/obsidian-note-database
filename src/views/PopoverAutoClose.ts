@@ -32,7 +32,7 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
   };
   const onWindowBlur = () => close();
   const onVisibilityChange = () => {
-    if (document.visibilityState === "hidden") close();
+    if (window.activeDocument.visibilityState === "hidden") close();
   };
 
   const timer = window.setInterval(() => {
@@ -54,7 +54,7 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
   options.anchorEl?.addEventListener("pointermove", markActivity);
   options.anchorEl?.addEventListener("mousedown", markActivity, true);
   window.addEventListener("blur", onWindowBlur);
-  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.activeDocument.addEventListener("visibilitychange", onVisibilityChange);
 
   function cleanup(): void {
     window.clearInterval(timer);
@@ -67,7 +67,7 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
     options.anchorEl?.removeEventListener("pointermove", markActivity);
     options.anchorEl?.removeEventListener("mousedown", markActivity, true);
     window.removeEventListener("blur", onWindowBlur);
-    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.activeDocument.removeEventListener("visibilitychange", onVisibilityChange);
   }
 
   return cleanup;

@@ -1,13 +1,16 @@
 import { App, Modal, Notice } from "obsidian";
-import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValues } from "../../data/ColumnTypes";
+import { evaluateBaseExpression } from "../../data/BaseExpression";
+import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValuesForKey } from "../../data/ColumnTypes";
 import { ComputedFieldEngine } from "../../data/ComputedField";
-import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../../data/types";
+import { getComputedStorageKey } from "../../data/ColumnDisplay";
+import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef } from "../../data/types";
 import { getEffectiveLocale, t } from "../../i18n";
 import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
 
 export interface FormulaSaveResult {
   expression: string;
   resultType: ComputedFieldDef["type"];
+  expressionSyntax?: ComputedFieldDef["expressionSyntax"];
 }
 
 interface FormulaFunctionHelp {
@@ -45,14 +48,14 @@ interface FormulaReferencedField {
 }
 
 const FUNCTIONS: FormulaFunctionHelp[] = [
-  { categoryKey: "formula.catCommon", name: "IF", signature: "IF(condition, trueValue, falseValue)", descriptionKey: "formula.fn.IF.desc", example: '=IF([status] === "done", 1, 0)' },
-  { categoryKey: "formula.catCommon", name: "IFERROR", signature: "IFERROR(value, fallback)", descriptionKey: "formula.fn.IFERROR.desc", example: "=IFERROR([price] / [days], 0)" },
-  { categoryKey: "formula.catCommon", name: "DAYS", signature: "DAYS(start_date, end_date)", descriptionKey: "formula.fn.DAYS.desc", example: "=DAYS([start_date], [end_date])" },
-  { categoryKey: "formula.catCommon", name: "ADDDAYS", signature: "ADDDAYS(date, days)", descriptionKey: "formula.fn.ADDDAYS.desc", example: "=ADDDAYS([start_date], [duration])" },
-  { categoryKey: "formula.catCommon", name: "TEXT", signature: "TEXT(value, format)", descriptionKey: "formula.fn.TEXT.desc", example: '=TEXT([date], "YYYY-MM-DD")' },
-  { categoryKey: "formula.catCommon", name: "ROUND", signature: "ROUND(number, digits)", descriptionKey: "formula.fn.ROUND.desc", example: "=ROUND([price] / [days], 2)" },
-  { categoryKey: "formula.catCommon", name: "AND", signature: "AND(condition1, condition2, ...)", descriptionKey: "formula.fn.AND.desc", example: '=AND([status] === "done", [price] > 0)' },
-  { categoryKey: "formula.catCommon", name: "OR", signature: "OR(condition1, condition2, ...)", descriptionKey: "formula.fn.OR.desc", example: '=OR([status] === "active", [status] === "done")' },
+  { categoryKey: "formula.catLogic", name: "IF", signature: "IF(condition, trueValue, falseValue)", descriptionKey: "formula.fn.IF.desc", example: '=IF([status] === "done", 1, 0)' },
+  { categoryKey: "formula.catLogic", name: "IFERROR", signature: "IFERROR(value, fallback)", descriptionKey: "formula.fn.IFERROR.desc", example: "=IFERROR([price] / [days], 0)" },
+  { categoryKey: "formula.catDate", name: "DAYS", signature: "DAYS(start_date, end_date)", descriptionKey: "formula.fn.DAYS.desc", example: "=DAYS([start_date], [end_date])" },
+  { categoryKey: "formula.catDate", name: "ADDDAYS", signature: "ADDDAYS(date, days)", descriptionKey: "formula.fn.ADDDAYS.desc", example: "=ADDDAYS([start_date], [duration])" },
+  { categoryKey: "formula.catText", name: "TEXT", signature: "TEXT(value, format)", descriptionKey: "formula.fn.TEXT.desc", example: '=TEXT([date], "YYYY-MM-DD")' },
+  { categoryKey: "formula.catMath", name: "ROUND", signature: "ROUND(number, digits)", descriptionKey: "formula.fn.ROUND.desc", example: "=ROUND([price] / [days], 2)" },
+  { categoryKey: "formula.catLogic", name: "AND", signature: "AND(condition1, condition2, ...)", descriptionKey: "formula.fn.AND.desc", example: '=AND([status] === "done", [price] > 0)' },
+  { categoryKey: "formula.catLogic", name: "OR", signature: "OR(condition1, condition2, ...)", descriptionKey: "formula.fn.OR.desc", example: '=OR([status] === "active", [status] === "done")' },
   { categoryKey: "formula.catMath", name: "SUM", signature: "SUM(number1, number2, ...)", descriptionKey: "formula.fn.SUM.desc", example: "=SUM([price], [fee])" },
   { categoryKey: "formula.catMath", name: "AVERAGE", signature: "AVERAGE(number1, number2, ...)", descriptionKey: "formula.fn.AVERAGE.desc", example: "=AVERAGE([daily_cost], [target_daily_cost])" },
   { categoryKey: "formula.catMath", name: "MIN", signature: "MIN(number1, number2, ...)", descriptionKey: "formula.fn.MIN.desc", example: "=MIN([daily_cost], [target_daily_cost])" },
@@ -86,8 +89,9 @@ const FUNCTIONS: FormulaFunctionHelp[] = [
   { categoryKey: "formula.catStats", name: "COUNTIF", signature: "COUNTIF(value_or_list, criterion)", descriptionKey: "formula.fn.COUNTIF.desc", example: '=COUNTIF([status], "done")' },
 ];
 
-const RESULT_TYPE_KEYS: Array<[ComputedFieldDef["type"], string]> = [["number", "formula.typeNumber"], ["text", "formula.typeText"], ["date", "formula.typeDate"]];
-const HELP_CATEGORY_KEYS = ["formula.catFields", "formula.catExamples", ...Array.from(new Set(FUNCTIONS.map((fn) => fn.categoryKey)))];
+const RESULT_TYPE_KEYS: Array<[ComputedFieldDef["type"], string]> = [["number", "formula.typeNumber"], ["text", "formula.typeText"], ["date", "formula.typeDate"], ["checkbox", "formula.typeCheckbox"]];
+const FUNCTION_CATEGORY_KEYS = ["formula.catLogic", "formula.catMath", "formula.catText", "formula.catDate", "formula.catStats"];
+const HELP_CATEGORY_KEYS = ["formula.catFields", "formula.catExamples", ...FUNCTION_CATEGORY_KEYS];
 const FUNCTION_NAMES = new Set(FUNCTIONS.flatMap((fn) => [fn.name, fn.name.toLowerCase()]));
 
 export class FormulaModal extends Modal {
@@ -111,6 +115,7 @@ export class FormulaModal extends Modal {
   private matchedBracketIndexes = new Set<number>();
   private originalExpression = "";
   private originalResultType: ComputedFieldDef["type"] = "text";
+  private expressionSyntax: ComputedFieldDef["expressionSyntax"] = "note-database";
   private saved = false;
   private resizeObserver?: ResizeObserver;
 
@@ -120,7 +125,10 @@ export class FormulaModal extends Modal {
     private computedField: ComputedFieldDef | undefined,
     private rows: RowData[],
     private columns: ColumnDef[],
-    private onSave: (result: FormulaSaveResult) => Promise<void>
+    private computedSyncMode: ComputedSyncMode,
+    private onSave: (result: FormulaSaveResult) => Promise<void>,
+    private baseThisFile?: RowData["file"],
+    private baseThisFrontmatter?: Record<string, unknown>
   ) {
     super(app);
   }
@@ -132,6 +140,7 @@ export class FormulaModal extends Modal {
     this.contentEl.addClass("formula-workbench-modal");
     this.originalExpression = this.computedField?.expression || "";
     this.originalResultType = this.computedField?.type || "text";
+    this.expressionSyntax = this.computedField?.expressionSyntax || "note-database";
 
     this.renderHeader();
 
@@ -166,10 +175,8 @@ export class FormulaModal extends Modal {
     const header = this.contentEl.createDiv({ cls: "db-formula-header" });
     const titleWrap = header.createDiv({ cls: "db-formula-title-wrap" });
     titleWrap.createEl("h3", { text: t("formula.title", { name: this.col.label }) });
-    titleWrap.createDiv({
-      cls: "db-formula-subtitle",
-      text: t("formula.subtitle", { key: this.col.key }),
-    });
+    titleWrap.createDiv({ cls: "db-formula-subtitle", text: this.getStorageSubtitle() });
+    titleWrap.createDiv({ cls: "db-formula-storage-note", text: this.getStorageNote() });
 
     const typeLabel = header.createEl("label", { cls: "db-formula-result-type" });
     typeLabel.createSpan({ text: t("formula.resultType") });
@@ -180,6 +187,23 @@ export class FormulaModal extends Modal {
       this.updatePreview();
       this.renderHelpBrowserContent();
     };
+  }
+
+  private getStorageSubtitle(): string {
+    if (this.computedSyncMode === "display-only") {
+      return t("formula.storage.displayOnly", { key: getComputedStorageKey(this.col) });
+    }
+    return t("formula.storage.savedProperty", { key: getComputedStorageKey(this.col) });
+  }
+
+  private getStorageNote(): string {
+    if (this.computedSyncMode === "display-only") {
+      return t("formula.storage.displayOnlyNote");
+    }
+    if (this.computedSyncMode === "manual") {
+      return t("formula.storage.manualNote");
+    }
+    return t("formula.storage.automaticNote");
   }
 
   private renderEditor(parent: HTMLElement): void {
@@ -500,7 +524,7 @@ export class FormulaModal extends Modal {
     for (const row of this.rows) {
       const raw = row.frontmatter[col.key];
       if (col.type === "multi-select") {
-        for (const value of toMultiSelectValues(raw)) {
+        for (const value of toMultiSelectValuesForKey(col.key, raw)) {
           if (value) values.add(value);
         }
       } else if (raw != null && raw !== "") {
@@ -524,7 +548,11 @@ export class FormulaModal extends Modal {
         return;
       }
       const expression = this.textarea.value.trim();
-      await this.onSave({ expression, resultType: this.typeSelect.value as ComputedFieldDef["type"] });
+      await this.onSave({
+        expression,
+        resultType: this.typeSelect.value as ComputedFieldDef["type"],
+        expressionSyntax: this.expressionSyntax,
+      });
       this.saved = true;
       this.close();
     };
@@ -683,20 +711,40 @@ export class FormulaModal extends Modal {
       return { valid: true, empty: false, message: t("formula.noPreviewSaveFirst"), output: t("formula.noPreview"), severity: "muted" };
     }
 
-    const result = new ComputedFieldEngine([], this.columns).evaluateSingleDetailed(expression, row.frontmatter, row.computed);
-    if (result.error) {
-      return { valid: false, empty: false, message: result.error, output: result.error, severity: "error" };
+    let value: unknown;
+    try {
+      if (this.expressionSyntax === "base") {
+        value = evaluateBaseExpression(expression, {
+          app: this.app,
+          file: row.file,
+          frontmatter: row.frontmatter,
+          thisFile: this.baseThisFile,
+          thisFrontmatter: this.baseThisFrontmatter,
+          columns: this.columns,
+          computedValues: row.computed,
+        });
+      } else {
+        const result = new ComputedFieldEngine([], this.columns).evaluateSingleDetailed(expression, row.frontmatter, row.computed);
+        if (result.error) {
+          return { valid: false, empty: false, message: result.error, output: result.error, severity: "error" };
+        }
+        value = result.value;
+      }
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      return { valid: false, empty: false, message, output: message, severity: "error" };
     }
 
-    const typeError = this.validateResultType(result.value);
+    const typeError = this.validateResultType(value);
     if (typeError) {
-      return { valid: false, empty: false, message: typeError, output: this.formatPreviewValue(result.value), severity: "warning" };
+      return { valid: false, empty: false, message: typeError, output: this.formatPreviewValue(value), severity: "warning" };
     }
 
-    return { valid: true, empty: false, message: t("formula.valid"), output: this.formatPreviewValue(result.value), severity: "ok" };
+    return { valid: true, empty: false, message: t("formula.valid"), output: this.formatPreviewValue(value), severity: "ok" };
   }
 
   private validateReferencedFields(expression: string): string | null {
+    if (this.expressionSyntax === "base") return null;
     // 1. Check bracket references [field_key]
     const refs = Array.from(expression.matchAll(/\[([^\]]+)\]/g)).map((match) => String(match[1] || "").trim()).filter(Boolean);
     const available = this.columns.filter((candidate) => candidate.key !== "file.name");
@@ -741,6 +789,7 @@ export class FormulaModal extends Modal {
         return t("formula.resultTypeDate");
       }
     }
+    if (type === "checkbox" && typeof value !== "boolean") return t("formula.resultTypeCheckbox");
     return null;
   }
 
@@ -1380,8 +1429,7 @@ export class FormulaModal extends Modal {
     }
     lines.push("");
     lines.push(prompt.functionsTitle);
-    const categories = Array.from(new Set(FUNCTIONS.map((fn) => fn.categoryKey)));
-    for (const catKey of categories) {
+    for (const catKey of FUNCTION_CATEGORY_KEYS) {
       lines.push("");
       lines.push(`### ${t(catKey)}`);
       for (const fn of FUNCTIONS.filter((f) => f.categoryKey === catKey)) {

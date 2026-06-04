@@ -1,7 +1,14 @@
 import { Notice, Platform, normalizePath, setIcon } from "obsidian";
-import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
+import {
+  getColumnOptions,
+  normalizeOptionValueForKey,
+  toBooleanValue,
+  toMultiSelectValuesForKey,
+} from "../data/ColumnTypes";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { DataSource } from "../data/DataSource";
-import { ColumnDef, RowData, StatusOptionDef } from "../data/types";
+import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
 import { t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -53,7 +60,8 @@ export class CellRenderer {
     private isReadOnly = false,
     private commitCellOptionTransaction?: (row: RowData, col: ColumnDef, transaction: CellOptionTransaction) => Promise<void>,
     private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>,
-    private getFileTitleInfo: (row: RowData) => FileTitleDisplay = (row) => getFileTitleDisplay(row, [row])
+    private getFileTitleInfo: (row: RowData) => FileTitleDisplay = (row) => getFileTitleDisplay(row, [row]),
+    private getComputedFields: () => ComputedFieldDef[] = () => []
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -93,10 +101,11 @@ export class CellRenderer {
       }
       return;
     } else {
-      value = row.frontmatter[col.key];
+      value = isBaseFileField(col.key) ? getRowFileFieldValue(row, col.key) : row.frontmatter[col.key];
     }
 
-    if (col.type === "checkbox") {
+    const displayType = getColumnDisplayType(col, this.getComputedFields());
+    if (displayType === "checkbox") {
       this.renderCheckbox(td, row, col, value);
       return;
     }
@@ -107,7 +116,7 @@ export class CellRenderer {
         this.makeComputedEditable(td, col);
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEditFormula"));
       }
-      if (!this.isReadOnly && col.type !== "computed" && col.key !== "file.name") {
+      if (!this.isReadOnly && col.type !== "computed" && !isBaseFileField(col.key)) {
         td.addClass("db-editable-cell");
         this.makeEditable(td, row, col, "");
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEdit"));
@@ -118,7 +127,7 @@ export class CellRenderer {
       return;
     }
 
-    switch (col.type) {
+    switch (displayType) {
       case "status":
       case "select":
         this.renderStatus(td, col, String(value));
@@ -145,13 +154,13 @@ export class CellRenderer {
 
     if (!this.isReadOnly && col.type === "computed") {
       this.makeComputedEditable(td, col);
-      setFieldTooltip(td, value, t("cell.doubleClickEditFormula"));
-    } else if (!this.isReadOnly && col.key !== "file.name") {
+      setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEditFormula"));
+    } else if (!this.isReadOnly && !isBaseFileField(col.key)) {
       td.addClass("db-editable-cell");
       this.makeEditable(td, row, col, value);
-      setFieldTooltip(td, value, t("cell.doubleClickEdit"));
+      setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEdit"));
     } else {
-      setFieldTooltip(td, value);
+      setFieldTooltip(td, this.getTooltipValue(col, value));
     }
   }
 
@@ -159,7 +168,7 @@ export class CellRenderer {
     const badge = td.createSpan({ cls: "status-badge" });
     badge.textContent = status;
     badge.title = status;
-    const option = col.statusOptions?.find((item) => item.value === status);
+    const option = col.statusOptions?.find((item) => normalizeOptionValueForKey(col.key, item.value) === status);
     if (option) {
       badge.addClass(`status-color-${option.color}`);
     } else {
@@ -168,7 +177,7 @@ export class CellRenderer {
   }
 
   private renderMultiSelect(td: HTMLElement, col: ColumnDef, value: unknown): void {
-    const values = toMultiSelectValues(value);
+    const values = toMultiSelectValuesForKey(col.key, value);
     const wrap = td.createDiv({ cls: "db-multi-select-values" });
     setFieldTooltip(wrap, values);
     for (const item of values) {
@@ -176,14 +185,22 @@ export class CellRenderer {
     }
   }
 
+  private getTooltipValue(col: ColumnDef, value: unknown): unknown {
+    return getColumnDisplayType(col, this.getComputedFields()) === "multi-select" ? toMultiSelectValuesForKey(col.key, value) : value;
+  }
+
   private renderCheckbox(td: HTMLElement, row: RowData, col: ColumnDef, value: unknown): void {
     td.addClass("db-checkbox-cell");
     setFieldTooltip(td, toBooleanValue(value) ? t("common.true") : t("common.false"));
     const checkbox = td.createEl("input", { attr: { type: "checkbox" } });
     checkbox.checked = toBooleanValue(value);
-    checkbox.disabled = this.isReadOnly;
+    checkbox.disabled = this.isReadOnly || col.type === "computed";
     checkbox.onclick = (event) => event.stopPropagation();
     if (this.isReadOnly) return;
+    if (col.type === "computed") {
+      this.makeComputedEditable(td, col);
+      return;
+    }
     checkbox.onchange = () => {
       void this.saveValue(row, col, checkbox.checked);
     };
@@ -303,6 +320,7 @@ export class CellRenderer {
 
   private getCurrentValue(row: RowData, col: ColumnDef): unknown {
     if (col.type === "computed" && col.computedKey) return row.computed[col.computedKey];
+    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
     return row.frontmatter[col.key];
   }
 
@@ -324,8 +342,10 @@ export class CellRenderer {
     const container = td.closest(".note-database-container") as HTMLElement | null;
     const host = container || document.body;
     host.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
-    const originalValues = toMultiSelectValues(currentValue);
-    const selected = new Set(multiple ? toMultiSelectValues(currentValue) : [String(currentValue ?? "")]);
+    const originalValues = multiple
+      ? toMultiSelectValuesForKey(col.key, currentValue)
+      : [normalizeOptionValueForKey(col.key, currentValue)].filter(Boolean);
+    const selected = new Set(originalValues);
     const popover = host.createDiv({ cls: "db-cell-option-popover" });
     let activeOptionIndex = 0;
 
@@ -360,7 +380,14 @@ export class CellRenderer {
       else item.focus();
     };
     // Build option objects from column config (mutable copies)
-    const optionDefs: StatusOptionDef[] = getColumnOptions(col).map(o => ({ ...o }));
+    const optionDefs: StatusOptionDef[] = [];
+    const seenOptions = new Set<string>();
+    for (const option of getColumnOptions(col)) {
+      const value = normalizeOptionValueForKey(col.key, option.value);
+      if (!value || seenOptions.has(value)) continue;
+      seenOptions.add(value);
+      optionDefs.push({ ...option, value });
+    }
     for (const v of originalValues) {
       if (v && !optionDefs.find(o => o.value === v)) {
         optionDefs.push({ value: v, color: "gray" });
@@ -385,7 +412,7 @@ export class CellRenderer {
       }
     };
     const commitValue = (value: unknown) => {
-      void commitOptionTransaction({ setValue: true, value });
+      void commitOptionTransaction({ setValue: true, value: this.normalizeCellValueForSave(col, value) });
     };
     const commitOptions = (transaction: Omit<CellOptionTransaction, "previousOptions" | "nextOptions"> = {}) => {
       void commitOptionTransaction({
@@ -559,7 +586,7 @@ export class CellRenderer {
           commitOptions({
             cleanupRemovedValues: [removed],
             setValue: wasSelected,
-            value: multiple ? Array.from(selected) : null,
+            value: multiple ? this.normalizeCellValueForSave(col, Array.from(selected)) : null,
           });
           renderOptionList();
         };
@@ -633,7 +660,7 @@ export class CellRenderer {
     addInput.onkeydown = (e) => {
       if (e.key !== "Enter") return;
       e.preventDefault();
-      const name = addInput.value.trim();
+      const name = normalizeOptionValueForKey(col.key, addInput.value);
       if (!name) return;
       if (optionDefs.some(o => o.value === name)) {
         new Notice(t("cell.optionExists", { name }));
@@ -1472,15 +1499,23 @@ export class CellRenderer {
 
   private async saveValue(row: RowData, col: ColumnDef, value: unknown): Promise<void> {
     try {
+      const normalizedValue = this.normalizeCellValueForSave(col, value);
       if (this.saveCellValue) {
-        await this.saveCellValue(row, col, value);
+        await this.saveCellValue(row, col, normalizedValue);
         return;
       }
-      await this.dataSource.updateFrontmatter(row.file, { [col.key]: value });
+      await this.dataSource.updateFrontmatter(row.file, { [col.key]: normalizedValue });
       await this.refreshAfterSave();
     } catch (err) {
       new Notice(t("errors.updateFailed", { error: String(err) }));
     }
+  }
+
+  private normalizeCellValueForSave(col: ColumnDef, value: unknown): unknown {
+    if (value == null) return value;
+    if (col.type === "multi-select") return toMultiSelectValuesForKey(col.key, value);
+    if (col.type === "select" || col.type === "status") return normalizeOptionValueForKey(col.key, value);
+    return value;
   }
 
   private editFileName(td: HTMLElement, row: RowData, currentName: string): void {

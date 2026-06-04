@@ -1,5 +1,18 @@
 import { FilterRule, SortRule, ViewConfig } from "../data/types";
 
+const BUILTIN_VIEW_FIELDS = new Set([
+  "file.name",
+  "file.path",
+  "file.folder",
+  "file.ext",
+  "file.extension",
+  "file.ctime",
+  "file.created",
+  "file.mtime",
+  "file.modified",
+  "file.size",
+]);
+
 export interface DatabaseViewState {
   searchText: string;
   statusFilter: string;
@@ -26,8 +39,18 @@ export class ViewStateStore {
     // Prune hidden columns that no longer exist in current schema
     if (state && viewConfig) {
       const validKeys = new Set(viewConfig.schema.columns.map(c => c.key));
+      for (const key of BUILTIN_VIEW_FIELDS) validKeys.add(key);
       for (const key of state.hiddenColumns) {
         if (!validKeys.has(key)) state.hiddenColumns.delete(key);
+      }
+      state.filters = state.filters.filter((rule) => validKeys.has(rule.field));
+      state.sortRules = state.sortRules.filter((rule) => validKeys.has(rule.field));
+      if (state.sortColumn && !validKeys.has(state.sortColumn)) {
+        state.sortColumn = undefined;
+        state.sortDirection = "asc";
+      }
+      if (state.groupByField && !validKeys.has(state.groupByField)) {
+        state.groupByField = "";
       }
     }
     return state;
@@ -62,23 +85,26 @@ export class ViewStateStore {
   }
 
   private create(viewConfig: ViewConfig | undefined): DatabaseViewState {
-    const sortRules = this.copySortRules(viewConfig?.sortRules);
-    const legacySortColumn = viewConfig?.sortColumn;
+    const mode = viewConfig?.viewType || "table";
+    const modeState = viewConfig?.viewStates?.[mode];
+    const persisted = modeState ?? viewConfig;
+    const sortRules = this.copySortRules(persisted?.sortRules);
+    const legacySortColumn = persisted?.sortColumn;
     if (sortRules.length === 0 && legacySortColumn) {
       sortRules.push({
         field: legacySortColumn,
-        direction: viewConfig?.sortDirection ?? "asc",
+        direction: persisted?.sortDirection ?? "asc",
       });
     }
     return {
-      searchText: viewConfig?.searchText ?? "",
-      statusFilter: viewConfig?.statusFilter ?? "",
-      groupByField: viewConfig?.groupByField ?? "",
-      filters: this.copyFilters(viewConfig?.filters),
-      hiddenColumns: new Set(viewConfig?.hiddenColumns ?? []),
-      filterLogic: viewConfig?.filterLogic ?? "and",
-      sortColumn: sortRules.length > 0 ? undefined : viewConfig?.sortColumn,
-      sortDirection: sortRules.length > 0 ? "asc" : viewConfig?.sortDirection ?? "asc",
+      searchText: persisted?.searchText ?? "",
+      statusFilter: persisted?.statusFilter ?? "",
+      groupByField: persisted?.groupByField ?? "",
+      filters: this.copyFilters(persisted?.filters),
+      hiddenColumns: new Set(persisted?.hiddenColumns ?? []),
+      filterLogic: persisted?.filterLogic ?? "and",
+      sortColumn: sortRules.length > 0 ? undefined : legacySortColumn,
+      sortDirection: sortRules.length > 0 ? "asc" : persisted?.sortDirection ?? "asc",
       sortRules,
     };
   }

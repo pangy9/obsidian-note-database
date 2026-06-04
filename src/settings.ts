@@ -315,6 +315,14 @@ export class SettingsTab extends PluginSettingTab {
         }
       }
 
+      // Both actions remove the live database file. Plugin trash additionally keeps a restorable snapshot.
+      try {
+        await this.plugin.dataSource.trashNote(entry.file);
+      } catch (e) {
+        new Notice(t("errors.deleteFailed", { error: String(e) }));
+        return;
+      }
+
       if (result.action === "plugin-trash") {
         // 移至插件回收站：保存配置快照
         if (!this.plugin.settings.trashedDatabases) this.plugin.settings.trashedDatabases = [];
@@ -322,19 +330,17 @@ export class SettingsTab extends PluginSettingTab {
           database: JSON.parse(JSON.stringify(config)) as DatabaseConfig,
           deletedAt: Date.now(),
         });
-      } else {
-        // "system-trash"：将数据库文件本身移至系统回收站
-        try {
-          await this.plugin.dataSource.trashNote(entry.file);
-        } catch (e) {
-          new Notice(t("errors.deleteFailed", { error: String(e) }));
-        }
       }
 
       // 从 databaseFileOrder 中移除
       const order = this.plugin.settings.databaseFileOrder || [];
       this.plugin.settings.databaseFileOrder = order.filter((p) => p !== entry.file.path);
-      await this.plugin.saveSettings();
+      try {
+        await this.plugin.saveSettings();
+      } catch (e) {
+        console.error("Note Database: failed to save database trash settings", e);
+        new Notice(t("errors.updateFailed", { error: String(e) }));
+      }
       this.display();
     };
   }
@@ -514,10 +520,12 @@ class TrashManagerModal extends Modal {
             name = `${name} ${j}`;
           }
           try {
+            const database = JSON.parse(JSON.stringify(item.database)) as DatabaseConfig;
+            database.name = name;
             const file = await self.plugin.dataSource.createViewDefFile(
               self.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
               name,
-              item.database,
+              database,
             );
             trash.splice(index, 1);
             await self.plugin.saveSettings();

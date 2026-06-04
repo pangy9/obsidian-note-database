@@ -1,4 +1,4 @@
-import { TFile } from "obsidian";
+import { App, CachedMetadata, TFile } from "obsidian";
 import { LocaleCode } from "../i18n";
 
 export interface RecordSchema {
@@ -51,12 +51,18 @@ export interface ComputedFieldDef {
   key: string;
   label: string;
   expression: string;
-  type: "number" | "text" | "date";
+  type: "number" | "text" | "date" | "checkbox";
+  /** Expression language. Bases imports keep their native formula syntax. */
+  expressionSyntax?: "note-database" | "base";
 }
 
+export type ComputedSyncMode = "automatic" | "display-only" | "manual";
+
 export interface RowData {
+  app?: App;
   file: TFile;
   frontmatter: Record<string, unknown>;
+  cache?: CachedMetadata | null;
   computed: Record<string, unknown>;
 }
 
@@ -89,13 +95,38 @@ export type DatabaseViewType = "table" | "board" | "gallery" | "list";
 export type GroupOrderMode = "text-asc" | "text-desc" | "number-asc" | "number-desc" | "date-asc" | "date-desc" | "checkbox-false-first" | "checkbox-true-first" | "option-asc" | "option-desc" | "multi-select-priority";
 export const NO_TITLE_FIELD = "__none";
 
-export type SourceRuleOperator = "inFolder" | "hasTag" | "eq" | "neq" | "contains" | "empty" | "notempty";
+export type SourceRuleOperator =
+  "inFolder" | "hasTag" | "hasProperty" | "hasLink" |
+  "eq" | "neq" | "strictEq" | "strictNeq" | "contains" | "startsWith" | "endsWith" | "matches" |
+  "isType" | "gt" | "gte" | "lt" | "lte" |
+  "empty" | "notempty" | "truthy";
+
+export type SourceRuleValueType = "string" | "number" | "boolean" | "null" | "date";
 
 export interface SourceRule {
   field: string;
   op: SourceRuleOperator;
   value?: string;
+  valueType?: SourceRuleValueType;
 }
+
+export interface SourceRuleGroup {
+  type: "group";
+  logic: "and" | "or";
+  rules: SourceRuleNode[];
+}
+
+export interface SourceRuleNot {
+  type: "not";
+  rule: SourceRuleNode;
+}
+
+export interface SourceRuleExpression {
+  type: "expression";
+  expression: string;
+}
+
+export type SourceRuleNode = SourceRule | SourceRuleGroup | SourceRuleNot | SourceRuleExpression;
 
 /**
  * 数据库配置：包含数据来源定义 + 属性定义 + 多个视图。
@@ -108,6 +139,10 @@ export interface DatabaseConfig {
   sourceFolder: string;
   sourceRules?: SourceRule[];
   sourceLogic?: "and" | "or";
+  /** Recursive source rules used by advanced filters. Takes precedence over legacy flat rules. */
+  sourceRuleTree?: SourceRuleNode;
+  /** Runtime-only file path used for Bases `this`; not persisted. */
+  baseThisFilePath?: string;
   newRecordFolder?: string;
   typeFilter?: string;
   schema: RecordSchema;
@@ -115,6 +150,10 @@ export interface DatabaseConfig {
   statusPresets?: StatusPresetDef[];
   /** Default status preset id for new status properties in this database. */
   defaultStatusPresetId?: string;
+  /** Controls whether evaluated computed fields are written back to record frontmatter. */
+  computedSyncMode?: ComputedSyncMode;
+  /** Custom summary formulas imported from Obsidian Bases. */
+  summaryFormulas?: Record<string, string>;
   /** 1~15 个视图，每个有独立的排序/筛选/显示配置 */
   views: ViewConfig[];
 }
@@ -134,6 +173,10 @@ export interface ViewConfig {
   /** File collection rules. When absent, sourceFolder/typeFilter are used for backwards compatibility. */
   sourceRules?: SourceRule[];
   sourceLogic?: "and" | "or";
+  /** Recursive source rules used by advanced filters. Takes precedence over legacy flat rules. */
+  sourceRuleTree?: SourceRuleNode;
+  /** Runtime-only file path used for Bases `this`; not persisted. */
+  baseThisFilePath?: string;
   newRecordFolder?: string;
   typeFilter?: string;
   schema: RecordSchema;
@@ -158,6 +201,8 @@ export interface ViewConfig {
   defaultColumnWidth?: number;
   /** Explicit column key order. When absent, schema.columns array order is used. */
   columnOrder?: string[];
+  /** Per-view property widths imported from Obsidian Bases columnSize. Falls back to shared column widths. */
+  columnWidths?: Record<string, number>;
   /** Persisted hidden column keys. */
   hiddenColumns?: string[];
   /** Legacy ordering field kept for older saved configs. */
@@ -192,6 +237,10 @@ export interface ViewConfig {
   filterLogic?: "and" | "or";
   /** Persisted advanced filters. */
   filters?: FilterRule[];
+  /** Optional maximum number of rows shown by this view, imported from Obsidian Bases limit. */
+  resultLimit?: number;
+  /** Property -> summary name mapping imported from Obsidian Bases view summaries. */
+  summaryRules?: Record<string, string>;
   /** Per-renderer state so table and board can keep independent visible columns, filters, and sorting. */
   viewStates?: Partial<Record<DatabaseViewType, ViewModeStateDef>>;
 }

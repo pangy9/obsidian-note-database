@@ -133,7 +133,17 @@ export function getColumnOptions(col: ColumnDef): StatusOptionDef[] {
 
 export function getColumnOptionValues(col?: ColumnDef): string[] {
   if (!col || !isOptionColumnType(col.type)) return [];
-  return getColumnOptions(col).map((option) => option.value);
+  const values = getColumnOptions(col).map((option) => option.value);
+  if (!isObsidianTagsKey(col.key)) return values;
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const tag = normalizeObsidianTagValue(value);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    normalized.push(tag);
+  }
+  return normalized;
 }
 
 export function getDefaultCellValue(col: ColumnDef): unknown {
@@ -152,6 +162,44 @@ export function toMultiSelectValues(value: unknown): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function isObsidianTagsKey(key: string): boolean {
+  return key === "tags";
+}
+
+export function normalizeObsidianTagValue(value: unknown): string {
+  return String(value ?? "").trim().replace(/^#/, "");
+}
+
+export function toObsidianTagValues(value: unknown): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : value == null || value === ""
+      ? []
+      : String(value).split(/[,\s]+/);
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const raw of rawValues) {
+    const tag = normalizeObsidianTagValue(raw);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    values.push(tag);
+  }
+  return values;
+}
+
+export function hasObsidianTagValue(values: readonly string[], value: unknown): boolean {
+  const expected = normalizeObsidianTagValue(value);
+  return !!expected && values.some((tag) => tag === expected || tag.startsWith(`${expected}/`));
+}
+
+export function toMultiSelectValuesForKey(key: string, value: unknown): string[] {
+  return isObsidianTagsKey(key) ? toObsidianTagValues(value) : toMultiSelectValues(value);
+}
+
+export function normalizeOptionValueForKey(key: string, value: unknown): string {
+  return isObsidianTagsKey(key) ? normalizeObsidianTagValue(value) : String(value ?? "").trim();
 }
 
 export function toBooleanValue(value: unknown): boolean {

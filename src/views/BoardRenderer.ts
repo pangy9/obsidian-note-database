@@ -1,5 +1,7 @@
 import { App, Menu, setIcon, TFile } from "obsidian";
-import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
+import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -391,19 +393,20 @@ export class BoardRenderer {
     const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
-      const empty = this.isEmptyValue(value) && col.type !== "checkbox";
+      const displayType = this.getDisplayType(config, col);
+      const empty = this.isEmptyValue(value) && displayType !== "checkbox";
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
-      const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+      const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const item = meta.createDiv({ cls: "db-board-card-field", attr: { "data-note-database-column-key": col.key } });
-      item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
+      item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
-      if (col.type === "checkbox") item.addClass("is-checkbox-field");
+      if (displayType === "checkbox") item.addClass("is-checkbox-field");
       if (col.wrap) item.addClass("db-board-card-field-wrap");
       const label = item.createSpan({ text: col.label });
       this.attachColumnContextMenu(item, col);
       this.attachColumnContextMenu(label, col);
-      this.renderPreviewValue(item, row, col, displayValue, empty);
+      this.renderPreviewValue(item, row, col, displayValue, empty, displayType);
     }
   }
 
@@ -686,7 +689,9 @@ export class BoardRenderer {
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
+    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
+    if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
   }
 
@@ -704,7 +709,7 @@ export class BoardRenderer {
     return Array.isArray(value) ? value.join(", ") : String(value);
   }
 
-  private renderPreviewValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false): void {
+  private renderPreviewValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
     const valueEl = item.createDiv({ cls: "db-board-card-value" });
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     item.addEventListener("click", (event) => {
@@ -713,17 +718,16 @@ export class BoardRenderer {
       event.stopPropagation();
       this.actions.editCell(valueEl, row, col, event);
     });
-    if (col.type === "checkbox") {
+    if (displayType === "checkbox") {
       valueEl.addClass("db-checkbox-cell");
       const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
       cb.checked = toBooleanValue(value);
       cb.onclick = (event) => event.stopPropagation();
-      if (!this.actions.isReadOnly) {
+      cb.disabled = this.actions.isReadOnly || col.type === "computed";
+      if (!this.actions.isReadOnly && col.type !== "computed") {
         cb.onchange = () => {
           void this.actions.editCell(valueEl, row, col);
         };
-      } else {
-        cb.disabled = true;
       }
       setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;
@@ -733,7 +737,7 @@ export class BoardRenderer {
       return;
     }
     if (col.type === "multi-select") {
-      const values = toMultiSelectValues(value);
+      const values = toMultiSelectValuesForKey(col.key, value);
       valueEl.addClass("has-badges");
       const wrap = valueEl.createDiv({ cls: "db-board-card-badges" });
       setFieldTooltip(wrap, values);
@@ -767,20 +771,21 @@ export class BoardRenderer {
 
   renderCardFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
     const value = this.getCellValue(row, col);
-    const empty = this.isEmptyValue(value) && col.type !== "checkbox";
-    const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+    const displayType = this.getDisplayType(config, col);
+    const empty = this.isEmptyValue(value) && displayType !== "checkbox";
+    const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
     const item = document.createElement("div");
     item.className = "db-board-card-field";
     item.setAttribute("data-note-database-column-key", col.key);
-    item.style.setProperty("--db-card-field-width", `${col.width || config.defaultColumnWidth || 150}px`);
+    item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
     setFieldTooltip(item, displayValue, col.label);
     if (empty) item.classList.add("is-empty-field");
-    if (col.type === "checkbox") item.classList.add("is-checkbox-field");
+    if (displayType === "checkbox") item.classList.add("is-checkbox-field");
     if (col.wrap) item.classList.add("db-board-card-field-wrap");
     const label = item.createSpan({ text: col.label });
     this.attachColumnContextMenu(item, col);
     this.attachColumnContextMenu(label, col);
-    this.renderPreviewValue(item, row, col, displayValue, empty);
+    this.renderPreviewValue(item, row, col, displayValue, empty, displayType);
     return item;
   }
 
@@ -792,16 +797,16 @@ export class BoardRenderer {
     return config.showEmptyFields === true;
   }
 
-  private getEmptyDisplayValue(col: ColumnDef): unknown {
-    if (col.type === "multi-select") return [t("common.empty")];
-    if (col.type === "checkbox") return false;
+  private getEmptyDisplayValue(col: ColumnDef, displayType: ColumnDef["type"] = col.type): unknown {
+    if (displayType === "multi-select") return [t("common.empty")];
+    if (displayType === "checkbox") return false;
     return t("common.empty");
   }
 
   private renderBadge(parent: HTMLElement, col: ColumnDef, value: string): void {
     const badge = parent.createSpan({ cls: "status-badge", text: value });
     badge.title = value;
-    const option = getColumnOptions(col).find((item) => item.value === value);
+    const option = getColumnOptions(col).find((item) => normalizeOptionValueForKey(col.key, item.value) === value);
     if (option) badge.addClass(`status-color-${option.color}`);
     else badge.addClass("status-color-gray");
   }
@@ -845,6 +850,14 @@ export class BoardRenderer {
 
   private getBoardColumnWidth(config: ViewConfig): number {
     return this.clampBoardColumnWidth(config.boardColumnWidth || 280);
+  }
+
+  private getFieldWidth(config: ViewConfig, col: ColumnDef): number {
+    return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 150;
+  }
+
+  private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
+    return getColumnDisplayType(col, config.schema.computedFields);
   }
 
   private clampBoardColumnWidth(width: number): number {

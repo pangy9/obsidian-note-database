@@ -1,6 +1,44 @@
-import { ColumnDef, RowData, ViewConfig } from "./types";
+import { ColumnDef, DatabaseConfig, RowData, SourceRule, ViewConfig } from "./types";
 import { DatabaseViewState } from "../views/ViewStateStore";
 import { isOptionColumnType } from "./ColumnTypes";
+import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
+import { updateSourceRuleTreeKeyReferences } from "./SourceRules";
+
+/**
+ * After JSON deserialization, db.schema and each view.schema can become
+ * independent objects. The database-level schema is canonical so stale view
+ * schema copies cannot resurrect renamed/deleted columns.
+ */
+export function linkDatabaseSchemas(databases: DatabaseConfig[]): void {
+  for (const db of databases) {
+    linkDatabaseSchema(db);
+  }
+}
+
+export function linkDatabaseSchema(db: DatabaseConfig): void {
+  if (!db.schema || !Array.isArray(db.schema.columns)) {
+    db.schema = db.views?.find((view) => Array.isArray(view.schema?.columns))?.schema || {
+      columns: [],
+      computedFields: [],
+    };
+  }
+  if (!Array.isArray(db.schema.computedFields)) db.schema.computedFields = [];
+
+  if (db.schema.columns.length === 0) {
+    const firstViewSchema = db.views?.find((view) => Array.isArray(view.schema?.columns) && view.schema.columns.length > 0)?.schema;
+    if (firstViewSchema) {
+      db.schema = {
+        columns: firstViewSchema.columns || [],
+        computedFields: firstViewSchema.computedFields || [],
+      };
+      if (!Array.isArray(db.schema.computedFields)) db.schema.computedFields = [];
+    }
+  }
+
+  for (const view of db.views || []) {
+    view.schema = db.schema;
+  }
+}
 
 export function ensureColumnOrder(config: ViewConfig): void {
   if (!config.columnOrder || config.columnOrder.length === 0) {
@@ -50,7 +88,9 @@ export function getVisibleColumns(
     if (pendingShowColumns.has(col.key)) continue;
     if (explicitlyOrderedKeys.has(col.key)) continue;
     const hasValue = rows.some((row) => {
-      const val = col.computedKey ? row.computed[col.computedKey] : row.frontmatter[col.key];
+      const val = isBaseFileField(col.key)
+        ? getRowFileFieldValue(row, col.key)
+        : col.computedKey ? row.computed[col.computedKey] : row.frontmatter[col.key];
       return val != null && val !== "" && val !== undefined;
     });
     if (!hasValue) autoHidden.add(col.key);
@@ -74,65 +114,124 @@ export function createUniqueColumnKey(config: ViewConfig, base: string): string 
 
 export function updateColumnKeyReferences(
   config: ViewConfig,
-  state: DatabaseViewState,
+  state: DatabaseViewState | undefined,
   oldKey: string,
   newKey: string,
   oldLabel?: string,
   newLabel?: string
 ): boolean {
   if (oldKey === newKey) {
-    updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel);
-    return false;
+    return updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel);
   }
-  config.columnOrder = config.columnOrder!.map((key) => key === oldKey ? newKey : key);
-  if (config.titleField === oldKey) config.titleField = newKey;
-  if (config.boardGroupField === oldKey) config.boardGroupField = newKey;
-  if (config.boardSubgroupField === oldKey) config.boardSubgroupField = newKey;
-  if (config.sortColumn === oldKey) config.sortColumn = newKey;
-  if (config.sortColumnOrder === oldKey) config.sortColumnOrder = newKey;
+  let changed = false;
+  const replaceValue = (value: string | undefined): string | undefined => {
+    if (value !== oldKey) return value;
+    changed = true;
+    return newKey;
+  };
+  const replaceKeys = (keys: string[] | undefined): string[] | undefined => {
+    if (!keys?.includes(oldKey)) return keys;
+    changed = true;
+    return keys.map((key) => key === oldKey ? newKey : key);
+  };
+  config.columnOrder = replaceKeys(config.columnOrder);
+  config.titleField = replaceValue(config.titleField);
+  config.galleryImageField = replaceValue(config.galleryImageField);
+  config.boardGroupField = replaceValue(config.boardGroupField);
+  config.boardSubgroupField = replaceValue(config.boardSubgroupField);
+  config.groupByField = replaceValue(config.groupByField);
+  config.sortColumn = replaceValue(config.sortColumn);
+  config.sortColumnOrder = replaceValue(config.sortColumnOrder);
+  changed = updateSourceRuleKeyReferences(config.sourceRules, oldKey, newKey) || changed;
+  changed = updateSourceRuleTreeKeyReferences(config.sourceRuleTree, oldKey, newKey) || changed;
+  for (const rule of config.filters || []) {
+    if (rule.field === oldKey) {
+      rule.field = newKey;
+      changed = true;
+    }
+  }
   for (const rule of config.sortRules || []) {
-    if (rule.field === oldKey) rule.field = newKey;
+    if (rule.field === oldKey) {
+      rule.field = newKey;
+      changed = true;
+    }
   }
 
-  if (config.hiddenColumns) {
-    config.hiddenColumns = config.hiddenColumns.map((key) => key === oldKey ? newKey : key);
-  }
+  config.hiddenColumns = replaceKeys(config.hiddenColumns);
   if (config.groupOrders?.[oldKey]) {
     config.groupOrders[newKey] = config.groupOrders[oldKey];
     delete config.groupOrders[oldKey];
+    changed = true;
   }
   if (config.collapsedGroups?.[oldKey]) {
     config.collapsedGroups[newKey] = config.collapsedGroups[oldKey];
     delete config.collapsedGroups[oldKey];
+    changed = true;
   }
   if (config.boardCardOrders?.[oldKey]) {
     config.boardCardOrders[newKey] = config.boardCardOrders[oldKey];
     delete config.boardCardOrders[oldKey];
+    changed = true;
+  }
+  if (config.summaryRules?.[oldKey]) {
+    config.summaryRules[newKey] = config.summaryRules[oldKey];
+    delete config.summaryRules[oldKey];
+    changed = true;
   }
   for (const viewState of Object.values(config.viewStates || {})) {
     if (!viewState) continue;
-    if (viewState.sortColumn === oldKey) viewState.sortColumn = newKey;
-    if (viewState.groupByField === oldKey) viewState.groupByField = newKey;
-    if (viewState.hiddenColumns) viewState.hiddenColumns = viewState.hiddenColumns.map((key) => key === oldKey ? newKey : key);
+    viewState.sortColumn = replaceValue(viewState.sortColumn);
+    viewState.groupByField = replaceValue(viewState.groupByField);
+    viewState.hiddenColumns = replaceKeys(viewState.hiddenColumns);
     for (const rule of viewState.sortRules || []) {
-      if (rule.field === oldKey) rule.field = newKey;
+      if (rule.field === oldKey) {
+        rule.field = newKey;
+        changed = true;
+      }
     }
     for (const rule of viewState.filters || []) {
-      if (rule.field === oldKey) rule.field = newKey;
+      if (rule.field === oldKey) {
+        rule.field = newKey;
+        changed = true;
+      }
     }
   }
-  const hiddenChanged = state.hiddenColumns.delete(oldKey);
-  if (hiddenChanged) state.hiddenColumns.add(newKey);
-  if (state.groupByField === oldKey) state.groupByField = newKey;
-  if (state.sortColumn === oldKey) state.sortColumn = newKey;
-  for (const rule of state.sortRules) {
-    if (rule.field === oldKey) rule.field = newKey;
+  if (state) {
+    const hiddenChanged = state.hiddenColumns.delete(oldKey);
+    if (hiddenChanged) {
+      state.hiddenColumns.add(newKey);
+      changed = true;
+    }
+    state.groupByField = replaceValue(state.groupByField) || "";
+    state.sortColumn = replaceValue(state.sortColumn);
+    for (const rule of state.sortRules) {
+      if (rule.field === oldKey) {
+        rule.field = newKey;
+        changed = true;
+      }
+    }
+    for (const rule of state.filters) {
+      if (rule.field === oldKey) {
+        rule.field = newKey;
+        changed = true;
+      }
+    }
   }
-  for (const rule of state.filters) {
-    if (rule.field === oldKey) rule.field = newKey;
+  return updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel) || changed;
+}
+
+export function updateSourceRuleKeyReferences(
+  rules: SourceRule[] | undefined,
+  oldKey: string,
+  newKey: string
+): boolean {
+  let changed = false;
+  for (const rule of rules || []) {
+    if (rule.field !== oldKey) continue;
+    rule.field = newKey;
+    changed = true;
   }
-  updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel);
-  return hiddenChanged;
+  return changed;
 }
 
 export function updateComputedFormulaReferences(
@@ -155,6 +254,26 @@ export function updateComputedFormulaReferences(
   return changed;
 }
 
+export function updateSummaryFormulaReferences(
+  database: Pick<DatabaseConfig, "summaryFormulas">,
+  oldKey: string,
+  newKey: string,
+  oldLabel?: string,
+  _newLabel?: string
+): boolean {
+  const names = new Set([oldKey, oldLabel].filter((value): value is string => !!value && value !== newKey));
+  if (names.size === 0 || !database.summaryFormulas) return false;
+  let changed = false;
+  for (const [summaryName, expression] of Object.entries(database.summaryFormulas)) {
+    const next = replaceFormulaFieldReferences(expression || "", names, newKey);
+    if (next !== expression) {
+      database.summaryFormulas[summaryName] = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function replaceFormulaFieldReferences(expression: string, names: Set<string>, newKey: string): string {
   let next = expression.replace(/\[([^\]]+)\]/g, (match, rawName: string) => {
     const name = String(rawName || "").trim();
@@ -164,5 +283,71 @@ function replaceFormulaFieldReferences(expression: string, names: Set<string>, n
     const name = String(rawName || "").trim();
     return names.has(name) ? `field(${quote}${newKey}${quote})` : match;
   });
+  for (const name of names) {
+    next = replaceBaseFormulaFieldReference(next, name, newKey);
+  }
   return next;
+}
+
+function replaceBaseFormulaFieldReference(expression: string, oldKey: string, newKey: string): string {
+  const escaped = oldKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const newJson = JSON.stringify(newKey);
+  let next = expression
+    .replace(new RegExp(`\\b(note|properties)\\.${escaped}\\b`, "g"), (_match, prefix) => `${prefix}[${newJson}]`)
+    .replace(new RegExp(`\\b(note|properties)\\[\\s*(["'])${escaped}\\2\\s*\\]`, "g"), (_match, prefix) => `${prefix}[${newJson}]`);
+  if (oldKey.startsWith("formula.")) {
+    const oldFormulaKey = oldKey.slice("formula.".length);
+    const newFormulaKey = newKey.startsWith("formula.") ? newKey.slice("formula.".length) : newKey;
+    const escapedFormulaKey = oldFormulaKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const newFormulaJson = JSON.stringify(newFormulaKey);
+    next = next
+      .replace(new RegExp(`\\bformula\\.${escapedFormulaKey}\\b`, "g"), `formula[${newFormulaJson}]`)
+      .replace(new RegExp(`\\bformula\\[\\s*(["'])${escapedFormulaKey}\\1\\s*\\]`, "g"), `formula[${newFormulaJson}]`);
+  }
+  return replaceBaseBareIdentifierOutsideStrings(next, oldKey, newKey);
+}
+
+function replaceBaseBareIdentifierOutsideStrings(expression: string, oldKey: string, newKey: string): string {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(oldKey)) return expression;
+  const replacement = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(newKey) ? newKey : `note[${JSON.stringify(newKey)}]`;
+  let result = "";
+  let index = 0;
+  let quote: string | null = null;
+  while (index < expression.length) {
+    const char = expression[index];
+    if (quote) {
+      result += char;
+      if (char === "\\") {
+        index += 1;
+        if (index < expression.length) result += expression[index];
+      } else if (char === quote) {
+        quote = null;
+      }
+      index += 1;
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      result += char;
+      index += 1;
+      continue;
+    }
+    if (
+      expression.startsWith(oldKey, index) &&
+      !isIdentifierChar(expression[index - 1]) &&
+      !isIdentifierChar(expression[index + oldKey.length]) &&
+      expression[index - 1] !== "."
+    ) {
+      result += replacement;
+      index += oldKey.length;
+      continue;
+    }
+    result += char;
+    index += 1;
+  }
+  return result;
+}
+
+function isIdentifierChar(char: string | undefined): boolean {
+  return !!char && /[A-Za-z0-9_$]/.test(char);
 }

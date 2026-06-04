@@ -1,5 +1,5 @@
 import { ColumnDef, RowData } from "../data/types";
-import { toMultiSelectValues } from "../data/ColumnTypes";
+import { toMultiSelectValuesForKey } from "../data/ColumnTypes";
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
 let cachedFontFamily = "";
@@ -30,7 +30,7 @@ function estimateCellContentWidth(
     return text ? Math.ceil(measureBadgeText(text) + 34) : 0;
   }
   if (col.type === "multi-select") {
-    const values = toMultiSelectValues(row.frontmatter[col.key]);
+    const values = toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     if (values.length === 0) return 0;
     const badges = values.reduce((total, value) => total + measureBadgeText(value) + 14, 0);
     const gaps = Math.max(0, values.length - 1) * 4;

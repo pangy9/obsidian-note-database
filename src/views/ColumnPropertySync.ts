@@ -38,8 +38,8 @@ export class ColumnPropertySync {
     );
   }
 
-  delete(config: ViewConfig, col: ColumnDef): Promise<ChangeResult> {
-    return this.propertyService.deleteKey(this.getFilesForConfig(config), col.key);
+  delete(config: ViewConfig, col: ColumnDef, files = this.getFilesForConfig(config)): Promise<ChangeResult> {
+    return this.propertyService.deleteKey(files, col.key);
   }
 
   copy(config: ViewConfig, fromKey: string, toKey: string): Promise<ChangeResult> {

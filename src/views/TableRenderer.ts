@@ -4,6 +4,7 @@ import { toBooleanValue } from "../data/ColumnTypes";
 import { t } from "../i18n";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -56,8 +57,9 @@ export class TableRenderer {
     const visibleColumns = this.actions.getVisibleColumns(config, rows);
     const tableWrap = container.createDiv({ cls: "db-table-wrap" });
     const table = tableWrap.createEl("table", { cls: "db-table" });
-    this.applyTableWidth(table, config, visibleColumns);
-    this.renderColgroup(table, config, visibleColumns);
+    const availableWidth = this.getAvailableTableWidth(tableWrap);
+    this.applyTableWidth(table, config, visibleColumns, availableWidth);
+    this.renderColgroup(table, config, visibleColumns, availableWidth);
     this.renderHeader(table, config, visibleColumns, rows);
     const tbody = table.createEl("tbody");
     this.renderRows(tbody, config, rows, visibleColumns);
@@ -120,9 +122,10 @@ export class TableRenderer {
       const tableWrap = container.createDiv({ cls: "db-table-wrap" });
       if (groupField) this.setupGroupDropTarget(tableWrap, groupField, group.key);
       const table = tableWrap.createEl("table", { cls: "db-table" });
-      this.applyTableWidth(table, config, visibleColumns);
-      tableWrap.style.minWidth = `${this.getTableMinWidth(config, visibleColumns)}px`;
-      this.renderColgroup(table, config, visibleColumns);
+      const availableWidth = this.getAvailableTableWidth(tableWrap);
+      this.applyTableWidth(table, config, visibleColumns, availableWidth);
+      tableWrap.style.minWidth = `${this.getTableWidth(config, visibleColumns, availableWidth)}px`;
+      this.renderColgroup(table, config, visibleColumns, availableWidth);
       this.renderHeader(table, config, visibleColumns, group.rows);
       const tbody = table.createEl("tbody");
       if (groupField) this.setupGroupDropTarget(tbody, groupField, group.key);
@@ -138,9 +141,9 @@ export class TableRenderer {
     container.querySelectorAll(".db-table-wrap, .db-grouped-table, .db-empty").forEach((el) => el.remove());
   }
 
-  private renderColgroup(table: HTMLElement, config: ViewConfig, columns: ColumnDef[]): void {
+  private renderColgroup(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], availableWidth = 0): void {
     const colgroup = table.createEl("colgroup");
-    const renderedWidths = this.getRenderedColumnWidths(config, columns);
+    const renderedWidths = this.getRenderedColumnWidths(config, columns, availableWidth);
     if (!this.actions.isReadOnly) {
       const selectionCol = colgroup.createEl("col");
       const selectionWidth = this.getSelectionColumnWidth();
@@ -151,46 +154,48 @@ export class TableRenderer {
     columns.forEach((col, index) => {
       const colEl = colgroup.createEl("col");
       colEl.setAttr("data-note-database-column-key", col.key);
-      // 最后一列不设固定宽度，由 table-layout:fixed + width:100% 自动填满容器剩余空间
-      if (index < columns.length - 1) {
-        colEl.style.width = `${renderedWidths[index]}px`;
-      } else {
-        colEl.style.minWidth = `${renderedWidths[index]}px`;
-      }
+      const style = getTableColumnStyle(renderedWidths[index], index, columns.length);
+      if (style.width) colEl.style.width = style.width;
+      if (style.minWidth) colEl.style.minWidth = style.minWidth;
     });
   }
 
   private getTableMinWidth(config: ViewConfig, columns: ColumnDef[]): number {
     const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
-    const columnWidth = columns.reduce((total, col) => total + this.getColumnWidth(config, col), 0);
-    return Math.max(720, selectionWidth + columnWidth);
+    return calculateTableMinWidth(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)));
   }
 
-  private applyTableWidth(table: HTMLElement, config: ViewConfig, columns: ColumnDef[]): void {
-    const width = this.getTableMinWidth(config, columns);
-    table.style.minWidth = `${width}px`;
-    // 不设固定 width，依赖 CSS width:100% + 最后一列自适应填满容器
-  }
-
-  private getRenderedColumnWidths(config: ViewConfig, columns: ColumnDef[]): number[] {
-    const widths = columns.map((col) => this.getColumnWidth(config, col));
-    if (widths.length === 0) return widths;
+  private getTableWidth(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): number {
     const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
-    const baseWidth = widths.reduce((total, width) => total + width, 0);
-    const extraWidth = this.getTableMinWidth(config, columns) - selectionWidth - baseWidth;
-    if (extraWidth > 0) {
-      // 最小宽度内的剩余空间分配给最后一列
-      widths[widths.length - 1] += extraWidth;
-    }
-    return widths;
+    return getTableLayout(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)), availableWidth).tableWidth;
+  }
+
+  private applyTableWidth(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], availableWidth = 0): void {
+    const width = this.getTableWidth(config, columns, availableWidth);
+    table.style.minWidth = `${width}px`;
+    table.style.width = `${width}px`;
+  }
+
+  private getRenderedColumnWidths(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): number[] {
+    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
+    return getTableLayout(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)), availableWidth).columnWidths;
   }
 
   private getColumnWidth(config: ViewConfig, col: ColumnDef): number {
-    return col.width || config.defaultColumnWidth || 150;
+    return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 150;
   }
 
   private getSelectionColumnWidth(): number {
     return this.isPhoneLayout() ? 62 : 34;
+  }
+
+  private getAvailableTableWidth(tableWrap: HTMLElement): number {
+    const parent = tableWrap.parentElement;
+    if (!parent) return 0;
+    const cs = getComputedStyle(parent);
+    const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+    const paddingRight = parseFloat(cs.paddingRight) || 0;
+    return Math.max(0, Math.floor(parent.getBoundingClientRect().width - paddingLeft - paddingRight));
   }
 
   private renderHeader(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], rows: RowData[]): void {

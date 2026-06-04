@@ -1483,7 +1483,6 @@
 /* ============================================================================
  *  5. 表格基础样式
  *  min-width:100% 允许列宽拖拽超出容器宽度，产生水平滚动
- *  min-width:720px 是表格最小宽度（列太少时不会太窄）
  * ============================================================================ */
 
 .note-database-container .db-table-wrap {
@@ -1493,7 +1492,6 @@
 
 .note-database-container .db-table {
   width: 100%;
-  min-width: 720px;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -4564,6 +4562,46 @@
   margin-top: 4px;
 }
 
+.note-database-container .db-computed-sync-cards {
+  display: grid;
+  gap: 6px;
+}
+
+.note-database-container .db-computed-sync-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 9px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  cursor: pointer;
+}
+
+.note-database-container .db-computed-sync-card:hover,
+.note-database-container .db-computed-sync-card.is-active {
+  border-color: var(--interactive-accent);
+  background: var(--background-secondary);
+}
+
+.note-database-container .db-computed-sync-card input {
+  margin-top: 2px;
+}
+
+.note-database-container .db-computed-sync-card-title {
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.note-database-container .db-computed-sync-card-desc {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .note-database-container .db-view-config-textarea {
   min-height: 58px;
   resize: vertical;
@@ -4577,6 +4615,106 @@
 
 .note-database-container .db-view-config-number {
   width: 64px;
+}
+
+.note-database-container .db-source-rules-setting {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.note-database-container .db-source-rules-help {
+  margin: 0 0 6px;
+}
+
+.note-database-container .db-source-rules-editor,
+.note-database-container .db-source-rule-children {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.note-database-container .db-source-rule-node {
+  min-width: 0;
+  border-left: 2px solid var(--background-modifier-border);
+  padding-left: 7px;
+}
+
+.note-database-container .db-source-rule-header,
+.note-database-container .db-source-rule-leaf-controls,
+.note-database-container .db-source-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.note-database-container .db-source-rule-header {
+  justify-content: space-between;
+}
+
+.note-database-container .db-source-rule-children {
+  margin-top: 5px;
+}
+
+.note-database-container .db-source-rule-leaf-controls {
+  align-items: stretch;
+}
+
+.note-database-container .db-source-rule-field,
+.note-database-container .db-source-rule-custom-field,
+.note-database-container .db-source-rule-value {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.note-database-container .db-source-rule-custom-field {
+  max-width: 160px;
+}
+
+.note-database-container .db-source-rule-expression-input {
+  min-height: 44px;
+  resize: vertical;
+  width: 100%;
+}
+
+.note-database-container .db-source-rule-expression .db-source-rule-leaf-controls {
+  align-items: flex-start;
+}
+
+.note-database-container .db-source-rule-operator {
+  min-width: 92px;
+  max-width: 112px;
+}
+
+.note-database-container .db-source-rule-logic {
+  width: 96px;
+}
+
+.note-database-container .db-source-rule-not-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.note-database-container .db-source-rules-empty {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 3px 0;
+}
+
+.note-database-container .db-source-rule-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+}
+
+.note-database-container .db-source-rule-icon-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* 面板头部（标题 + 关闭按钮） */
@@ -5043,6 +5181,14 @@
   margin-top: 4px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.note-database-modal .db-formula-storage-note {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 560px;
 }
 
 .note-database-modal .db-formula-result-type {

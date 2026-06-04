@@ -1,5 +1,6 @@
 import { Menu, setIcon } from "obsidian";
 import { ColumnDef, DatabaseConfig, DatabaseViewType, GroupOrderMode, ViewConfig } from "../data/types";
+import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
@@ -194,6 +195,9 @@ export class ToolbarRenderer {
     this.renderViewConfigButton(right, actions);
     this.renderGroupSelect(right, currentView, state, actions);
     this.renderColumnButton(right, currentView, state, actions);
+    if (!actions.isReadOnly && normalizeComputedSyncMode(currentDb?.computedSyncMode) === "manual") {
+      this.renderComputedSyncButton(right, actions);
+    }
     this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
     if (!phoneLayout) this.renderSearch(right, state, actions);
@@ -202,6 +206,13 @@ export class ToolbarRenderer {
 
   private isPhoneLayout(): boolean {
     return document.body.classList.contains("is-phone");
+  }
+
+  private renderComputedSyncButton(toolbar: HTMLElement, actions: ToolbarActions): void {
+    if (!actions.syncComputedFields) return;
+    const btn = this.createIconButton(toolbar, "", t("viewConfig.saveComputedResults"));
+    btn.innerHTML = ToolbarRenderer.ICONS.refresh_fx;
+    btn.onclick = () => actions.syncComputedFields?.();
   }
 
   // ── Database selector popover ──
@@ -461,7 +472,7 @@ export class ToolbarRenderer {
   ): void {
     const tabs = left.createDiv({ cls: "db-view-tabs" });
     const readOnly = actions.isReadOnlyViews;
-    const canReorder = Boolean(actions.moveView && db.views.length > 1 && !this.isPhoneLayout());
+    const canReorder = Boolean(!readOnly && actions.moveView && db.views.length > 1 && !this.isPhoneLayout());
     const tabEls: { el: HTMLElement; index: number }[] = [];
 
     db.views.forEach((view, i) => {

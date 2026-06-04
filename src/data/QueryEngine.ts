@@ -1,4 +1,5 @@
-import { getColumnOptionValues } from "./ColumnTypes";
+import { getColumnOptionValues, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
+import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 import { compareMultiSelect } from "./MultiSelect";
 import { ColumnDef, RowData, FilterRule, SortRule } from "./types";
 import { t } from "../i18n";
@@ -47,14 +48,14 @@ export class QueryEngine {
       return this.compareOptionValues(
         String(this.getFieldValue(a, column.key) ?? ""),
         String(this.getFieldValue(b, column.key) ?? ""),
-        getColumnOptionValues(column)
+        this.getComparableOptionValues(column)
       );
     }
     if (column.type === "multi-select") {
       return compareMultiSelect(
         this.getFieldValue(a, column.key),
         this.getFieldValue(b, column.key),
-        getColumnOptionValues(column)
+        this.getComparableOptionValues(column)
       );
     }
     const va = this.getSortValue(a, column);
@@ -86,7 +87,9 @@ export class QueryEngine {
   private matchesFilter(row: RowData, rule: FilterRule, column?: ColumnDef): boolean {
     const val = this.getFieldValue(row, rule.field);
     const values = this.getComparableValues(val);
-    const ruleValue = rule.value || "";
+    const ruleValue = column && isObsidianTagsKey(column.key)
+      ? normalizeObsidianTagValue(rule.value || "")
+      : rule.value || "";
 
     switch (rule.op) {
       case "eq":
@@ -173,7 +176,7 @@ export class QueryEngine {
       return this.compareDates(left, right);
     }
     if (column?.type === "select" || column?.type === "status") {
-      return this.compareOptionValues(left, right, getColumnOptionValues(column));
+      return this.compareOptionValues(left, right, this.getComparableOptionValues(column));
     }
     if (column?.type === "checkbox") {
       return this.toBooleanRank(left) - this.toBooleanRank(right);
@@ -238,17 +241,26 @@ export class QueryEngine {
   }
 
   private getFieldValue(row: RowData, field: string): unknown {
-    // Special fields
-    if (field === "file.name") return row.file.name.replace(/\.md$/, "");
-    if (field === "file.path") return row.file.path;
-    if (field === "file.folder") return row.file.parent?.path || "";
-    if (field === "file.ext" || field === "file.extension") return row.file.extension;
-    if (field === "file.ctime" || field === "file.created") return row.file.stat.ctime;
-    if (field === "file.mtime" || field === "file.modified") return row.file.stat.mtime;
-    if (field === "file.size") return row.file.stat.size;
+    if (isBaseFileField(field)) return getRowFileFieldValue(row, field);
     // Computed fields first (they override frontmatter)
+    if (field.startsWith("formula.") && field.slice("formula.".length) in row.computed) return row.computed[field.slice("formula.".length)];
     if (field in row.computed) return row.computed[field];
+    if (isObsidianTagsKey(field) && field in row.frontmatter) return toObsidianTagValues(row.frontmatter[field]);
     if (field in row.frontmatter) return row.frontmatter[field];
     return null;
+  }
+
+  private getComparableOptionValues(column: ColumnDef): string[] {
+    const values = getColumnOptionValues(column);
+    if (!isObsidianTagsKey(column.key)) return values;
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+      const tag = normalizeObsidianTagValue(value);
+      if (!tag || seen.has(tag)) continue;
+      seen.add(tag);
+      normalized.push(tag);
+    }
+    return normalized;
   }
 }

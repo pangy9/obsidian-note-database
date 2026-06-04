@@ -1,5 +1,7 @@
 import { App, Menu, setIcon } from "obsidian";
-import { getColumnOptions, toBooleanValue, toMultiSelectValues } from "../data/ColumnTypes";
+import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -170,20 +172,21 @@ export class ListRenderer {
     const fields = columns.filter((col) => col.key !== titleField);
     for (const col of fields) {
       const value = this.getCellValue(row, col);
-      const empty = this.isEmptyValue(value) && col.type !== "checkbox";
+      const displayType = this.getDisplayType(config, col);
+      const empty = this.isEmptyValue(value) && displayType !== "checkbox";
       if (empty && config.showEmptyFields !== true) continue;
-      const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+      const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const field = meta.createDiv({ cls: "db-list-field", attr: { "data-note-database-column-key": col.key } });
       if (col.wrap) field.style.flex = "0 0 auto";
-      else field.style.flexBasis = `${col.width || config.defaultColumnWidth || 180}px`;
+      else field.style.flexBasis = `${this.getFieldWidth(config, col)}px`;
       setFieldTooltip(field, displayValue, col.label);
       if (empty) field.addClass("is-empty-field");
-      if (col.type === "checkbox") field.addClass("is-checkbox-field");
+      if (displayType === "checkbox") field.addClass("is-checkbox-field");
       if (col.wrap) field.addClass("db-list-field-wrap");
       const label = field.createSpan({ cls: "db-list-field-label", text: col.label });
       this.attachColumnContextMenu(field, col);
       this.attachColumnContextMenu(label, col);
-      this.renderValue(field, row, col, displayValue, empty);
+      this.renderValue(field, row, col, displayValue, empty, displayType);
     }
   }
 
@@ -388,7 +391,9 @@ export class ListRenderer {
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
+    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
+    if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
   }
 
@@ -406,7 +411,7 @@ export class ListRenderer {
     return Array.isArray(value) ? value.join(", ") : String(value);
   }
 
-  private renderValue(field: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false): void {
+  private renderValue(field: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
     const valueEl = field.createDiv({ cls: "db-list-field-value" });
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     field.addEventListener("click", (event) => {
@@ -415,17 +420,16 @@ export class ListRenderer {
       event.stopPropagation();
       this.actions.editCell(valueEl, row, col, event);
     });
-    if (col.type === "checkbox") {
+    if (displayType === "checkbox") {
       valueEl.addClass("db-checkbox-cell");
       const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
       cb.checked = toBooleanValue(value);
       cb.onclick = (event) => event.stopPropagation();
-      if (!this.actions.isReadOnly) {
+      cb.disabled = this.actions.isReadOnly || col.type === "computed";
+      if (!this.actions.isReadOnly && col.type !== "computed") {
         cb.onchange = () => {
           void this.actions.editCell(valueEl, row, col);
         };
-      } else {
-        cb.disabled = true;
       }
       setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;
@@ -436,7 +440,7 @@ export class ListRenderer {
     }
     if (col.type === "multi-select") {
       const badges = valueEl.createDiv({ cls: "db-list-badges" });
-      const values = toMultiSelectValues(value);
+      const values = toMultiSelectValuesForKey(col.key, value);
       setFieldTooltip(badges, values);
       for (const entry of values) this.renderBadge(badges, col, entry);
       return;
@@ -457,28 +461,29 @@ export class ListRenderer {
 
   renderRowFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
     const value = this.getCellValue(row, col);
-    const empty = this.isEmptyValue(value) && col.type !== "checkbox";
-    const displayValue = empty ? this.getEmptyDisplayValue(col) : value;
+    const displayType = this.getDisplayType(config, col);
+    const empty = this.isEmptyValue(value) && displayType !== "checkbox";
+    const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
     const field = document.createElement("div");
     field.className = "db-list-field";
     field.setAttribute("data-note-database-column-key", col.key);
     if (col.wrap) field.style.flex = "0 0 auto";
-    else field.style.flexBasis = `${col.width || config.defaultColumnWidth || 180}px`;
+    else field.style.flexBasis = `${this.getFieldWidth(config, col)}px`;
     setFieldTooltip(field, displayValue, col.label);
     if (empty) field.classList.add("is-empty-field");
-    if (col.type === "checkbox") field.classList.add("is-checkbox-field");
+    if (displayType === "checkbox") field.classList.add("is-checkbox-field");
     if (col.wrap) field.classList.add("db-list-field-wrap");
     const label = field.createSpan({ cls: "db-list-field-label", text: col.label });
     this.attachColumnContextMenu(field, col);
     this.attachColumnContextMenu(label, col);
-    this.renderValue(field, row, col, displayValue, empty);
+    this.renderValue(field, row, col, displayValue, empty, displayType);
     return field;
   }
 
   private renderBadge(parent: HTMLElement, col: ColumnDef, value: string): void {
     const badge = parent.createSpan({ cls: "status-badge", text: value });
     badge.title = value;
-    const option = getColumnOptions(col).find((item) => item.value === value);
+    const option = getColumnOptions(col).find((item) => normalizeOptionValueForKey(col.key, item.value) === value);
     badge.addClass(`status-color-${option?.color || "gray"}`);
   }
 
@@ -533,13 +538,21 @@ export class ListRenderer {
     container.querySelectorAll(".db-list, .db-list-grouped, .db-list-total-header").forEach((el) => el.remove());
   }
 
+  private getFieldWidth(config: ViewConfig, col: ColumnDef): number {
+    return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 180;
+  }
+
+  private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
+    return getColumnDisplayType(col, config.schema.computedFields);
+  }
+
   private isEmptyValue(value: unknown): boolean {
     return value == null || value === "" || (Array.isArray(value) && value.length === 0);
   }
 
-  private getEmptyDisplayValue(col: ColumnDef): unknown {
-    if (col.type === "multi-select") return [t("common.empty")];
-    if (col.type === "checkbox") return false;
+  private getEmptyDisplayValue(col: ColumnDef, displayType: ColumnDef["type"] = col.type): unknown {
+    if (displayType === "multi-select") return [t("common.empty")];
+    if (displayType === "checkbox") return false;
     return t("common.empty");
   }
 }

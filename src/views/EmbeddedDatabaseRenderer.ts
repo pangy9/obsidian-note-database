@@ -6,7 +6,14 @@ import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
 import { ColumnDef, DatabaseConfig, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
 import { ComputedFieldEngine } from "../data/ComputedField";
-import { isOptionColumnType, toBooleanValue } from "../data/ColumnTypes";
+import { evaluateComputedFields } from "../data/ComputedEvaluator";
+import {
+  isObsidianTagsKey,
+  isOptionColumnType,
+  normalizeObsidianTagValue,
+  toBooleanValue,
+  toMultiSelectValuesForKey,
+} from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
@@ -33,6 +40,10 @@ import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { normalizeComputedSyncMode } from "../data/ComputedSync";
+import { getComputedStorageKey } from "../data/ColumnDisplay";
+import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
+import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
@@ -112,7 +123,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
-    this.cellRenderer = new CellRenderer(this.dataSource, () => this.refreshAfterSave(), undefined, undefined, undefined, isCodeBlock, undefined, undefined, (row) => this.getFileTitleInfo(row));
+    this.cellRenderer = new CellRenderer(
+      this.dataSource,
+      () => this.refreshAfterSave(),
+      undefined,
+      undefined,
+      undefined,
+      isCodeBlock,
+      undefined,
+      undefined,
+      (row) => this.getFileTitleInfo(row),
+      () => this.config?.schema.computedFields || []
+    );
     this.rowMenu = new RowMenu({
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
@@ -221,6 +243,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   onunload(): void {
+    this.clearComputedSyncTimer();
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
     this.closeGroupOrderPopover();
@@ -345,6 +368,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.closeGroupOrderPopover();
     if (!this.config) return;
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
+    this.persistVisibleHeaderPopoverState(this.config);
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
     this.showFilterPanel = false;
@@ -358,7 +382,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.renderViewConfigPanel(this.config);
     this.updateToolbarIndicators(this.config);
     this.renderResults(this.config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private persistVisibleHeaderPopoverState(config: ViewConfig): void {
+    if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
+    this.persistEmbeddedConfigLocally(config);
   }
 
   private getCurrentMutationTarget(): ViewConfigMutation | undefined {
@@ -428,9 +457,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       return;
     }
 
-    this.rows = this.rowPipeline.build(records, config, this.vs(config));
+    this.rows = this.rowPipeline.build(records, this.withBaseThisContext(config), this.vs(config), this.app);
     this.scheduleComputedSync(config, this.rows);
-    this.summaryRenderer.render(target, this.rows);
+    this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig);
     const renderConfig = this.getStatefulConfig(config);
     if (config.viewType === "board") {
       const field = config.boardGroupField || this.vs(config).groupByField || this.getDefaultBoardField(config);
@@ -492,8 +521,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.rerenderToolbar(newConfig);
         this.renderResults(newConfig);
         this.persistEmbeddedConfigLocally(newConfig);
-        void this.saveEmbeddedConfigToSource();
-        void this.saveCodeBlockReference(newConfig);
+        this.saveEmbeddedConfigInBackground();
+        this.saveCodeBlockReferenceInBackground(newConfig);
       },
       addView: () => {
         new Notice(t("notice.editInFullView", { action: t("toolbar.addView") }));
@@ -511,7 +540,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         new Notice(t("notice.editInFullView", { action: t("toolbar.rename") }));
       },
       setViewType: (value) => {
-        config.viewType = value;
+        this.setEmbeddedViewType(config, value);
         if (value === "gallery") {
           config.galleryImageField = config.galleryImageField || this.getDefaultGalleryImageField(config);
           config.galleryCardSize = config.galleryCardSize || 250;
@@ -521,14 +550,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.persistEmbeddedConfigLocally(config);
         this.rerenderToolbar(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       setDisplayWidth: (value) => {
         config.displayWidth = value;
         this.persistEmbeddedConfigLocally(config);
         this.containerEl.toggleClass("db-width-wide", value === "wide");
         this.updateFileViewWidthClass(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       setSearchText: (value) => {
         this.vs(config).searchText = value;
@@ -546,12 +575,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.persistEmbeddedConfigLocally(config);
         this.rerenderToolbar(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       configureGroupOrder: () => this.showGroupOrderPopover(config),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(config, mode),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover(config, "sort", anchorEl),
-      syncComputedFields: () => { void this.syncComputedFields(config, this.rows, true); },
+      syncComputedFields: this.persistMode === "codeblock"
+        ? undefined
+        : () => { this.syncComputedFieldsInBackground(config, this.rows, true, true); },
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover(config, "filter", anchorEl),
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover(config, "columns", anchorEl),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover(config, "view", anchorEl),
@@ -590,6 +621,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private toggleHeaderPopover(config: ViewConfig, kind: HeaderPopoverKind, anchorEl: HTMLElement): void {
     const wasClosingActivePopover = this.activeHeaderPopover != null && this.isHeaderPopoverVisible(this.activeHeaderPopover);
+    if (wasClosingActivePopover) this.persistVisibleHeaderPopoverState(config);
     const shouldOpen = this.activeHeaderPopover !== kind || !this.isHeaderPopoverVisible(kind);
     this.showFilterPanel = shouldOpen && kind === "filter";
     this.showSortPanel = shouldOpen && kind === "sort";
@@ -609,7 +641,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (wasClosingActivePopover) {
       this.updateToolbarIndicators(config);
       this.renderResults(config);
-      void this.saveEmbeddedConfigToSource();
+      this.saveEmbeddedConfigInBackground();
     }
   }
 
@@ -680,7 +712,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.renderFilterPanel(config);
         this.updateToolbarIndicators(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
     }, this.getHeaderPopoverAnchor("filter"));
   }
@@ -701,7 +733,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.renderSortPanel(config);
         this.updateToolbarIndicators(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
     }, this.getHeaderPopoverAnchor("sort"));
   }
@@ -724,7 +756,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.renderColumnManager(config);
         this.updateToolbarIndicators(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       setColumnVisible: (col, visible) => {
         if (visible) this.vs(config).hiddenColumns.delete(col.key);
@@ -792,10 +824,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       onChange: () => {
         this.persistEmbeddedConfigLocally(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       onViewTypeChange: (value) => {
-        config.viewType = value;
+        this.setEmbeddedViewType(config, value);
         if (value === "board" && !config.boardGroupField) {
           config.boardGroupField = this.getDefaultBoardField(config);
         }
@@ -807,27 +839,27 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         }
         this.persistEmbeddedConfigLocally(config);
         this.render();
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
       onDatabaseChange: () => {
-        if (this.currentDbConfig) {
-          config.sourceFolder = this.currentDbConfig.sourceFolder;
-          config.sourceRules = this.currentDbConfig.sourceRules;
-          config.sourceLogic = this.currentDbConfig.sourceLogic;
-          config.newRecordFolder = this.currentDbConfig.newRecordFolder;
-          config.typeFilter = this.currentDbConfig.typeFilter;
-        }
         this.persistEmbeddedConfigLocally(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       },
     }, this.getHeaderPopoverAnchor("view"));
+  }
+
+  private setEmbeddedViewType(config: ViewConfig, value: NonNullable<ViewConfig["viewType"]>): void {
+    this.stateStore.persist(config, this.vs(config));
+    config.viewType = value;
+    this.stateStore.delete(0, this.currentViewIndex);
+    this.state = undefined;
   }
 
   private async openFullDatabaseView(config: ViewConfig): Promise<void> {
     let leaf = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE)[0];
     if (!leaf) {
-      leaf = this.app.workspace.getLeaf("tab");
+      leaf = this.app.workspace.getLeaf(false);
       await leaf.setViewState({ type: DATABASE_VIEW_TYPE, active: true });
     }
     this.app.workspace.revealLeaf(leaf);
@@ -848,19 +880,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       ? db.views.find((candidate) => candidate.id === ref.viewId)
       : db.views[this.currentViewIndex] || db.views[0];
     if (!view) return undefined;
-    this.inheritDbProperties(view, db);
     this.currentDbConfig = db;
     this.currentSourcePath = entry.sourcePath;
     this.currentViewIndex = db.views.indexOf(view);
     return this.cloneConfig(view);
-  }
-
-  private inheritDbProperties(view: ViewConfig, db: DatabaseConfig): void {
-    if (!view.sourceFolder) view.sourceFolder = db.sourceFolder;
-    if (!view.sourceRules) view.sourceRules = db.sourceRules;
-    if (!view.sourceLogic) view.sourceLogic = db.sourceLogic;
-    if (!view.newRecordFolder) view.newRecordFolder = db.newRecordFolder;
-    if (!view.typeFilter) view.typeFilter = db.typeFilter;
   }
 
   private getEmbeddedConfig(): ViewConfig | undefined {
@@ -982,7 +1005,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.persistEmbeddedConfigLocally(config);
         this.updateToolbarIndicators(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       })
     );
     menu.addItem((item) => item
@@ -992,7 +1015,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         col.wrap = !col.wrap || undefined;
         this.persistEmbeddedConfigLocally(config);
         this.renderResults(config);
-        void this.saveEmbeddedConfigToSource();
+        this.saveEmbeddedConfigInBackground();
       })
     );
     if (includeWidthActions) {
@@ -1029,19 +1052,21 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private autoFitColumn(config: ViewConfig, col: ColumnDef): void {
-    col.width = this.calculateAutoColumnWidth(col, this.rows);
+    config.columnWidths = { ...(config.columnWidths || {}), [col.key]: this.calculateAutoColumnWidth(col, this.rows) };
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private autoFitAllColumns(config: ViewConfig): void {
+    const nextWidths = { ...(config.columnWidths || {}) };
     for (const col of getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns)) {
-      col.width = this.calculateAutoColumnWidth(col, this.rows);
+      nextWidths[col.key] = this.calculateAutoColumnWidth(col, this.rows);
     }
+    config.columnWidths = nextWidths;
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
@@ -1050,10 +1075,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
     if (col.key === "file.name") return this.getFileDisplayName(row);
-    const value = col.type === "computed" && col.computedKey
-      ? row.computed[col.computedKey]
-      : row.frontmatter[col.key];
+    const value = isBaseFileField(col.key)
+      ? getRowFileFieldValue(row, col.key)
+      : col.type === "computed" && col.computedKey
+        ? row.computed[col.computedKey]
+        : row.frontmatter[col.key];
     if (value == null) return "";
+    if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
     if (Array.isArray(value)) return value.map((entry) => String(entry)).join(", ");
     if (typeof value === "object") {
       try {
@@ -1084,7 +1112,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.persistEmbeddedConfigLocally(config);
     this.updateToolbarIndicators(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private getColumnSortDirection(config: ViewConfig, col: ColumnDef): "asc" | "desc" | null {
@@ -1105,7 +1133,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.persistEmbeddedConfigLocally(config);
     this.updateToolbarIndicators(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private getDefaultBoardField(config: ViewConfig): string {
@@ -1179,7 +1207,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private updateBoardCardOrder(field: string, groupKey: string, paths: string[]): void {
@@ -1194,7 +1222,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     };
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void {
@@ -1219,7 +1247,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config.manualOrder.ranks[movedPath] = newRank;
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private ensureManualRanks(config: ViewConfig): void {
@@ -1232,7 +1260,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!config) return;
     config.boardColumnWidth = width;
     this.persistEmbeddedConfigLocally(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private isGroupCollapsed(config: ViewConfig | undefined, field: string, key: string): boolean {
@@ -1249,7 +1277,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (config.collapsedGroups[field].length === 0) delete config.collapsedGroups[field];
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private updateGalleryCardSize(width: number): void {
@@ -1258,7 +1286,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config.galleryCardSize = width;
     this.persistEmbeddedConfigLocally(config);
     this.renderViewConfigPanel(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private showGroupOrderPopover(config: ViewConfig): void {
@@ -1303,7 +1331,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       config.groupOrders = { ...(config.groupOrders || {}), [field]: [...order] };
       this.persistEmbeddedConfigLocally(config);
       this.renderResults(config);
-      void this.saveEmbeddedConfigToSource();
+      this.saveEmbeddedConfigInBackground();
       window.requestAnimationFrame(positionPopover);
     };
     const clearDropLine = () => {
@@ -1471,7 +1499,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
   }
 
   private getActiveGroupField(config: ViewConfig): string {
@@ -1508,38 +1536,76 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private getDefaultFrontmatterFromSourceRules(config: ViewConfig): Record<string, unknown> {
     const frontmatter: Record<string, unknown> = {};
+    const tags = new Set<string>();
     if (config.typeFilter) frontmatter["type"] = config.typeFilter;
-    for (const rule of config.sourceRules || []) {
-      if (rule.op === "eq" && rule.value != null && !rule.field.startsWith("file.")) {
-        frontmatter[rule.field] = rule.value;
+    const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
+    for (const rule of getRequiredSourceRules(sourceRuleTree)) {
+      if ((rule.op === "eq" || rule.op === "strictEq") && rule.value != null && this.isWritableSourceRuleField(config, rule.field)) {
+        frontmatter[rule.field] = rule.op === "strictEq" || rule.valueType ? getSourceRuleTypedValue(rule) : rule.value;
+      }
+      if (rule.op === "hasProperty" && this.isWritableSourceRuleField(config, rule.field) && !Object.prototype.hasOwnProperty.call(frontmatter, rule.field)) {
+        frontmatter[rule.field] = "";
       }
       if (rule.op === "hasTag" && rule.value) {
-        frontmatter["tags"] = [rule.value.replace(/^#/, "")];
+        tags.add(normalizeObsidianTagValue(rule.value));
       }
     }
+    if (tags.size > 0) frontmatter["tags"] = Array.from(tags);
     return frontmatter;
   }
 
+  private isWritableSourceRuleField(config: ViewConfig, field: string): boolean {
+    if (!field || field.startsWith("file.") || field.startsWith("formula.")) return false;
+    return config.schema.columns.find((column) => column.key === field)?.type !== "computed";
+  }
+
   private getCreateFolder(config: ViewConfig): string {
-    const folderRule = config.sourceRules?.find((rule) => rule.op === "inFolder" && rule.value);
-    return normalizePath(config.newRecordFolder || config.sourceFolder || folderRule?.value || this.defaultRecordFolder || "");
+    if (config.newRecordFolder) return normalizePath(config.newRecordFolder);
+    const sourceFolder = this.normalizeVaultFolder(config.sourceFolder || "");
+    const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
+    const ruledFolders = getRequiredSourceRules(sourceRuleTree)
+      .filter((rule) => rule.op === "inFolder" && rule.value)
+      .map((rule) => this.normalizeVaultFolder(String(rule.value)))
+      .filter((folder) => !sourceFolder || !folder || folder === sourceFolder || folder.startsWith(`${sourceFolder}/`));
+    const mostSpecificFolder = ruledFolders.reduce(
+      (current, folder) => folder.length > current.length ? folder : current,
+      sourceFolder
+    );
+    if (mostSpecificFolder || config.sourceFolder) return normalizePath(mostSpecificFolder || "/");
+    return normalizePath(mostSpecificFolder || this.defaultRecordFolder || "");
   }
 
   /** Empty sourceFolder means vault root for querying; defaultRecordFolder is only the create fallback. */
   private getEffectiveConfig(config: ViewConfig): DatabaseConfig {
     // Build a DatabaseConfig from the view config for DataSource queries
+    const dbSourceFolder = this.currentDbConfig?.sourceFolder || "";
+    const dbSourceRules = this.currentDbConfig?.sourceRules;
+    const dbSourceLogic = this.currentDbConfig?.sourceLogic;
+    const dbSourceRuleTree = this.currentDbConfig?.sourceRuleTree;
+    const viewSourceRuleTree = sourceRuleTreesEqual(config.sourceRuleTree, dbSourceRuleTree)
+      ? undefined
+      : config.sourceRuleTree;
     const db: DatabaseConfig = {
       id: "embedded",
       name: config.name,
-      sourceFolder: this.normalizeVaultFolder(config.sourceFolder || ""),
-      sourceRules: config.sourceRules,
-      sourceLogic: config.sourceLogic,
-      newRecordFolder: config.newRecordFolder,
-      typeFilter: config.typeFilter,
+      baseThisFilePath: this.sourcePath,
+      sourceFolder: this.normalizeVaultFolder(dbSourceFolder || config.sourceFolder || ""),
+      sourceRules: dbSourceRules || config.sourceRules,
+      sourceLogic: dbSourceLogic || config.sourceLogic,
+      sourceRuleTree: combineSourceRuleTrees(dbSourceRuleTree, viewSourceRuleTree),
+      newRecordFolder: config.newRecordFolder || this.currentDbConfig?.newRecordFolder,
+      typeFilter: this.currentDbConfig?.typeFilter || config.typeFilter,
       schema: config.schema,
       views: [config],
     };
     return db;
+  }
+
+  private withBaseThisContext(config: ViewConfig): ViewConfig {
+    return {
+      ...config,
+      baseThisFilePath: this.sourcePath,
+    };
   }
 
   /** Show relative paths only when duplicate filenames would otherwise be ambiguous. */
@@ -1581,12 +1647,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
-    if (config.schema.computedFields.length === 0) return;
-    if (this.computedSyncTimer !== null) clearTimeout(this.computedSyncTimer);
+    this.clearComputedSyncTimer();
+    if (!this.isAutomaticComputedSync() || config.schema.computedFields.length === 0) return;
     this.computedSyncTimer = window.setTimeout(() => {
       this.computedSyncTimer = null;
-      void this.syncComputedFields(config, rows);
+      this.syncComputedFieldsInBackground(config, rows);
     }, 5000);
+  }
+
+  private clearComputedSyncTimer(): void {
+    if (this.computedSyncTimer === null) return;
+    window.clearTimeout(this.computedSyncTimer);
+    this.computedSyncTimer = null;
   }
 
   private async syncComputedForFile(
@@ -1595,10 +1667,15 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config: ViewConfig,
     affectedFields?: string[]
   ): Promise<void> {
-    if (!config.schema.computedFields.length) return;
+    if (this.persistMode === "codeblock") return;
+    if (!config.schema.computedFields.length || !this.isAutomaticComputedSync()) return;
 
-    const engine = new ComputedFieldEngine(config.schema.computedFields, config.schema.columns);
-    const computed = engine.evaluate(frontmatter);
+    const computed = evaluateComputedFields(
+      config.schema.computedFields,
+      config.schema.columns,
+      frontmatter,
+      this.getBaseComputedEvaluationContext(file, config)
+    );
 
     const computedColumns = config.schema.columns.filter(col => col.type === "computed");
     const updates: Record<string, unknown> = {};
@@ -1608,14 +1685,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         const deps = ComputedFieldEngine.extractDependencies(
           config.schema.computedFields.find(cf => cf.key === (col.computedKey || col.key))?.expression || ""
         );
-        const allRelevant = [...affectedFields, ...computedColumns.map(c => c.key)];
+        const allRelevant = [...affectedFields, ...computedColumns.flatMap(c => [c.key, getComputedStorageKey(c)])];
         if (!deps.some(d => allRelevant.includes(d))) continue;
       }
-      const key = col.computedKey || col.key;
+      const key = getComputedStorageKey(col);
       const value = computed[key];
       const nextValue = value == null ? "" : value;
-      if (String(frontmatter[col.key] ?? "") !== String(nextValue ?? "")) {
-        updates[col.key] = nextValue;
+      if (String(frontmatter[key] ?? "") !== String(nextValue ?? "")) {
+        updates[key] = nextValue;
       }
     }
 
@@ -1624,8 +1701,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
   }
 
-  private async syncComputedFields(config: ViewConfig, rows: RowData[], notify = false): Promise<void> {
-    if (this.syncingComputed) return;
+  private async syncComputedFields(config: ViewConfig, rows: RowData[], notify = false, force = false): Promise<void> {
+    if (this.persistMode === "codeblock") {
+      if (notify) new Notice(t("notice.embedReadonly", { action: t("viewConfig.saveComputedResults") }));
+      return;
+    }
+    if ((!force && !this.isAutomaticComputedSync()) || this.syncingComputed) return;
     this.syncingComputed = true;
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
@@ -1633,9 +1714,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       for (const row of rows) {
         const updates: Record<string, unknown> = {};
         for (const col of computedColumns) {
-          const value = row.computed[col.computedKey || col.key];
+          const key = getComputedStorageKey(col);
+          const value = row.computed[key];
           const next = value == null ? "" : value;
-          if (String(row.frontmatter[col.key] ?? "") !== String(next ?? "")) updates[col.key] = next;
+          if (String(row.frontmatter[key] ?? "") !== String(next ?? "")) updates[key] = next;
         }
         if (Object.keys(updates).length > 0) {
           await this.dataSource.updateFrontmatter(row.file, updates);
@@ -1651,6 +1733,35 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.render();
       }
     }
+  }
+
+  private syncComputedFieldsInBackground(config: ViewConfig, rows: RowData[], notify = false, force = false): void {
+    void this.syncComputedFields(config, rows, notify, force).catch((err) => {
+      console.error("Note Database: failed to sync embedded computed fields", err);
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    });
+  }
+
+  private isAutomaticComputedSync(): boolean {
+    return normalizeComputedSyncMode(this.currentDbConfig?.computedSyncMode) === "automatic";
+  }
+
+  private getBaseComputedEvaluationContext(file: TFile, config?: ViewConfig): {
+    app: App;
+    file: TFile;
+    thisFile?: TFile;
+    thisFrontmatter?: Record<string, unknown>;
+  } {
+    const sourcePath = config?.baseThisFilePath || this.sourcePath;
+    const thisFile = sourcePath ? this.app.vault.getAbstractFileByPath(sourcePath) : null;
+    return {
+      app: this.app,
+      file,
+      thisFile: thisFile instanceof TFile ? thisFile : undefined,
+      thisFrontmatter: thisFile instanceof TFile
+        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        : undefined,
+    };
   }
 
   private persistEmbeddedConfigLocally(config = this.config): void {
@@ -1691,7 +1802,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!this.config) return;
     this.persistEmbeddedConfigLocally(this.config);
     this.updateToolbarIndicators(this.config);
-    void this.saveEmbeddedConfigToSource();
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private saveEmbeddedConfigInBackground(mutationOverride?: ViewConfigMutation): void {
+    void this.saveEmbeddedConfigToSource(mutationOverride).catch((err) => {
+      console.error("Note Database: failed to save embedded view config", err);
+      new Notice(t("errors.saveViewConfigFailed", { error: String(err) }));
+    });
   }
 
   private async saveEmbeddedConfigToSource(mutationOverride?: ViewConfigMutation): Promise<void> {
@@ -1718,23 +1836,39 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   async undoLastConfigEdit(): Promise<void> {
-    const previous = this.configHistoryStack.shift();
+    const previous = this.configHistoryStack[0];
     if (!previous || !this.currentSourcePath) {
       new Notice(t("notice.nothingToUndo"));
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(this.currentSourcePath);
     if (!(file instanceof TFile)) return;
+    const current = this.currentDbConfig ? this.cloneDatabaseConfig(this.currentDbConfig) : undefined;
     this.pendingDatabaseOverride = { config: previous, sourcePath: this.currentSourcePath };
     this.currentDbConfig = previous;
     this.config = undefined;
     this.state = undefined;
     this.stateStore.clear();
-    await this.dataSource.updateViewDefFile(file, previous, this.getCurrentDatabaseMutationTarget());
-    const nextConfig = this.getEmbeddedConfig();
-    if (nextConfig) this.render(undefined);
-    this.containerEl.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
-    new Notice(t("notice.undone", { action: t("undo.viewConfig") }));
+    try {
+      await this.dataSource.updateViewDefFile(file, previous, this.getCurrentDatabaseMutationTarget());
+      this.configHistoryStack.shift();
+      const nextConfig = this.getEmbeddedConfig();
+      if (nextConfig) this.render(undefined);
+      this.containerEl.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
+      new Notice(t("notice.undone", { action: t("undo.viewConfig") }));
+    } catch (err) {
+      console.error("Note Database: failed to undo embedded config", err);
+      if (current) {
+        this.pendingDatabaseOverride = { config: current, sourcePath: this.currentSourcePath };
+        this.currentDbConfig = current;
+        this.config = undefined;
+        this.state = undefined;
+        this.stateStore.clear();
+        const nextConfig = this.getEmbeddedConfig();
+        if (nextConfig) this.render(undefined);
+      }
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    }
   }
 
   private async saveCodeBlockReference(config: ViewConfig): Promise<void> {
@@ -1750,6 +1884,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     lines.splice(section.lineStart, section.lineEnd - section.lineStart + 1, replacement);
     this.suppressDataReload(2500);
     await this.app.vault.modify(file, lines.join("\n"));
+  }
+
+  private saveCodeBlockReferenceInBackground(config: ViewConfig): void {
+    void this.saveCodeBlockReference(config).catch((err) => {
+      console.error("Note Database: failed to save embedded code block reference", err);
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    });
   }
 
   private serializeCodeBlockReference(config: ViewConfig): string {
@@ -1791,11 +1932,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
 
     const getCellValue = (row: RowData, col: ColumnDef): string => {
-      if (col.key === "file.name") return row.file.name.replace(/\.md$/, "");
-      const value = col.type === "computed" && col.computedKey
-        ? row.computed[col.computedKey]
-        : row.frontmatter[col.key];
+      const value = isBaseFileField(col.key)
+        ? getRowFileFieldValue(row, col.key)
+        : col.type === "computed" && col.computedKey
+          ? row.computed[col.computedKey]
+          : row.frontmatter[col.key];
       if (value == null || value === "") return "";
+      if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
       if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
       if (typeof value === "boolean") return value ? "✓" : "";
       return String(value);
@@ -1832,28 +1975,45 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private async exportCsvMarkdownZip(): Promise<void> {
     const config = this.config || this.getEmbeddedConfig();
     if (!config || !this.currentDbConfig) return;
+    const dbConfig = this.currentDbConfig;
     const options = await new CsvMarkdownExportModal(this.app).open();
     if (!options) return;
     const getExportCellValue = (row: RowData, col: ColumnDef): string => {
-      if (col.key === "file.name") return row.file.basename;
-      const value = col.type === "computed" && col.computedKey
-        ? row.computed[col.computedKey]
-        : row.frontmatter[col.key];
+      const value = isBaseFileField(col.key)
+        ? getRowFileFieldValue(row, col.key)
+        : col.type === "computed" && col.computedKey
+          ? row.computed[col.computedKey]
+          : row.frontmatter[col.key];
       if (value == null || value === "") return "";
+      if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
       if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
       return String(value);
     };
     await createCsvMarkdownZip(
       this.app,
-      this.currentDbConfig,
+      dbConfig,
       config,
       this.rows,
-      (_index) => this.rows,
-      (view) => getVisibleColumns(view, this.rows, this.vs(view), this.pendingShowColumns),
+      (index) => this.getRowsForExportView(dbConfig, index),
+      (view) => {
+        const index = dbConfig.views.indexOf(view);
+        const rows = this.getRowsForExportView(dbConfig, index);
+        const state = this.stateStore.get(0, index, view);
+        return getVisibleColumns(view, rows, state, this.pendingShowColumns);
+      },
       getExportCellValue,
       "",
       options,
     );
+  }
+
+  /** Build the correct filtered and sorted row set for each CSV included in an embedded ZIP export. */
+  private getRowsForExportView(dbConfig: DatabaseConfig, viewIndex: number): RowData[] {
+    const sourceView = dbConfig.views[viewIndex];
+    if (!sourceView) return [];
+    const view = this.cloneConfig(sourceView);
+    const records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(view));
+    return this.rowPipeline.build(records, this.withBaseThisContext(view), this.stateStore.get(0, viewIndex, view), this.app);
   }
 
   private moveView(fromIndex: number, toIndex: number): void {
@@ -1869,8 +2029,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!nextConfig) return;
     this.rerenderToolbar(nextConfig);
     this.renderResults(nextConfig);
-    void this.saveEmbeddedConfigToSource(this.getCurrentDatabaseMutationTarget());
-    void this.saveCodeBlockReference(nextConfig);
+    this.saveEmbeddedConfigInBackground(this.getCurrentDatabaseMutationTarget());
+    this.saveCodeBlockReferenceInBackground(nextConfig);
   }
 
   private getMovedIndex(current: number, from: number, to: number): number {
@@ -1895,14 +2055,20 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.displayWidth = this.config.displayWidth;
     origView.boardColumnWidth = this.config.boardColumnWidth;
     origView.boardGroupField = this.config.boardGroupField;
+    origView.boardSubgroupField = this.config.boardSubgroupField;
+    origView.defaultColumnWidth = this.config.defaultColumnWidth;
     origView.groupOrders = this.config.groupOrders;
+    origView.collapsedGroups = this.config.collapsedGroups;
     origView.boardCardOrders = this.config.boardCardOrders;
+    origView.manualOrder = this.config.manualOrder;
     origView.galleryImageField = this.config.galleryImageField;
     origView.titleField = this.config.titleField;
     origView.galleryImageAspectRatio = this.config.galleryImageAspectRatio;
     origView.galleryCardSize = this.config.galleryCardSize;
     origView.galleryImageFit = this.config.galleryImageFit;
+    origView.showEmptyFields = this.config.showEmptyFields;
     origView.columnOrder = this.config.columnOrder;
+    origView.columnWidths = this.config.columnWidths;
     origView.hiddenColumns = this.config.hiddenColumns;
     origView.filters = this.config.filters;
     origView.filterLogic = this.config.filterLogic;
@@ -1910,6 +2076,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.searchText = this.config.searchText;
     origView.groupByField = this.config.groupByField;
     origView.viewStates = this.config.viewStates;
+    for (const col of this.config.schema.columns) {
+      const sourceCol = this.currentDbConfig.schema.columns.find((candidate) => candidate.key === col.key);
+      if (!sourceCol) continue;
+      sourceCol.wrap = col.wrap;
+    }
     this.stateStore.persist(origView, this.vs(this.config));
   }
 

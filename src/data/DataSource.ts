@@ -1,8 +1,16 @@
-import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef } from "obsidian";
-import { DatabaseConfig, SourceRule, ViewConfig } from "./types";
+import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef, getAllTags } from "obsidian";
+import { ColumnDef, DatabaseConfig, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
-import { normalizeStatusPresets } from "./ColumnTypes";
+import { evaluateBaseFilterExpression } from "./BaseExpression";
+import { evaluateComputedFields } from "./ComputedEvaluator";
+import { hasObsidianTagValue, normalizeStatusPresets, toObsidianTagValues } from "./ColumnTypes";
+import { normalizeComputedSyncMode } from "./ComputedSync";
+import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
+import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
+import { linkDatabaseSchema } from "./ColumnConfig";
 import { t } from "../i18n";
+
+const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 
 export interface NoteRecord {
   file: TFile;
@@ -137,19 +145,21 @@ export class DataSource {
   /** Query records using database-level config (sourceFolder, sourceRules, typeFilter) */
   getRecordsForDatabase(db: DatabaseConfig): NoteRecord[] {
     const effectiveRules = this.getEffectiveSourceRules(db);
-    if (effectiveRules.length === 0) {
+    const sourceRuleTree = getSourceRuleTree(db.sourceRuleTree, effectiveRules, db.sourceLogic);
+    if (!sourceRuleTree && effectiveRules.length === 0) {
       return this.getNotesInFolder(db.sourceFolder, db.typeFilter);
     }
     const records = this.vault.getMarkdownFiles()
       .map((file) => this.toRecord(file))
       .filter((record): record is NoteRecord => record != null)
       .filter((record) => record.frontmatter["db_view"] !== true);
-    const logic = db.sourceLogic || "and";
     return records.filter((record) => {
       if (db.sourceFolder && !this.isInFolder(record.file, db.sourceFolder)) return false;
-      const results = effectiveRules.map((rule) => this.matchesSourceRule(record, rule));
-      const sourceMatch = logic === "or" ? results.some(Boolean) : results.every(Boolean);
-      if (!sourceMatch) return false;
+      if (sourceRuleTree && !matchesSourceRuleTree(
+        sourceRuleTree,
+        (rule) => this.matchesSourceRule(record, rule, db),
+        (rule) => this.matchesSourceExpression(record, rule.expression, db)
+      )) return false;
       if (!db.typeFilter) return true;
       return record.frontmatter["type"] === db.typeFilter;
     });
@@ -157,8 +167,13 @@ export class DataSource {
 
   private getEffectiveSourceRules(db: DatabaseConfig): SourceRule[] {
     const rules = db.sourceRules || [];
-    if (!db.sourceFolder) return rules;
-    return rules.filter((rule) => rule.op !== "inFolder");
+    const sourceFolder = this.normalizeVaultFolder(db.sourceFolder);
+    if (!sourceFolder) return rules;
+    // Keep narrower folder rules. Only remove the duplicate rule already enforced by sourceFolder.
+    return rules.filter((rule) => (
+      rule.op !== "inFolder" ||
+      this.normalizeVaultFolder(String(rule.value ?? "")) !== sourceFolder
+    ));
   }
 
   /** Backward-compatible alias */
@@ -222,7 +237,7 @@ export class DataSource {
 
   /** Open a note in the workspace */
   openNote(file: TFile): void {
-    this.app.workspace.getLeaf("tab")?.openFile(file);
+    this.app.workspace.getLeaf(false)?.openFile(file);
   }
 
   /** Move a note to trash instead of deleting permanently. */
@@ -290,6 +305,7 @@ export class DataSource {
           sourceFolder: String(source["sourceFolder"] || ""),
           sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as any : undefined,
           sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
+          sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
           newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
           typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
           schema: sharedSchema,
@@ -307,6 +323,7 @@ export class DataSource {
           galleryImageFit: source["galleryImageFit"] === "contain" ? "contain" : source["galleryImageFit"] === "cover" ? "cover" : undefined,
           showEmptyFields: source["showEmptyFields"] === true || (Array.isArray(source["alwaysShowEmptyFields"]) && (source["alwaysShowEmptyFields"] as unknown[]).length > 0),
           columnOrder: Array.isArray(source["columnOrder"]) ? source["columnOrder"] as string[] : undefined,
+          columnWidths: this.parseNumberMap(source["columnWidths"]),
           hiddenColumns: Array.isArray(source["hiddenColumns"]) ? source["hiddenColumns"] as string[] : undefined,
           sortColumnOrder: source["sortColumnOrder"] != null ? String(source["sortColumnOrder"]) : undefined,
           statusFilter: source["statusFilter"] != null ? String(source["statusFilter"]) : undefined,
@@ -326,6 +343,8 @@ export class DataSource {
             : undefined,
           filterLogic: source["filterLogic"] === "or" ? "or" : "and",
           filters: Array.isArray(source["filters"]) ? source["filters"] as any : undefined,
+          resultLimit: this.parseResultLimit(source["resultLimit"]),
+          summaryRules: this.parseStringMap(source["summaryRules"]),
           sortColumn: source["sortColumn"] != null ? String(source["sortColumn"]) : undefined,
           sortDirection: source["sortDirection"] === "desc" ? "desc" : "asc" as const,
           sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as any : undefined,
@@ -342,8 +361,11 @@ export class DataSource {
         sourceFolder: String(source["sourceFolder"] || ""),
         sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as any : undefined,
         sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
+        sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
         newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
         typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
+        computedSyncMode: normalizeComputedSyncMode(source["computedSyncMode"]),
+        summaryFormulas: this.parseStringMap(source["summaryFormulas"]),
         schema: sharedSchema,
         statusPresets: normalizeStatusPresets(source["statusPresets"] || [], []),
         defaultStatusPresetId: source["defaultStatusPresetId"] != null ? String(source["defaultStatusPresetId"]) : undefined,
@@ -363,6 +385,7 @@ export class DataSource {
       sourceFolder: String(v["sourceFolder"] || ""),
       sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as any : undefined,
       sourceLogic: v["sourceLogic"] === "or" ? "or" : "and",
+      sourceRuleTree: parseSourceRuleTree(v["sourceRuleTree"]),
       newRecordFolder: v["newRecordFolder"] != null ? String(v["newRecordFolder"]) : undefined,
       typeFilter: v["typeFilter"] != null ? String(v["typeFilter"]) : undefined,
       schema: sharedSchema,
@@ -380,6 +403,7 @@ export class DataSource {
       galleryImageFit: v["galleryImageFit"] === "contain" ? "contain" : v["galleryImageFit"] === "cover" ? "cover" : undefined,
       showEmptyFields: v["showEmptyFields"] === true || (Array.isArray(v["alwaysShowEmptyFields"]) && (v["alwaysShowEmptyFields"] as unknown[]).length > 0),
       columnOrder: Array.isArray(v["columnOrder"]) ? v["columnOrder"] as string[] : undefined,
+      columnWidths: this.parseNumberMap(v["columnWidths"]),
       hiddenColumns: Array.isArray(v["hiddenColumns"]) ? v["hiddenColumns"] as string[] : undefined,
       sortColumnOrder: v["sortColumnOrder"] != null ? String(v["sortColumnOrder"]) : undefined,
       statusFilter: v["statusFilter"] != null ? String(v["statusFilter"]) : undefined,
@@ -399,6 +423,8 @@ export class DataSource {
         : undefined,
       filterLogic: v["filterLogic"] === "or" ? "or" : "and",
       filters: Array.isArray(v["filters"]) ? v["filters"] as any : undefined,
+      resultLimit: this.parseResultLimit(v["resultLimit"]),
+      summaryRules: this.parseStringMap(v["summaryRules"]),
       sortColumn: v["sortColumn"] != null ? String(v["sortColumn"]) : undefined,
       sortDirection: v["sortDirection"] === "desc" ? "desc" : "asc" as const,
       sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as any : undefined,
@@ -441,7 +467,10 @@ export class DataSource {
     const safeFilename = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
     const withExtension = safeFilename.endsWith(".md") ? safeFilename : `${safeFilename}.md`;
     const path = this.getAvailablePath(normalizePath(folder ? `${folder}/${withExtension}` : withExtension));
-    return this.vault.create(path, `---\n${yaml}\n---\n\n`);
+    const file = await this.vault.create(path, `---\n${yaml}\n---\n\n`);
+    // Cache the config so getViewDefFiles can read it before the metadata cache indexes the new file
+    this.rememberViewDefConfig(file.path, dbConfig);
+    return file;
   }
 
   private toDatabasePayload(dbConfig: DatabaseConfig): Record<string, unknown> {
@@ -452,8 +481,11 @@ export class DataSource {
       sourceFolder: dbConfig.sourceFolder || "",
       sourceRules: dbConfig.sourceRules || [],
       sourceLogic: dbConfig.sourceLogic || "and",
+      sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
       typeFilter: dbConfig.typeFilter || "",
+      computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
+      summaryFormulas: dbConfig.summaryFormulas || {},
       columns: dbConfig.schema.columns || [],
       computedFields: dbConfig.schema.computedFields || [],
       statusPresets: dbConfig.statusPresets || [],
@@ -467,11 +499,18 @@ export class DataSource {
       id: view.id || "",
       name: view.name || "",
       viewType: view.viewType || "table",
+      sourceFolder: view.sourceFolder || "",
+      sourceRules: view.sourceRules || [],
+      sourceLogic: view.sourceLogic || "and",
+      sourceRuleTree: view.sourceRuleTree,
+      newRecordFolder: view.newRecordFolder || "",
+      typeFilter: view.typeFilter || "",
       displayWidth: view.displayWidth || "default",
       sortColumn: view.sortColumn || "",
       sortDirection: view.sortDirection || "asc",
       sortRules: view.sortRules || [],
       columnOrder: view.columnOrder || [],
+      columnWidths: view.columnWidths || {},
       hiddenColumns: view.hiddenColumns || [],
       sortColumnOrder: view.sortColumnOrder || "",
       statusFilter: view.statusFilter || "",
@@ -497,6 +536,8 @@ export class DataSource {
       defaultStatusPresetId: view.defaultStatusPresetId || "",
       filterLogic: view.filterLogic || "and",
       filters: view.filters || [],
+      resultLimit: view.resultLimit,
+      summaryRules: view.summaryRules || {},
       viewStates: view.viewStates || {},
     };
   }
@@ -506,8 +547,11 @@ export class DataSource {
       "sourceFolder",
       "sourceRules",
       "sourceLogic",
+      "sourceRuleTree",
       "newRecordFolder",
       "typeFilter",
+      "computedSyncMode",
+      "summaryFormulas",
       "columns",
       "computedFields",
       "sortColumn",
@@ -529,6 +573,7 @@ export class DataSource {
       "alwaysShowEmptyFields",
       "showEmptyFields",
       "columnOrder",
+      "columnWidths",
       "hiddenColumns",
       "sortColumnOrder",
       "statusFilter",
@@ -539,8 +584,31 @@ export class DataSource {
       "boardCardOrders",
       "filterLogic",
       "filters",
+      "resultLimit",
+      "summaryRules",
       "viewStates",
     ];
+  }
+
+  private parseResultLimit(value: unknown): number | undefined {
+    const limit = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+  }
+
+  private parseStringMap(value: unknown): Record<string, string> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key, item]) => key.trim() && item != null)
+      .map(([key, item]) => [key, String(item)] as const);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  private parseNumberMap(value: unknown): Record<string, number> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key.trim(), Number(item)] as const)
+      .filter(([key, item]) => key && Number.isFinite(item) && item > 0);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
 
   private parseViewType(value: unknown): ViewConfig["viewType"] {
@@ -660,8 +728,10 @@ export class DataSource {
 
   private rememberViewDefConfig(path: string, config: DatabaseConfig): void {
     this.cleanupViewDefOverrides();
+    const cloned = this.cloneDatabaseConfig(config);
+    linkDatabaseSchema(cloned);
     this.viewDefOverrides.set(path, {
-      config: this.cloneDatabaseConfig(config),
+      config: cloned,
       expiresAt: Date.now() + 10000,
     });
   }
@@ -669,7 +739,10 @@ export class DataSource {
   private getViewDefOverride(path: string): DatabaseConfig | null {
     this.cleanupViewDefOverrides();
     const override = this.viewDefOverrides.get(path);
-    return override ? this.cloneDatabaseConfig(override.config) : null;
+    if (!override) return null;
+    const cloned = this.cloneDatabaseConfig(override.config);
+    linkDatabaseSchema(cloned);
+    return cloned;
   }
 
   private cleanupViewDefOverrides(): void {
@@ -683,56 +756,130 @@ export class DataSource {
     return JSON.parse(JSON.stringify(config)) as DatabaseConfig;
   }
 
-  private matchesSourceRule(record: NoteRecord, rule: SourceRule): boolean {
-    const value = this.getSourceFieldValue(record, rule.field);
+  private matchesSourceRule(record: NoteRecord, rule: SourceRule, db: DatabaseConfig): boolean {
+    const value = this.getSourceFieldValue(record, rule.field, db);
     const expected = String(rule.value ?? "");
+    const columns = db.schema.columns;
     switch (rule.op) {
       case "inFolder":
         return this.isInFolder(record.file, expected);
       case "hasTag":
-        return this.getTags(record).includes(expected.replace(/^#/, ""));
+        return hasObsidianTagValue(this.getTags(record), expected);
+      case "hasProperty":
+        return Object.prototype.hasOwnProperty.call(record.frontmatter, rule.field);
+      case "hasLink":
+        return fileHasLink(this.app, record.file, expected, this.metadataCache.getFileCache(record.file));
       case "eq":
-        return String(value ?? "") === expected;
+        return baseSourceValuesEqual(value, rule, columns);
       case "neq":
-        return String(value ?? "") !== expected;
+        return !baseSourceValuesEqual(value, rule, columns);
+      case "strictEq":
+        return sourceRuleValuesStrictEqual(value, rule);
+      case "strictNeq":
+        return !sourceRuleValuesStrictEqual(value, rule);
       case "contains":
-        return String(value ?? "").toLowerCase().includes(expected.toLowerCase());
+        return sourceRuleContainsValue(value, rule);
+      case "startsWith":
+        return matchesStringSourceRuleValue(value, (text) => text.startsWith(expected));
+      case "endsWith":
+        return matchesStringSourceRuleValue(value, (text) => text.endsWith(expected));
+      case "matches": {
+        const regex = parseSourceRuleRegex(expected);
+        return regex ? matchesStringSourceRuleValue(value, (text) => {
+          regex.lastIndex = 0;
+          return regex.test(text);
+        }) : false;
+      }
+      case "isType":
+        return matchesBaseSourceType(value, expected, rule.field, columns, db.schema.computedFields);
+      case "gt":
+        return compareSourceRuleValue(value, rule, columns, (result) => result > 0);
+      case "gte":
+        return compareSourceRuleValue(value, rule, columns, (result) => result >= 0);
+      case "lt":
+        return compareSourceRuleValue(value, rule, columns, (result) => result < 0);
+      case "lte":
+        return compareSourceRuleValue(value, rule, columns, (result) => result <= 0);
       case "empty":
-        return value == null || value === "";
+        return isBaseSourceEmptyValue(value);
       case "notempty":
-        return value != null && value !== "";
+        return !isBaseSourceEmptyValue(value);
+      case "truthy":
+        return Boolean(value);
       default:
         return true;
     }
   }
 
-  private getSourceFieldValue(record: NoteRecord, field: string): unknown {
-    if (field === "file.name") return record.file.basename;
-    if (field === "file.path") return record.file.path;
-    if (field === "file.ext" || field === "file.extension") return record.file.extension;
-    if (field === "file.folder") return record.file.parent?.path || "";
-    if (field === "file.ctime" || field === "file.created") return record.file.stat.ctime;
-    if (field === "file.mtime" || field === "file.modified") return record.file.stat.mtime;
-    if (field === "file.size") return record.file.stat.size;
+  private matchesSourceExpression(record: NoteRecord, expression: string, db: DatabaseConfig): boolean {
+    try {
+      const thisFile = this.getBaseThisFile(db);
+      const thisFrontmatter = thisFile
+        ? this.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        : undefined;
+      return evaluateBaseFilterExpression(expression, {
+        app: this.app,
+        file: record.file,
+        frontmatter: record.frontmatter,
+        thisFile,
+        thisFrontmatter,
+        computedFields: db.schema.computedFields,
+        columns: db.schema.columns,
+      });
+    } catch (error) {
+      console.warn("Note Database: failed to evaluate Bases source expression", expression, error);
+      return false;
+    }
+  }
+
+  private getBaseThisFile(db: DatabaseConfig): TFile | undefined {
+    if (!db.baseThisFilePath) return undefined;
+    const file = this.vault.getAbstractFileByPath(db.baseThisFilePath);
+    return file instanceof TFile ? file : undefined;
+  }
+
+  private getSourceFieldValue(record: NoteRecord, field: string, db?: DatabaseConfig): unknown {
+    if (field.startsWith("formula.")) {
+      const key = field.slice("formula.".length);
+      if (!db?.schema.computedFields?.some((computed) => computed.key === key)) return undefined;
+      const thisFile = this.getBaseThisFile(db);
+      const thisFrontmatter = thisFile
+        ? this.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        : undefined;
+      return evaluateComputedFields(db.schema.computedFields, db.schema.columns, record.frontmatter, {
+        app: this.app,
+        file: record.file,
+        thisFile,
+        thisFrontmatter,
+      })[key];
+    }
+    if (isBaseFileField(field)) {
+      return getFileFieldValue(
+        record.file,
+        field,
+        record.frontmatter,
+        this.metadataCache.getFileCache(record.file),
+        this.app
+      );
+    }
     if (field === "folder") return record.file.parent?.path || "";
-    if (field === "tag" || field === "tags") return this.getTags(record).join(" ");
+    if (field === "tags") return this.getTags(record).join(" ");
     return record.frontmatter[field];
   }
 
   private isInFolder(file: TFile, folder: string): boolean {
-    const normalized = normalizePath(folder || "");
-    if (!normalized || normalized === "/") return true;
+    const normalized = this.normalizeVaultFolder(folder);
+    if (!normalized) return true;
     const prefix = normalized.endsWith("/") ? normalized : `${normalized}/`;
     return file.path.startsWith(prefix);
   }
 
   private getTags(record: NoteRecord): string[] {
-    const raw = record.frontmatter["tags"] ?? record.frontmatter["tag"];
-    if (Array.isArray(raw)) return raw.map((tag) => String(tag).replace(/^#/, ""));
-    if (typeof raw === "string") {
-      return raw.split(/[,\s]+/).filter(Boolean).map((tag) => tag.replace(/^#/, ""));
-    }
-    return [];
+    const cache = this.metadataCache.getFileCache(record.file);
+    return toObsidianTagValues([
+      ...toObsidianTagValues(record.frontmatter["tags"]),
+      ...(cache ? getAllTags(cache) || [] : []),
+    ]);
   }
 
   private getAvailablePath(path: string): string {
@@ -763,4 +910,80 @@ export class DataSource {
       cb();
     }
   }
+}
+
+function isBaseSourceEmptyValue(value: unknown): boolean {
+  if (value == null || value === "") return true;
+  if (typeof value === "number") return !Number.isFinite(value);
+  if (Array.isArray(value)) return value.length === 0;
+  if (value instanceof Date) return !Number.isFinite(value.getTime());
+  if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+  return false;
+}
+
+function baseSourceValuesEqual(value: unknown, rule: SourceRule, columns?: ColumnDef[]): boolean {
+  if (Array.isArray(value)) return value.length === 1 && baseSourceScalarValuesEqual(value[0], rule, columns);
+  return baseSourceScalarValuesEqual(value, rule, columns);
+}
+
+function baseSourceScalarValuesEqual(value: unknown, rule: SourceRule, columns?: ColumnDef[]): boolean {
+  const expected = String(rule.value ?? "");
+  if (shouldCompareSourceRuleAsDate(rule, columns)) {
+    const leftDate = typeof value === "number" ? value : value instanceof Date ? value.getTime() : Date.parse(String(value));
+    const rightDate = Date.parse(expected);
+    if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate === rightDate;
+  }
+  if (rule.valueType) return sourceRuleValuesLooseEqual(value, rule);
+  return String(value ?? "") === expected;
+}
+
+function shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {
+  if (rule.valueType === "date") return true;
+  return isBaseFileField(rule.field) && getBaseFileFieldType(rule.field) === "date";
+}
+
+function matchesStringSourceRuleValue(value: unknown, predicate: (text: string) => boolean): boolean {
+  const values = Array.isArray(value) ? value : [value];
+  return values.some((item) => {
+    if (item == null) return false;
+    const text = String(item);
+    return text.length <= MAX_SOURCE_RULE_MATCH_TEXT_LENGTH && predicate(text);
+  });
+}
+
+function parseSourceRuleRegex(expected: string): RegExp | undefined {
+  const literal = expected.match(/^\/((?:\\.|[^/\\\n])*)\/([a-z]*)$/);
+  try {
+    return literal ? new RegExp(literal[1], literal[2]) : new RegExp(expected);
+  } catch {
+    return undefined;
+  }
+}
+
+function compareSourceRuleValue(value: unknown, rule: SourceRule, columns: ColumnDef[] | undefined, predicate: (result: number) => boolean): boolean {
+  const expected = String(rule.value ?? "");
+  const values = Array.isArray(value) ? value : [value];
+  return values.some((item) => {
+    if (item == null || item === "") return false;
+    return predicate(compareScalarSourceRuleValue(item, expected, shouldCompareSourceRuleAsDate(rule, columns)));
+  });
+}
+
+function compareScalarSourceRuleValue(value: unknown, expected: string, preferDate: boolean): number {
+  if (preferDate) {
+    const leftDate = value instanceof Date ? value.getTime() : Date.parse(String(value));
+    const rightDate = Date.parse(expected);
+    if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
+  }
+  const leftNumber = typeof value === "number" ? value : Number(value);
+  const rightNumber = Number(expected);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
+  const rightDate = Date.parse(expected);
+  const leftDate = value instanceof Date
+    ? value.getTime()
+    : typeof value === "number" && Number.isFinite(rightDate)
+      ? value
+      : Date.parse(String(value));
+  if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
+  return String(value ?? "").localeCompare(expected);
 }

@@ -1,5 +1,6 @@
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { getTableColumnStyle, getTableLayout } from "./TableLayout";
 
 export interface ColumnHeaderActions {
   getConfig(): ViewConfig | undefined;
@@ -54,11 +55,17 @@ export class ColumnHeaderController {
       e.preventDefault();
       this.suppressSortUntil = Date.now() + 300;
       startX = e.clientX;
-      startWidth = Math.max(28, col.width || this.actions.getConfig()?.defaultColumnWidth || 150);
+      const config = this.actions.getConfig();
+      startWidth = Math.max(28, config?.columnWidths?.[col.key] || col.width || config?.defaultColumnWidth || 150);
       const onMouseMove = (ev: MouseEvent) => {
         this.suppressSortUntil = Date.now() + 300;
         const newWidth = Math.max(28, startWidth + (ev.clientX - startX));
-        col.width = newWidth;
+        const currentConfig = this.actions.getConfig();
+        if (currentConfig) {
+          currentConfig.columnWidths = { ...(currentConfig.columnWidths || {}), [col.key]: newWidth };
+        } else {
+          col.width = newWidth;
+        }
         this.syncTableColumnLayouts(th);
       };
       const onMouseUp = () => {
@@ -95,21 +102,19 @@ export class ColumnHeaderController {
       const baseWidths = keys.map((key) => this.getColumnWidth(columnByKey.get(key), config));
       const selectionCol = colgroup.querySelector<HTMLElement>("col.db-select-colgroup");
       const selectionWidth = selectionCol ? 34 : 0;
-      const baseWidth = baseWidths.reduce((total, width) => total + width, 0);
-      const tableWidth = Math.max(720, selectionWidth + baseWidth);
-      const extraWidth = Math.max(0, tableWidth - selectionWidth - baseWidth);
-      const extraPerColumn = extraWidth / dataCols.length;
+      const layout = getTableLayout(selectionWidth, baseWidths, this.getAvailableTableWidth(table));
 
-      table.style.width = `${tableWidth}px`;
-      table.style.minWidth = `${tableWidth}px`;
+      table.style.width = `${layout.tableWidth}px`;
+      table.style.minWidth = `${layout.tableWidth}px`;
       if (selectionCol) {
         selectionCol.setAttr("width", "34");
         selectionCol.style.width = "34px";
       }
 
       dataCols.forEach((colEl, index) => {
-        const width = baseWidths[index] + extraPerColumn;
-        colEl.style.width = `${width}px`;
+        const style = getTableColumnStyle(layout.columnWidths[index], index, dataCols.length);
+        colEl.style.width = style.width || "";
+        colEl.style.minWidth = style.minWidth || "";
       });
     });
 
@@ -131,7 +136,17 @@ export class ColumnHeaderController {
   }
 
   private getColumnWidth(col: ColumnDef | undefined, config: ViewConfig): number {
-    return col?.width || config.defaultColumnWidth || 150;
+    return (col ? config.columnWidths?.[col.key] : undefined) || col?.width || config.defaultColumnWidth || 150;
+  }
+
+  private getAvailableTableWidth(table: HTMLTableElement): number {
+    const wrap = table.closest(".db-table-wrap");
+    const parent = wrap?.parentElement;
+    if (!parent) return 0;
+    const cs = getComputedStyle(parent);
+    const paddingLeft = parseFloat(cs.paddingLeft) || 0;
+    const paddingRight = parseFloat(cs.paddingRight) || 0;
+    return Math.max(0, Math.floor(parent.getBoundingClientRect().width - paddingLeft - paddingRight));
   }
 
   private isHeaderNarrow(width: number, key: string): boolean {

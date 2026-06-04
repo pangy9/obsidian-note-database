@@ -1,4 +1,6 @@
 import { ColumnDef, RowData } from "./types";
+import { isObsidianTagsKey, toMultiSelectValuesForKey } from "./ColumnTypes";
+import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 
 export interface CellAddress {
   rowPath: string;
@@ -51,12 +53,14 @@ export function serializeSelectedCells(
 
 /** Get the display text for a cell value */
 export function getCellDisplayText(row: RowData, col: ColumnDef): string {
-  if (col.key === "file.name") return row.file.basename;
   const value =
-    col.type === "computed" && col.computedKey
+    isBaseFileField(col.key)
+      ? getRowFileFieldValue(row, col.key)
+      : col.type === "computed" && col.computedKey
       ? row.computed[col.computedKey]
       : row.frontmatter[col.key];
   if (value == null) return "";
+  if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
   if (Array.isArray(value)) return value.map((entry) => String(entry)).join(", ");
   if (typeof value === "object") {
     try {

@@ -4,44 +4,22 @@ import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
-import { ColumnDef, DatabaseConfig, PluginSettings, SortRule, StatusOptionDef, ViewConfig, generateId } from "./data/types";
-import { createOptionsFromValues, getStatusPresetOptions, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
+import { ColumnDef, ComputedFieldDef, DatabaseConfig, PluginSettings, SortRule, SourceRule, SourceRuleNode, StatusOptionDef, ViewConfig, generateId } from "./data/types";
+import {
+  createOptionsFromValues,
+  getStatusPresetOptions,
+  isObsidianTagsKey,
+  normalizeStatusPresets,
+  resolveDefaultStatusPresetId,
+  toMultiSelectValuesForKey,
+} from "./data/ColumnTypes";
 import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/EmbeddedDatabaseRenderer";
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
-import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
+import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
-
-/**
- * After JSON deserialization, db.schema and each view.schema are independent
- * objects.  The database-level schema is the canonical source because deleted
- * columns must not be resurrected from stale per-view schema copies.
- */
-function linkDatabaseSchemas(databases: DatabaseConfig[]): void {
-  for (const db of databases) {
-    if (!db.schema || !Array.isArray(db.schema.columns)) {
-      db.schema = db.views?.find((view) => Array.isArray(view.schema?.columns))?.schema || {
-        columns: [],
-        computedFields: [],
-      };
-    }
-    if (!Array.isArray(db.schema.computedFields)) db.schema.computedFields = [];
-
-    const hasCanonicalColumns = db.schema.columns.length > 0;
-    if (!hasCanonicalColumns) {
-      const firstViewSchema = db.views?.find((view) => Array.isArray(view.schema?.columns) && view.schema.columns.length > 0)?.schema;
-      if (firstViewSchema) {
-        db.schema = {
-          columns: firstViewSchema.columns || [],
-          computedFields: firstViewSchema.computedFields || [],
-        };
-      }
-    }
-
-    for (const view of db.views || []) {
-      view.schema = db.schema;
-    }
-  }
-}
+import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
+import { BASE_FILE_FIELD_KEYS, getFileFieldValue, isBaseFileField } from "./data/FileFields";
+import { linkDatabaseSchemas } from "./data/ColumnConfig";
 
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
@@ -90,6 +68,7 @@ export default class NoteDatabasePlugin extends Plugin {
               sourceFolder: v.sourceFolder || "",
               sourceRules: v.sourceRules,
               sourceLogic: v.sourceLogic,
+              sourceRuleTree: v.sourceRuleTree,
               newRecordFolder: v.newRecordFolder,
               typeFilter: v.typeFilter,
               schema: v.schema,
@@ -483,7 +462,17 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private async convertBaseToDatabase(file: TFile): Promise<void> {
     const source = await this.app.vault.read(file);
-    const { config, inferredColumns } = this.createConfigFromBase(file, source);
+    let config: DatabaseConfig;
+    let inferredColumns: BaseImportColumn[];
+    let mapViewDowngraded = false;
+    try {
+      ({ config, inferredColumns, mapViewDowngraded } = this.createConfigFromBase(file, source));
+    } catch (error) {
+      console.warn("Note Database: failed to convert .base filters", error);
+      new Notice(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (mapViewDowngraded) new Notice(t("notice.baseMapViewDowngraded"));
 
     // Show confirmation modal for column type review
     const confirmed = await new BaseImportConfirmModal(this.app, inferredColumns).open();
@@ -501,7 +490,7 @@ export default class NoteDatabasePlugin extends Plugin {
       schemaCol.type = col.type;
       // If user changed to an option-based type, collect unique values as options
       if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && originalType !== col.type) {
-        const uniqueValues = collectUniqueStringValues(this.app, col.key, config.sourceFolder, config.sourceRules);
+        const uniqueValues = collectUniqueStringValues(this.app, col.key, config.sourceFolder, config.sourceRules, config.sourceLogic, config.sourceRuleTree);
         if (uniqueValues.length > 0) {
           (schemaCol as any).statusOptions = uniqueValues.map((val: string, i: number) => ({
             value: val,
@@ -646,7 +635,7 @@ export default class NoteDatabasePlugin extends Plugin {
       const col: ColumnDef = { key, label, type };
       if (type === "select" || type === "multi-select" || type === "status") {
         col.statusOptions = createOptionsFromValues(type === "multi-select"
-          ? values.flatMap((value) => this.splitMultiValue(value))
+          ? values.flatMap((value) => this.splitMultiValue(value, key))
           : values);
       }
       columns.push(col);
@@ -678,7 +667,7 @@ export default class NoteDatabasePlugin extends Plugin {
             return idx != null ? (row[idx] || "").trim() : "";
           }).filter(Boolean);
           col.statusOptions = createOptionsFromValues(col.type === "multi-select"
-            ? values.flatMap((value) => this.splitMultiValue(value))
+            ? values.flatMap((value) => this.splitMultiValue(value, col.key))
             : values);
         }
       }
@@ -700,7 +689,7 @@ export default class NoteDatabasePlugin extends Plugin {
         const col = colByKey.get(key);
         if (col?.type === "computed") continue;
         const raw = row[item.index] || "";
-        const value = this.parseCsvMarkdownCellValue(raw, col?.type || "text");
+        const value = this.parseCsvMarkdownCellValue(raw, col?.type || "text", key);
         if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
         frontmatter[key] = value;
       }
@@ -742,8 +731,7 @@ export default class NoteDatabasePlugin extends Plugin {
         id: generateId(),
         name: viewName,
         viewType: "table",
-        sourceFolder: folder,
-        newRecordFolder: folder,
+        sourceFolder: "",
         schema,
         columnOrder: viewColumnOrder,
       });
@@ -761,8 +749,7 @@ export default class NoteDatabasePlugin extends Plugin {
           id: generateId(),
           name: t("common.tableView"),
           viewType: "table",
-          sourceFolder: folder,
-          newRecordFolder: folder,
+          sourceFolder: "",
           schema,
           columnOrder: columns.map((col) => col.key),
         }],
@@ -870,17 +857,21 @@ export default class NoteDatabasePlugin extends Plugin {
     config.newRecordFolder = folder;
     config.sourceRules = undefined;
     config.sourceLogic = undefined;
+    config.sourceRuleTree = undefined;
     config.typeFilter = undefined;
     config.schema = schema;
     config.views = (config.views || []).map((view) => {
       const cloned = JSON.parse(JSON.stringify(view)) as ViewConfig;
       cloned.id = generateId();
-      cloned.sourceFolder = folder;
-      cloned.newRecordFolder = folder;
+      cloned.sourceFolder = "";
+      cloned.newRecordFolder = undefined;
       cloned.sourceRules = undefined;
       cloned.sourceLogic = undefined;
+      cloned.sourceRuleTree = undefined;
       cloned.typeFilter = undefined;
       cloned.schema = schema;
+      cloned.manualOrder = undefined;
+      cloned.boardCardOrders = undefined;
       return cloned;
     });
     if (config.views.length === 0) {
@@ -888,8 +879,7 @@ export default class NoteDatabasePlugin extends Plugin {
         id: generateId(),
         name: t("common.tableView"),
         viewType: "table",
-        sourceFolder: folder,
-        newRecordFolder: folder,
+        sourceFolder: "",
         schema,
         columnOrder: schema.columns.map((col) => col.key),
       });
@@ -929,7 +919,7 @@ export default class NoteDatabasePlugin extends Plugin {
     return "text";
   }
 
-  private parseCsvMarkdownCellValue(raw: string, type: ColumnDef["type"]): unknown {
+  private parseCsvMarkdownCellValue(raw: string, type: ColumnDef["type"], key = ""): unknown {
     const text = raw.trim();
     if (!text) return "";
     if (type === "number" || type === "currency") {
@@ -944,12 +934,14 @@ export default class NoteDatabasePlugin extends Plugin {
     if (type === "checkbox") {
       return ["true", "yes", "checked", "1", "✓"].includes(text.toLowerCase());
     }
-    if (type === "multi-select") return this.splitMultiValue(text);
+    if (type === "multi-select") return this.splitMultiValue(text, key);
     return text;
   }
 
-  private splitMultiValue(value: string): string[] {
-    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  private splitMultiValue(value: string, key = ""): string[] {
+    return isObsidianTagsKey(key)
+      ? toMultiSelectValuesForKey(key, value)
+      : value.split(",").map((item) => item.trim()).filter(Boolean);
   }
 
   private async ensureVaultFolder(folderPath: string): Promise<void> {
@@ -1004,23 +996,28 @@ export default class NoteDatabasePlugin extends Plugin {
       id: generateId(),
       name: t("common.tableView"),
       viewType: "table",
-      sourceFolder: db.sourceFolder,
-      sourceRules: db.sourceRules,
-      sourceLogic: db.sourceLogic,
-      newRecordFolder: db.newRecordFolder,
-      typeFilter: db.typeFilter,
+      sourceFolder: "",
       schema: db.schema,
     };
   }
 
-  private createConfigFromBase(file: TFile, source: string): { config: DatabaseConfig; inferredColumns: BaseImportColumn[] } {
+  private createConfigFromBase(file: TFile, source: string): { config: DatabaseConfig; inferredColumns: BaseImportColumn[]; mapViewDowngraded: boolean } {
     const parsed = this.parseBaseFile(source);
+    if (parsed.unsupportedFilters) {
+      throw new Error(t("errors.unsupportedBaseFilters"));
+    }
+    const baseThisFilePath = file.path;
     const sourceFolder = parsed.sourceFolder;
     const sourceRules = parsed.sourceRules;
-    const createFolder = sourceFolder ||
-      sourceRules.find((rule) => rule.op === "inFolder" && rule.value)?.value ||
-      this.settings.databaseFolder ||
-      DEFAULT_SETTINGS.databaseFolder;
+    const sourceRuleTree = parsed.sourceRuleTree;
+    const createFolder = this.getBaseCreateFolder(sourceFolder, sourceRules, sourceRuleTree);
+    const baseComputedFields: ComputedFieldDef[] = Object.entries(parsed.formulas).map(([key, expression]) => ({
+      key,
+      label: this.getBasePropertyDisplayName(parsed.properties, `formula.${key}`, key),
+      expression,
+      type: "text",
+      expressionSyntax: "base" as const,
+    }));
 
     // Collect all columns from all views. Obsidian Bases can show file.*
     // fields, but only file.name maps to a supported built-in column here.
@@ -1028,16 +1025,28 @@ export default class NoteDatabasePlugin extends Plugin {
     // frontmatter columns.
     const allColumnKeys = new Map<string, string>();
     for (const bv of parsed.views) {
-      for (const raw of bv.order) {
+      for (const raw of this.getBaseViewOrderKeys(bv)) {
         const key = this.cleanBaseKey(raw);
         if (!this.shouldImportBaseColumn(key)) continue;
-        const label = key === "file.name" ? t("defaults.nameColumn") : key;
+        const label = this.getBasePropertyDisplayName(parsed.properties, raw, key === "file.name" ? t("defaults.nameColumn") : key);
         if (!allColumnKeys.has(key)) allColumnKeys.set(key, label);
       }
       if (bv.image) {
         const key = this.cleanBaseKey(bv.image);
-        if (key && this.shouldImportBaseColumn(key) && !allColumnKeys.has(key)) allColumnKeys.set(key, key);
+        if (key && this.shouldImportBaseColumn(key) && !allColumnKeys.has(key)) {
+          allColumnKeys.set(key, this.getBasePropertyDisplayName(parsed.properties, bv.image, key));
+        }
       }
+      for (const raw of Object.keys(bv.summaries || {})) {
+        const key = this.cleanBaseKey(raw);
+        if (key && this.shouldImportBaseColumn(key) && !allColumnKeys.has(key)) {
+          allColumnKeys.set(key, this.getBasePropertyDisplayName(parsed.properties, raw, key));
+        }
+      }
+    }
+    for (const computed of baseComputedFields) {
+      const key = `formula.${computed.key}`;
+      if (!allColumnKeys.has(key)) allColumnKeys.set(key, computed.label);
     }
     // Ensure file.name exists
     if (!allColumnKeys.has("file.name")) allColumnKeys.set("file.name", t("defaults.nameColumn"));
@@ -1045,17 +1054,45 @@ export default class NoteDatabasePlugin extends Plugin {
     // Scan source folder for additional frontmatter properties and collect value samples
     const sampleValues = new Map<string, unknown[]>();
     const fileCounts = new Map<string, number>();
-    collectFileFrontmatterKeys(this.app, sourceFolder, parsed.sourceRules, allColumnKeys, sampleValues, fileCounts);
+    collectFileFrontmatterKeys(this.app, sourceFolder, parsed.sourceRules, allColumnKeys, sampleValues, fileCounts, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
+    for (const [key, label] of Array.from(allColumnKeys.entries())) {
+      allColumnKeys.set(key, this.getBasePropertyDisplayName(parsed.properties, key, label));
+    }
+    const preliminaryColumns: ColumnDef[] = Array.from(allColumnKeys.keys()).map((key) => (
+      key.startsWith("formula.")
+        ? { key, label: allColumnKeys.get(key) || key, type: "computed", computedKey: key.slice("formula.".length) }
+        : { key, label: allColumnKeys.get(key) || key, type: inferColumnType(key, sampleValues.get(key) || []) }
+    ));
+    const computedSamples = collectComputedFieldSamples(
+      this.app,
+      sourceFolder,
+      parsed.sourceRules,
+      parsed.sourceLogic,
+      sourceRuleTree,
+      baseComputedFields,
+      preliminaryColumns,
+      10,
+      file
+    );
+    for (const computed of baseComputedFields) {
+      const inferred = inferColumnType(computed.key, computedSamples.get(computed.key) || []);
+      if (inferred === "number" || inferred === "date" || inferred === "checkbox") computed.type = inferred;
+    }
 
     const STATUS_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
     const inferredColumns: BaseImportColumn[] = [];
     const schema = {
       columns: Array.from(allColumnKeys.entries()).map(([key, label]) => {
+        if (key.startsWith("formula.")) {
+          const computedKey = key.slice("formula.".length);
+          const col: ColumnDef = { key, label, type: "computed", computedKey };
+          return col;
+        }
         const type = inferColumnType(key, sampleValues.get(key) || []);
         const col: any = { key, label, type };
         // For tags field, pre-populate options from vault tags
-        if ((key === "tags" || key === "tag") && type === "multi-select") {
-          const vaultTags = getVaultTags(this.app, sourceFolder, parsed.sourceRules);
+        if (isObsidianTagsKey(key) && type === "multi-select") {
+          const vaultTags = getVaultTags(this.app, sourceFolder, parsed.sourceRules, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
           if (vaultTags.length > 0) {
             col.statusOptions = vaultTags.map((tag: string, i: number) => ({
               value: tag,
@@ -1064,8 +1101,8 @@ export default class NoteDatabasePlugin extends Plugin {
           }
         }
         // For other multi-select fields inferred from list data, collect unique values as options
-        if (type === "multi-select" && key !== "tags" && key !== "tag") {
-          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, parsed.sourceRules);
+        if (type === "multi-select" && !isObsidianTagsKey(key)) {
+          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, parsed.sourceRules, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({
               value: val,
@@ -1076,25 +1113,26 @@ export default class NoteDatabasePlugin extends Plugin {
         if (key !== "file.name") inferredColumns.push({ ...col, fileCount: fileCounts.get(key) || 0 });
         return col;
       }),
-      computedFields: [] as any[],
+      computedFields: baseComputedFields,
     };
 
     // Build views from parsed .base data
     const views: ViewConfig[] = parsed.views
-      .filter((bv) => bv.type === "table" || bv.type === "cards" || bv.type === "list")
+      .filter((bv) => bv.type === "table" || bv.type === "cards" || bv.type === "list" || bv.type === "map")
       .map((bv) => {
       const viewType = bv.type === "cards" ? "gallery" : bv.type === "list" ? "list" : "table";
       const galleryImageField = bv.image ? this.cleanBaseKey(bv.image) : undefined;
       const schemaColumnKeys = new Set(schema.columns.map(c => c.key));
       const importedGalleryImageField = galleryImageField && schemaColumnKeys.has(galleryImageField) ? galleryImageField : undefined;
-      const viewColumnKeys = new Set(bv.order.map(k => this.cleanBaseKey(k)).filter(key => schemaColumnKeys.has(key)));
+      const baseOrderKeys = this.getBaseViewOrderKeys(bv);
+      const viewColumnKeys = new Set(baseOrderKeys.map(k => this.cleanBaseKey(k)).filter(key => schemaColumnKeys.has(key)));
       if (importedGalleryImageField) viewColumnKeys.add(importedGalleryImageField);
       const hiddenColumns = schema.columns
         .filter(c => !viewColumnKeys.has(c.key))
         .map(c => c.key);
 
       // Map columnSize keys to our schema columns
-      const columnOrder = bv.order.map(k => this.cleanBaseKey(k)).filter(key => schemaColumnKeys.has(key));
+      const columnOrder = baseOrderKeys.map(k => this.cleanBaseKey(k)).filter(key => schemaColumnKeys.has(key));
 
       // Extract sort rules
       const sortRules: SortRule[] = (bv.sort || [])
@@ -1102,37 +1140,38 @@ export default class NoteDatabasePlugin extends Plugin {
           field: this.cleanBaseKey(s.property),
           direction: (s.direction || "ASC").toLowerCase() === "desc" ? "desc" as const : "asc" as const,
         }))
-        .filter((rule: SortRule) => schemaColumnKeys.has(rule.field));
+        .filter((rule: SortRule) => this.isBaseViewRuleField(rule.field, schemaColumnKeys));
 
       // Primary sort column/direction (first sort rule)
       const primarySort = sortRules[0];
+      const groupByField = bv.groupBy ? this.cleanBaseKey(bv.groupBy.property) : undefined;
+      const importedGroupByField = groupByField && this.isBaseViewRuleField(groupByField, schemaColumnKeys) ? groupByField : undefined;
+      const groupOrders = importedGroupByField
+        ? this.getBaseGroupOrders(bv, importedGroupByField, sourceFolder, sourceRules, parsed.sourceLogic, combineSourceRuleTrees(sourceRuleTree, bv.sourceRuleTree), baseComputedFields, schema.columns, file)
+        : undefined;
 
-      // Build column widths from columnSize
-      for (const [rawKey, width] of Object.entries(bv.columnSize || {})) {
-        const key = this.cleanBaseKey(rawKey);
-        const col = schema.columns.find(c => c.key === key);
-        if (col && typeof width === "number") {
-          (col as any).width = Math.min(width, 300);
-        }
-      }
+      const columnWidths = this.getBaseViewColumnWidths(bv.columnSize, schemaColumnKeys);
 
       const view: ViewConfig = {
         id: generateId(),
         name: bv.name || (viewType === "gallery" ? t("common.galleryView") : viewType === "list" ? t("common.listView") : t("common.tableView")),
         viewType,
         sourceFolder,
-        sourceRules: sourceRules.length > 0 ? sourceRules : undefined,
-        sourceLogic: "and",
+        sourceRules: (bv.sourceRules || sourceRules).length > 0 ? (bv.sourceRules || sourceRules) : undefined,
+        sourceLogic: bv.sourceLogic || parsed.sourceLogic,
+        sourceRuleTree: bv.sourceRuleTree,
         newRecordFolder: createFolder,
         schema,
         columnOrder,
+        columnWidths,
         hiddenColumns: hiddenColumns.length > 0 ? hiddenColumns : undefined,
         sortRules: sortRules.length > 0 ? sortRules : undefined,
         sortColumn: primarySort?.field,
         sortDirection: primarySort?.direction,
-        groupByField: bv.groupBy && schemaColumnKeys.has(this.cleanBaseKey(bv.groupBy.property))
-          ? this.cleanBaseKey(bv.groupBy.property)
-          : undefined,
+        groupByField: importedGroupByField,
+        groupOrders,
+        resultLimit: bv.limit,
+        summaryRules: this.normalizeBaseSummaryRules(bv.summaries, schemaColumnKeys),
       };
 
       if (viewType === "gallery") {
@@ -1152,7 +1191,8 @@ export default class NoteDatabasePlugin extends Plugin {
         viewType: "table",
         sourceFolder,
         sourceRules: sourceRules.length > 0 ? sourceRules : undefined,
-        sourceLogic: "and",
+        sourceLogic: parsed.sourceLogic,
+        sourceRuleTree,
         newRecordFolder: createFolder,
         schema,
         columnOrder: schema.columns.map(c => c.key),
@@ -1164,18 +1204,79 @@ export default class NoteDatabasePlugin extends Plugin {
       name: file.basename,
       sourceFolder,
       sourceRules: sourceRules.length > 0 ? sourceRules : undefined,
-      sourceLogic: "and",
+      sourceLogic: parsed.sourceLogic,
+      sourceRuleTree,
+      baseThisFilePath,
       newRecordFolder: createFolder,
+      computedSyncMode: "display-only",
+      summaryFormulas: Object.keys(parsed.summaries).length > 0 ? parsed.summaries : undefined,
       schema,
       views,
     };
-    return { config, inferredColumns };
+    return { config, inferredColumns, mapViewDowngraded: parsed.mapViewCount > 0 };
+  }
+
+  private getBaseGroupOrders(
+    view: { groupBy?: { direction?: string }; [key: string]: any },
+    field: string,
+    sourceFolder: string,
+    sourceRules: NonNullable<ViewConfig["sourceRules"]>,
+    sourceLogic: "and" | "or",
+    sourceRuleTree: SourceRuleNode | undefined,
+    computedFields: DatabaseConfig["schema"]["computedFields"],
+    columns: ColumnDef[],
+    baseThisFile?: TFile
+  ): Record<string, string[]> | undefined {
+    const direction = String(view.groupBy?.direction || "ASC").toLowerCase() === "desc" ? "desc" : "asc";
+    const values = collectUniqueStringValues(
+      this.app,
+      field,
+      sourceFolder,
+      sourceRules,
+      sourceLogic,
+      sourceRuleTree,
+      computedFields,
+      columns,
+      baseThisFile
+    );
+    if (values.length === 0) return undefined;
+    const sorted = [...values].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+    return { [field]: direction === "desc" ? sorted.reverse() : sorted };
+  }
+
+  private getBaseCreateFolder(
+    sourceFolder: string,
+    sourceRules: NonNullable<ViewConfig["sourceRules"]>,
+    sourceRuleTree?: SourceRuleNode
+  ): string {
+    const normalizeFolder = (folder: string) => {
+      const normalized = normalizePath(folder || "");
+      return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
+    };
+    const normalizedSource = normalizeFolder(sourceFolder);
+    const ruledFolders = getRequiredSourceRules(sourceRuleTree || {
+      type: "group",
+      logic: "and",
+      rules: sourceRules,
+    })
+      .filter((rule) => rule.op === "inFolder" && rule.value)
+      .map((rule) => normalizeFolder(String(rule.value)))
+      .filter((folder) => !normalizedSource || !folder || folder === normalizedSource || folder.startsWith(`${normalizedSource}/`));
+    const mostSpecificFolder = ruledFolders.reduce(
+      (current, folder) => folder.length > current.length ? folder : current,
+      normalizedSource
+    );
+    if (mostSpecificFolder || sourceFolder) return normalizePath(mostSpecificFolder || "/");
+    return this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder;
   }
 
   /** Parse a .base file into a structured format */
   private parseBaseFile(source: string): {
     sourceFolder: string;
     sourceRules: NonNullable<ViewConfig["sourceRules"]>;
+    sourceLogic: "and" | "or";
+    sourceRuleTree?: SourceRuleNode;
+    unsupportedFilters: boolean;
     views: Array<{
       type: string;
       name: string;
@@ -1187,47 +1288,86 @@ export default class NoteDatabasePlugin extends Plugin {
       imageAspectRatio?: number;
       cardSize?: number;
       imageFit?: "cover" | "contain";
+      limit?: number;
+      summaries?: Record<string, string>;
+      sourceRuleTree?: SourceRuleNode;
+      sourceRules?: NonNullable<ViewConfig["sourceRules"]>;
+      sourceLogic?: "and" | "or";
+      unsupportedFilters?: boolean;
+      coordinates?: string;
+      markerIcon?: string;
+      markerColor?: string;
       [key: string]: any;
     }>;
+    formulas: Record<string, string>;
+    properties: Record<string, any>;
+    summaries: Record<string, string>;
+    mapViewCount: number;
   } {
     const result = {
       sourceFolder: "",
       sourceRules: [] as NonNullable<ViewConfig["sourceRules"]>,
+      sourceLogic: "and" as "and" | "or",
+      sourceRuleTree: undefined as SourceRuleNode | undefined,
+      unsupportedFilters: false,
       views: [] as any[],
+      formulas: {} as Record<string, string>,
+      properties: {} as Record<string, any>,
+      summaries: {} as Record<string, string>,
+      mapViewCount: 0,
     };
 
-    // Extract sourceFolder from filters
-    const folderMatch = source.match(/file\.inFolder\(["']([^"']+)["']\)/);
-    if (folderMatch) result.sourceFolder = folderMatch[1];
-    else {
+    let parsed: Record<string, any> | null = null;
+    try {
+      parsed = parseYaml(source) as Record<string, any> | null;
+    } catch {
+      parsed = null;
+    }
+    if (parsed) {
+      result.sourceFolder = String(parsed["sourceFolder"] || "");
+      result.formulas = this.getBaseFormulas(parsed["formulas"]);
+      result.properties = parsed["properties"] && typeof parsed["properties"] === "object" ? parsed["properties"] : {};
+      result.summaries = this.getBaseStringMap(parsed["summaries"]);
+      const filters = this.parseBaseFilters(parsed["filters"]);
+      result.sourceRuleTree = filters.sourceRuleTree;
+      result.sourceRules = getPositiveSourceRules(filters.sourceRuleTree);
+      result.sourceLogic = filters.sourceRuleTree && isSourceRuleGroup(filters.sourceRuleTree) ? filters.sourceRuleTree.logic : "and";
+      result.unsupportedFilters = !filters.supported;
+      if (Array.isArray(parsed["views"])) {
+        result.views = parsed["views"].map((view: unknown) => this.parseBaseYamlView(view)).filter((view): view is any => !!view);
+        result.unsupportedFilters = result.unsupportedFilters || result.views.some((view) => !!view.unsupportedFilters);
+      }
+    } else {
       const sfMatch = source.match(/sourceFolder\s*:\s*["']?([^"'\n]+)["']?/);
       if (sfMatch) result.sourceFolder = sfMatch[1].trim();
+      const filters = this.getBaseGlobalFilters(source);
+      result.sourceRuleTree = filters.sourceRuleTree;
+      result.sourceRules = getPositiveSourceRules(filters.sourceRuleTree);
+      result.sourceLogic = filters.sourceRuleTree && isSourceRuleGroup(filters.sourceRuleTree) ? filters.sourceRuleTree.logic : "and";
+      result.unsupportedFilters = !filters.supported;
     }
 
-    // Extract source rules from filters
-    result.sourceRules = this.extractBaseSourceRules(source, result.sourceFolder);
+    if (result.views.length === 0) {
+      // Parse the views: section manually (line-by-line) for older or partially invalid files.
+      const lines = source.split("\n");
+      let inViews = false;
+      let viewStartLine = -1;
 
-    // Parse the views: section manually (line-by-line)
-    const lines = source.split("\n");
-    let inViews = false;
-    let viewStartLine = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-      if (/^views\s*:\s*$/.test(lines[i].trim())) {
-        inViews = true;
-        continue;
-      }
-      if (inViews && /^\s*-\s+type\s*:/.test(lines[i])) {
-        // Start of a new view entry
-        if (viewStartLine >= 0) {
-          result.views.push(this.parseBaseViewEntry(lines, viewStartLine, i));
+      for (let i = 0; i < lines.length; i++) {
+        if (/^views\s*:\s*$/.test(lines[i].trim())) {
+          inViews = true;
+          continue;
         }
-        viewStartLine = i;
+        if (inViews && /^\s*-\s+type\s*:/.test(lines[i])) {
+          if (viewStartLine >= 0) {
+            result.views.push(this.parseBaseViewEntry(lines, viewStartLine, i));
+          }
+          viewStartLine = i;
+        }
       }
-    }
-    // Don't forget the last view
-    if (viewStartLine >= 0) {
-      result.views.push(this.parseBaseViewEntry(lines, viewStartLine, lines.length));
+      if (viewStartLine >= 0) {
+        result.views.push(this.parseBaseViewEntry(lines, viewStartLine, lines.length));
+      }
     }
 
     // Fallback: if no views array found, try old flat format
@@ -1244,7 +1384,40 @@ export default class NoteDatabasePlugin extends Plugin {
       }
     }
 
+    result.mapViewCount = result.views.filter((view) => view?.type === "map").length;
     return result;
+  }
+
+  private parseBaseYamlView(view: unknown): any | undefined {
+    if (!view || typeof view !== "object") return undefined;
+    const source = view as Record<string, any>;
+    const filters = this.parseBaseFilters(source["filters"]);
+    const sourceRuleTree = filters.sourceRuleTree;
+    return {
+      type: String(source["type"] || "table"),
+      name: source["name"] != null ? String(source["name"]) : "",
+      order: Array.isArray(source["order"]) ? source["order"].map((item: unknown) => String(item)) : [],
+      sort: Array.isArray(source["sort"]) ? source["sort"] : [],
+      columnSize: source["columnSize"] && typeof source["columnSize"] === "object" ? source["columnSize"] : {},
+      groupBy: source["groupBy"] && typeof source["groupBy"] === "object" ? source["groupBy"] : undefined,
+      image: source["image"] != null ? String(source["image"]) : undefined,
+      imageAspectRatio: typeof source["imageAspectRatio"] === "number" ? source["imageAspectRatio"] : undefined,
+      cardSize: typeof source["cardSize"] === "number" ? source["cardSize"] : undefined,
+      imageFit: source["imageFit"] === "cover" || source["imageFit"] === "contain" ? source["imageFit"] : undefined,
+      limit: this.parseBaseLimit(source["limit"]),
+      summaries: this.getBaseStringMap(source["summaries"]),
+      coordinates: source["coordinates"] != null ? String(source["coordinates"]) : undefined,
+      markerIcon: source["markerIcon"] != null ? String(source["markerIcon"]) : undefined,
+      markerColor: source["markerColor"] != null ? String(source["markerColor"]) : undefined,
+      latitude: source["latitude"] != null ? String(source["latitude"]) : undefined,
+      longitude: source["longitude"] != null ? String(source["longitude"]) : undefined,
+      lat: source["lat"] != null ? String(source["lat"]) : undefined,
+      lng: source["lng"] != null ? String(source["lng"]) : undefined,
+      sourceRuleTree,
+      sourceRules: getPositiveSourceRules(sourceRuleTree),
+      sourceLogic: sourceRuleTree && isSourceRuleGroup(sourceRuleTree) ? sourceRuleTree.logic : "and",
+      unsupportedFilters: !filters.supported,
+    };
   }
 
   /** Parse a single view entry from the views: array */
@@ -1295,6 +1468,10 @@ export default class NoteDatabasePlugin extends Plugin {
           if (Number.isFinite(size)) view.cardSize = size;
         } else if (key === "imageFit" && (value === "cover" || value === "contain")) {
           view.imageFit = value;
+        } else if (key === "limit") {
+          view.limit = this.parseBaseLimit(value);
+        } else if (key === "coordinates" || key === "markerIcon" || key === "markerColor" || key === "latitude" || key === "longitude" || key === "lat" || key === "lng") {
+          view[key] = value;
         }
         continue;
       }
@@ -1350,36 +1527,671 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private cleanBaseKey(raw: string): string {
     let key = raw.trim().replace(/^["']|["']$/g, "");
+    const bracket = key.match(/^(file\.properties|file|formula|note|properties)\[\s*(["'])([\s\S]+?)\2\s*\]$/);
+    if (bracket) {
+      const value = bracket[3].trim();
+      if (!value) return "";
+      if (bracket[1] === "note" || bracket[1] === "properties" || bracket[1] === "file.properties") return value;
+      return `${bracket[1]}.${value}`;
+    }
     if (key.startsWith("note.")) key = key.slice("note.".length);
     if (key.startsWith("properties.")) key = key.slice("properties.".length);
+    if (key.startsWith("file.properties.")) key = key.slice("file.properties.".length);
     if (key === "name") return "file.name";
     return key;
   }
 
   private shouldImportBaseColumn(key: string): boolean {
-    return !key.startsWith("file.") || key === "file.name";
+    return !key.startsWith("file.") || isBaseFileField(key) || key.startsWith("formula.");
   }
 
-  private extractBaseSourceRules(source: string, sourceFolder: string) {
-    const rules: NonNullable<ViewConfig["sourceRules"]> = [];
-    const seen = new Set<string>();
-    const push = (rule: NonNullable<ViewConfig["sourceRules"]>[number]) => {
-      const id = `${rule.field}:${rule.op}:${rule.value || ""}`;
-      if (seen.has(id)) return;
-      seen.add(id);
-      rules.push(rule);
-    };
-    if (sourceFolder && sourceFolder !== "/") push({ field: "folder", op: "inFolder", value: sourceFolder });
-    for (const match of source.matchAll(/file\.inFolder\(["']([^"']+)["']\)/g)) {
-      push({ field: "folder", op: "inFolder", value: match[1] });
+  private getBaseViewOrderKeys(view: { order?: string[]; type?: string; [key: string]: any }): string[] {
+    const keys = [...(Array.isArray(view.order) ? view.order : [])];
+    if (view.type === "map") {
+      for (const candidate of ["coordinates", "markerIcon", "markerColor", "latitude", "longitude", "lat", "lng"]) {
+        const raw = view[candidate];
+        if (typeof raw === "string" && raw.trim()) keys.push(raw);
+      }
     }
-    for (const match of source.matchAll(/file\.hasTag\(["']#?([^"']+)["']\)/g)) {
-      push({ field: "tags", op: "hasTag", value: match[1] });
+    return Array.from(new Set(keys));
+  }
+
+  private parseBaseLimit(value: unknown): number | undefined {
+    const limit = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+  }
+
+  private getBaseFormulas(value: unknown): Record<string, string> {
+    return this.getBaseStringMap(value);
+  }
+
+  private getBaseStringMap(value: unknown): Record<string, string> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const map: Record<string, string> = {};
+    for (const [key, expression] of Object.entries(value as Record<string, unknown>)) {
+      if (expression != null && key.trim()) map[key.trim()] = String(expression);
     }
-    for (const match of source.matchAll(/type\s*==\s*["']([^"']+)["']/g)) {
-      push({ field: "type", op: "eq", value: match[1] });
+    return map;
+  }
+
+  private normalizeBaseSummaryRules(value: unknown, schemaColumnKeys: Set<string>): Record<string, string> | undefined {
+    const rules = this.getBaseStringMap(value);
+    const normalized: Record<string, string> = {};
+    for (const [rawKey, summary] of Object.entries(rules)) {
+      const key = this.cleanBaseKey(rawKey);
+      if (this.isBaseViewRuleField(key, schemaColumnKeys) && summary.trim()) normalized[key] = summary.trim();
     }
-    return rules;
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
+  private isBaseViewRuleField(key: string, schemaColumnKeys: Set<string>): boolean {
+    return schemaColumnKeys.has(key) || BASE_FILE_FIELD_KEYS.has(key);
+  }
+
+  private getBaseViewColumnWidths(
+    columnSize: Record<string, number> | undefined,
+    schemaColumnKeys: Set<string>
+  ): Record<string, number> | undefined {
+    const widths: Record<string, number> = {};
+    for (const [rawKey, rawWidth] of Object.entries(columnSize || {})) {
+      const key = this.cleanBaseKey(rawKey);
+      const width = Number(rawWidth);
+      if (!key || !schemaColumnKeys.has(key) || !Number.isFinite(width) || width <= 0) continue;
+      widths[key] = Math.max(28, Math.round(width));
+    }
+    return Object.keys(widths).length > 0 ? widths : undefined;
+  }
+
+  private getBasePropertyDisplayName(properties: Record<string, any>, rawKey: string, fallback: string): string {
+    const key = this.cleanBaseKey(rawKey);
+    const candidates = [rawKey, key];
+    if (key.startsWith("formula.")) candidates.push(`formula.${key.slice("formula.".length)}`);
+    for (const candidate of candidates) {
+      const prop = properties?.[candidate];
+      if (prop && typeof prop === "object" && prop["displayName"] != null) return String(prop["displayName"]);
+    }
+    return fallback;
+  }
+
+  private getBaseGlobalFilters(source: string): { sourceRuleTree?: SourceRuleNode; supported: boolean } {
+    try {
+      const parsed = parseYaml(source) as Record<string, unknown> | null;
+      const filters = parsed?.["filters"];
+      if (!filters) return { supported: true };
+      const sourceRuleTree = this.parseBaseSourceRuleNode(filters);
+      return { sourceRuleTree, supported: !!sourceRuleTree };
+    } catch {
+      return { supported: false };
+    }
+  }
+
+  private parseBaseFilters(filters: unknown): { sourceRuleTree?: SourceRuleNode; supported: boolean } {
+    if (!filters) return { supported: true };
+    const sourceRuleTree = this.parseBaseSourceRuleNode(filters);
+    return { sourceRuleTree, supported: !!sourceRuleTree };
+  }
+
+  private parseBaseSourceRuleNode(value: unknown): SourceRuleNode | undefined {
+    if (typeof value === "string") return this.parseBaseSourceRuleExpression(value);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length !== 1) return undefined;
+    const [operator, children] = entries[0];
+    if (operator === "not") {
+      const child = Array.isArray(children)
+        ? (children.length === 1 ? children[0] : { or: children })
+        : children;
+      const rule = this.parseBaseSourceRuleNode(child);
+      return rule ? { type: "not", rule } : undefined;
+    }
+    if ((operator !== "and" && operator !== "or") || !Array.isArray(children)) return undefined;
+    const rules = children.map((child) => this.parseBaseSourceRuleNode(child));
+    if (rules.some((rule) => !rule)) return undefined;
+    return { type: "group", logic: operator, rules: rules as SourceRuleNode[] };
+  }
+
+  private parseBaseSourceRuleExpression(expression: string): SourceRuleNode | undefined {
+    const source = this.stripBaseOuterParens(expression.trim());
+    const orParts = this.splitBaseLogicalExpression(source, "||");
+    if (orParts) return this.parseBaseLogicalSourceRuleParts(orParts, "or", source);
+    const andParts = this.splitBaseLogicalExpression(source, "&&");
+    if (andParts) return this.parseBaseLogicalSourceRuleParts(andParts, "and", source);
+    if (source.startsWith("!") && !source.startsWith("!=")) {
+      const negated = this.stripBaseOuterParens(source.slice(1).trim());
+      if (negated) {
+        const rule = this.parseBaseSourceRuleExpression(negated);
+        if (rule && !("type" in rule) && (rule.op === "empty" || rule.op === "notempty")) {
+          return { ...rule, op: rule.op === "empty" ? "notempty" : "empty" };
+        }
+        return rule ? { type: "not", rule } : { type: "expression", expression: source };
+      }
+    }
+    let match = source.match(/^file\.inFolder\((.*)\)$/);
+    if (match) {
+      const folders = this.parseBaseStringArguments(match[1])
+        ?.map((folder) => folder.trim())
+        .filter((folder) => folder.length > 0);
+      if (folders?.length === 1) return { field: "folder", op: "inFolder", value: folders[0] };
+      if (folders && folders.length > 1) {
+        return {
+          type: "group",
+          logic: "or",
+          rules: folders.map((folder) => ({ field: "folder", op: "inFolder", value: folder })),
+        };
+      }
+    }
+    match = source.match(/^file\.hasTag\((.*)\)$/);
+    if (match) {
+      const tags = this.parseBaseStringArguments(match[1])
+        ?.map((tag) => tag.trim().replace(/^#/, ""))
+        .filter((tag) => tag.length > 0);
+      if (tags?.length === 1) return { field: "tags", op: "hasTag", value: tags[0] };
+      if (tags && tags.length > 1) {
+        return {
+          type: "group",
+          logic: "or",
+          rules: tags.map((tag) => ({ field: "tags", op: "hasTag", value: tag })),
+        };
+      }
+    }
+    match = source.match(/^file\.hasProperty\((.*)\)$/);
+    if (match) {
+      const properties = this.parseBaseStringArguments(match[1])
+        ?.map((property) => this.cleanBaseKey(property.trim()))
+        .filter((property) => property.length > 0);
+      if (properties?.length === 1) return { field: properties[0], op: "hasProperty" };
+      if (properties && properties.length > 1) {
+        return {
+          type: "group",
+          logic: "and",
+          rules: properties.map((property) => ({ field: property, op: "hasProperty" })),
+        };
+      }
+    }
+    match = source.match(/^file\.hasLink\((.*)\)$/);
+    if (match) {
+      const link = this.parseBaseLinkTargetArgument(match[1]);
+      if (link) return { field: "file.links", op: "hasLink", value: link };
+    }
+    match = source.match(/^(\/(?:\\.|[^/\\\n])*\/[a-z]*)\.matches\((.*)\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[2]);
+      if (!field || this.isUnsupportedBaseSourceRuleField(field)) {
+        return { type: "expression", expression: source };
+      }
+      return { field, op: "matches", value: match[1] };
+    }
+    const comparison = this.splitBaseBinaryOperator(source, [">=", "<=", ">", "<"]);
+    if (comparison) {
+      const field = this.parseBaseRuleFieldOperand(comparison.left);
+      const value = this.parseBaseComparisonValue(comparison.right);
+      if (field && value && !this.isUnsupportedBaseSourceRuleField(field)) {
+        const op = comparison.operator === ">" ? "gt" : comparison.operator === ">=" ? "gte" : comparison.operator === "<" ? "lt" : "lte";
+        return { field, op, value };
+      }
+      const reversedField = this.parseBaseRuleFieldOperand(comparison.right);
+      const reversedValue = this.parseBaseComparisonValue(comparison.left);
+      if (!reversedField || !reversedValue || this.isUnsupportedBaseSourceRuleField(reversedField)) {
+        return { type: "expression", expression: source };
+      }
+      const reversedOp = comparison.operator === ">" ? "lt" : comparison.operator === ">=" ? "lte" : comparison.operator === "<" ? "gt" : "gte";
+      return { field: reversedField, op: reversedOp, value: reversedValue };
+    }
+    const equality = this.splitBaseBinaryOperator(source, ["===", "!==", "==", "!="]);
+    if (equality) {
+      let field = this.parseBaseRuleFieldOperand(equality.left);
+      let value = this.parseBaseEqualityValue(equality.right);
+      if (!field || !value) {
+        field = this.parseBaseRuleFieldOperand(equality.right);
+        value = this.parseBaseEqualityValue(equality.left);
+      }
+      if (!field || this.isUnsupportedBaseSourceRuleField(field)) return { type: "expression", expression: source };
+      if (!value) return { type: "expression", expression: source };
+      const notEqual = equality.operator === "!=" || equality.operator === "!==";
+      const strict = equality.operator === "===" || equality.operator === "!==";
+      if (strict) {
+        if (value.kind === "date") return { type: "expression", expression: source };
+        if (value.kind === "null") return { field, op: notEqual ? "strictNeq" : "strictEq", value: "null", valueType: "null" };
+        return { field, op: notEqual ? "strictNeq" : "strictEq", value: value.value, valueType: value.valueType };
+      }
+      if (value.kind === "null") return { field, op: notEqual ? "notempty" : "empty" };
+      if (value.kind === "date") return { field, op: notEqual ? "neq" : "eq", value: value.value, valueType: "date" };
+      return { field, op: notEqual ? "neq" : "eq", value: value.value, valueType: value.valueType };
+    }
+    match = source.match(/^(.+?)\.contains\((.*)\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      const args = this.parseBaseContainmentArguments(match[2]);
+      if (!field || args?.length !== 1 || this.isUnsupportedBaseSourceRuleField(field)) {
+        return { type: "expression", expression: source };
+      }
+      const arg = this.normalizeBaseContainmentValueForField(field, args[0]);
+      return { field, op: "contains", value: arg.value, valueType: arg.valueType };
+    }
+    match = source.match(/^(.+?)\.(containsAll|containsAny)\((.*)\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      const args = this.parseBaseContainmentArguments(match[3]);
+      if (!field || !args?.length || this.isUnsupportedBaseSourceRuleField(field)) {
+        return { type: "expression", expression: source };
+      }
+      const normalizedArgs = args.map((arg) => this.normalizeBaseContainmentValueForField(field, arg));
+      if (normalizedArgs.length === 1) return { field, op: "contains", value: normalizedArgs[0].value, valueType: normalizedArgs[0].valueType };
+      return {
+        type: "group",
+        logic: match[2] === "containsAll" ? "and" : "or",
+        rules: normalizedArgs.map((arg) => ({ field, op: "contains", value: arg.value, valueType: arg.valueType })),
+      };
+    }
+    match = source.match(/^(.+?)\.(startsWith|endsWith)\((.*)\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      const args = this.parseBaseStringArguments(match[3]);
+      if (!field || args?.length !== 1 || this.isUnsupportedBaseSourceRuleField(field)) {
+        return { type: "expression", expression: source };
+      }
+      return { field, op: match[2] as "startsWith" | "endsWith", value: args[0] };
+    }
+    match = source.match(/^!?\s*(.+?)\.isEmpty\(\s*\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      if (!field || this.isUnsupportedBaseSourceRuleField(field)) return { type: "expression", expression: source };
+      return { field, op: source.startsWith("!") ? "notempty" : "empty" };
+    }
+    match = source.match(/^(.+?)\.isTruthy\(\s*\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      if (!field || this.isUnsupportedBaseSourceRuleField(field)) return { type: "expression", expression: source };
+      return { field, op: "truthy" };
+    }
+    match = source.match(/^(.+?)\.isType\((.*)\)$/);
+    if (match) {
+      const field = this.parseBaseRuleFieldOperand(match[1]);
+      const args = this.parseBaseStringArguments(match[2]);
+      if (!field || args?.length !== 1 || this.isUnsupportedBaseSourceRuleField(field)) {
+        return { type: "expression", expression: source };
+      }
+      return { field, op: "isType", value: args[0].trim() };
+    }
+    const truthyField = this.parseBaseRuleFieldOperand(source);
+    if (truthyField && this.isBaseBareTruthyRuleField(truthyField)) return { field: truthyField, op: "truthy" };
+    return { type: "expression", expression: source };
+  }
+
+  private parseBaseLogicalSourceRuleParts(parts: string[], logic: "and" | "or", fallbackExpression: string): SourceRuleNode {
+    const rules = parts.map((part) => this.parseBaseSourceRuleExpression(part));
+    if (rules.some((rule) => !rule)) return { type: "expression", expression: fallbackExpression };
+    return { type: "group", logic, rules: rules as SourceRuleNode[] };
+  }
+
+  private splitBaseBinaryOperator(source: string, operators: string[]): { left: string; operator: string; right: string } | undefined {
+    let depth = 0;
+    let quote: string | null = null;
+    let regex = false;
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (char === "\\") index += 1;
+        else if (char === quote) quote = null;
+        continue;
+      }
+      if (regex) {
+        if (char === "\\") index += 1;
+        else if (char === "/") regex = false;
+        continue;
+      }
+      if (char === "\"" || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "/" && this.isBaseRegexStart(source, index)) {
+        regex = true;
+        continue;
+      }
+      if (char === "(" || char === "[" || char === "{") {
+        depth += 1;
+        continue;
+      }
+      if (char === ")" || char === "]" || char === "}") {
+        depth = Math.max(0, depth - 1);
+        continue;
+      }
+      if (depth !== 0) continue;
+      for (const operator of operators) {
+        if (!source.startsWith(operator, index)) continue;
+        const left = source.slice(0, index).trim();
+        const right = source.slice(index + operator.length).trim();
+        return left && right ? { left, operator, right } : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  private parseBaseComparisonValue(rawValue: string): string | undefined {
+    const value = rawValue.trim();
+    const date = value.match(/^date\((.*)\)$/);
+    if (date) {
+      const args = this.parseBaseStringArguments(date[1]);
+      return args?.length === 1 ? args[0] : undefined;
+    }
+    const number = this.parseBaseNumberValue(value);
+    if (number != null) return number;
+    const quoted = this.parseBaseStringArguments(value);
+    if (quoted?.length === 1) return quoted[0];
+    if (/^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+-Z]*)?$/.test(value)) return value;
+    return undefined;
+  }
+
+  private parseBaseEqualityValue(rawValue: string): { kind: "value"; value: string; valueType: "string" | "number" | "boolean" } | { kind: "date"; value: string } | { kind: "null" } | undefined {
+    const value = rawValue.trim();
+    if (value === "null") return { kind: "null" };
+    if (value === "true" || value === "false") return { kind: "value", value, valueType: "boolean" };
+    const date = value.match(/^date\((.*)\)$/);
+    if (date) {
+      const args = this.parseBaseStringArguments(date[1]);
+      return args?.length === 1 ? { kind: "date", value: args[0] } : undefined;
+    }
+    const quoted = this.parseBaseStringArguments(value);
+    if (quoted?.length === 1) return { kind: "value", value: quoted[0], valueType: "string" };
+    const linkTarget = this.parseBaseLinkTargetValue(value);
+    if (linkTarget) return { kind: "value", value: `[[${linkTarget}]]`, valueType: "string" };
+    const number = this.parseBaseNumberValue(value);
+    if (number != null) return { kind: "value", value: number, valueType: "number" };
+    if (/^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+-Z]*)?$/.test(value)) return { kind: "value", value, valueType: "string" };
+    return undefined;
+  }
+
+  private parseBaseContainmentArguments(rawArgs: string): Array<{ value: string; valueType: "string" | "number" | "boolean" | "null" }> | undefined {
+    const parts = this.splitBaseArguments(rawArgs);
+    if (!parts) return undefined;
+    const values: Array<{ value: string; valueType: "string" | "number" | "boolean" | "null" }> = [];
+    for (const part of parts) {
+      const source = part.trim();
+      if (!source) return undefined;
+      if (source.startsWith("[") && source.endsWith("]")) {
+        const nested = this.parseBaseContainmentArguments(source.slice(1, -1));
+        if (!nested) return undefined;
+        values.push(...nested);
+        continue;
+      }
+      const value = this.parseBaseContainmentValue(source);
+      if (!value) return undefined;
+      values.push(value);
+    }
+    return values;
+  }
+
+  private parseBaseContainmentValue(rawValue: string): { value: string; valueType: "string" | "number" | "boolean" | "null" } | undefined {
+    const value = rawValue.trim();
+    if (value === "null") return { value: "null", valueType: "null" };
+    if (value === "true" || value === "false") return { value, valueType: "boolean" };
+    const quoted = this.parseBaseStringArguments(value);
+    if (quoted?.length === 1) return { value: quoted[0], valueType: "string" };
+    const linkTarget = this.parseBaseLinkTargetValue(value);
+    if (linkTarget) return { value: `[[${linkTarget}]]`, valueType: "string" };
+    const number = this.parseBaseNumberValue(value);
+    if (number != null) return { value: number, valueType: "number" };
+    if (/^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+-Z]*)?$/.test(value)) return { value, valueType: "string" };
+    return undefined;
+  }
+
+  private normalizeBaseContainmentValueForField(
+    field: string,
+    value: { value: string; valueType: "string" | "number" | "boolean" | "null" }
+  ): { value: string; valueType: "string" | "number" | "boolean" | "null" } {
+    if ((field === "tags" || field === "file.tags") && value.valueType === "string") {
+      return { ...value, value: value.value.trim().replace(/^#/, "") };
+    }
+    return value;
+  }
+
+  private parseBaseNumberValue(rawValue: string): string | undefined {
+    const value = rawValue.trim();
+    if (/^-?\d+(?:\.\d+)?$/.test(value)) return value;
+    const number = value.match(/^number\((.*)\)$/);
+    if (!number) return undefined;
+    const parts = this.splitBaseArguments(number[1]);
+    if (!parts || parts.length !== 1) return undefined;
+    const literal = this.parseBaseStaticNumberArgument(parts[0]);
+    if (literal === undefined) return undefined;
+    const parsed = Number(literal);
+    return Number.isFinite(parsed) ? String(parsed) : undefined;
+  }
+
+  private parseBaseStaticNumberArgument(rawValue: string): string | number | boolean | null | undefined {
+    const value = rawValue.trim();
+    if (value === "null") return null;
+    if (value === "true") return true;
+    if (value === "false") return false;
+    if (/^-?\d+(?:\.\d+)?$/.test(value)) return value;
+    const quoted = this.parseBaseStringArguments(value);
+    return quoted?.length === 1 ? quoted[0] : undefined;
+  }
+
+  private parseBaseLinkTargetArgument(rawArgs: string): string | undefined {
+    const parts = this.splitBaseArguments(rawArgs);
+    if (!parts || parts.length !== 1) return undefined;
+    return this.parseBaseLinkTargetValue(parts[0]);
+  }
+
+  private parseBaseLinkTargetValue(rawValue: string): string | undefined {
+    const value = rawValue.trim();
+    const quoted = this.parseBaseStringArguments(value);
+    if (quoted?.length === 1) return quoted[0].trim() || undefined;
+    const file = value.match(/^file\((.*)\)$/);
+    if (file) {
+      const args = this.parseBaseStringArguments(file[1]);
+      return args?.length === 1 ? args[0].trim() || undefined : undefined;
+    }
+    const link = value.match(/^link\((.*)\)$/);
+    if (link) {
+      const args = this.parseBaseStringArguments(link[1]);
+      return args && args.length >= 1 && args.length <= 2 ? args[0].trim() || undefined : undefined;
+    }
+    return undefined;
+  }
+
+  private parseBaseRuleFieldOperand(rawField: string): string | undefined {
+    const field = this.stripBaseOuterParens(rawField.trim());
+    const filePropertyBracket = field.match(/^file\.properties\[\s*(["'])([\s\S]+?)\1\s*\]$/);
+    if (filePropertyBracket) {
+      const key = filePropertyBracket[2].trim();
+      return key ? key : undefined;
+    }
+    const bracket = field.match(/^(file|formula|note|properties)\[\s*(["'])([\s\S]+?)\2\s*\]$/);
+    if (bracket) {
+      const key = bracket[3].trim();
+      if (!key) return undefined;
+      if (bracket[1] === "note" || bracket[1] === "properties") return key;
+      return `${bracket[1]}.${key}`;
+    }
+    if (/^(file|formula|note|properties)\.[^\s!=<>()[\]]+$/.test(field) || /^[^\s!=<>()[\].]+$/.test(field)) {
+      return this.cleanBaseKey(field);
+    }
+    return undefined;
+  }
+
+  private isBaseBareTruthyRuleField(field: string): boolean {
+    if (this.isUnsupportedBaseSourceRuleField(field)) return false;
+    return !new Set([
+      "Array",
+      "Boolean",
+      "Math",
+      "Number",
+      "Object",
+      "String",
+      "date",
+      "duration",
+      "escapeHTML",
+      "false",
+      "file",
+      "formula",
+      "html",
+      "icon",
+      "link",
+      "list",
+      "max",
+      "min",
+      "note",
+      "now",
+      "null",
+      "properties",
+      "random",
+      "this",
+      "today",
+      "true",
+    ]).has(field);
+  }
+
+  private isUnsupportedBaseSourceRuleField(field: string): boolean {
+    return field.startsWith("file.") && !isBaseFileField(field);
+  }
+
+  private stripBaseOuterParens(source: string): string {
+    const trimmed = source.trim();
+    if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) return trimmed;
+    let depth = 0;
+    let quote: string | null = null;
+    for (let index = 0; index < trimmed.length; index += 1) {
+      const char = trimmed[index];
+      if (quote) {
+        if (char === "\\") index += 1;
+        else if (char === quote) quote = null;
+        continue;
+      }
+      if (char === "\"" || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "(") depth += 1;
+      if (char === ")") depth -= 1;
+      if (depth === 0 && index < trimmed.length - 1) return trimmed;
+    }
+    return depth === 0 ? trimmed.slice(1, -1).trim() : trimmed;
+  }
+
+  private splitBaseLogicalExpression(source: string, operator: "&&" | "||"): string[] | undefined {
+    const parts: string[] = [];
+    let start = 0;
+    let depth = 0;
+    let quote: string | null = null;
+    let regex = false;
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (char === "\\") index += 1;
+        else if (char === quote) quote = null;
+        continue;
+      }
+      if (regex) {
+        if (char === "\\") index += 1;
+        else if (char === "/") regex = false;
+        continue;
+      }
+      if (char === "\"" || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "/" && this.isBaseRegexStart(source, index)) {
+        regex = true;
+        continue;
+      }
+      if (char === "(" || char === "[" || char === "{") depth += 1;
+      else if (char === ")" || char === "]" || char === "}") depth = Math.max(0, depth - 1);
+      if (depth === 0 && source.startsWith(operator, index)) {
+        const part = source.slice(start, index).trim();
+        if (!part) return undefined;
+        parts.push(part);
+        index += operator.length - 1;
+        start = index + 1;
+      }
+    }
+    if (parts.length === 0) return undefined;
+    const tail = source.slice(start).trim();
+    if (!tail) return undefined;
+    parts.push(tail);
+    return parts;
+  }
+
+  private isBaseRegexStart(source: string, slashIndex: number): boolean {
+    for (let index = slashIndex - 1; index >= 0; index -= 1) {
+      const char = source[index];
+      if (/\s/.test(char)) continue;
+      return "([{=!:,&|?".includes(char);
+    }
+    return true;
+  }
+
+  private splitBaseArguments(source: string): string[] | undefined {
+    const parts: string[] = [];
+    let start = 0;
+    let depth = 0;
+    let quote: string | null = null;
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (char === "\\") index += 1;
+        else if (char === quote) quote = null;
+        continue;
+      }
+      if (char === "\"" || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "(" || char === "[" || char === "{") depth += 1;
+      else if (char === ")" || char === "]" || char === "}") depth = Math.max(0, depth - 1);
+      if (depth === 0 && char === ",") {
+        const part = source.slice(start, index).trim();
+        if (!part) return undefined;
+        parts.push(part);
+        start = index + 1;
+      }
+    }
+    if (quote || depth !== 0) return undefined;
+    const tail = source.slice(start).trim();
+    if (!tail && parts.length > 0) return undefined;
+    if (tail) parts.push(tail);
+    return parts;
+  }
+
+  private parseBaseStringArguments(rawArgs: string): string[] | undefined {
+    const values: string[] = [];
+    let index = 0;
+    while (index < rawArgs.length) {
+      while (index < rawArgs.length && /\s/.test(rawArgs[index])) index += 1;
+      if (index >= rawArgs.length) break;
+      const quote = rawArgs[index];
+      if (quote !== "\"" && quote !== "'") return undefined;
+      index += 1;
+      let value = "";
+      let closed = false;
+      while (index < rawArgs.length) {
+        const char = rawArgs[index];
+        if (char === "\\") {
+          index += 1;
+          if (index >= rawArgs.length) return undefined;
+          value += rawArgs[index];
+          index += 1;
+          continue;
+        }
+        if (char === quote) {
+          closed = true;
+          index += 1;
+          break;
+        }
+        value += char;
+        index += 1;
+      }
+      if (!closed) return undefined;
+      values.push(value);
+      while (index < rawArgs.length && /\s/.test(rawArgs[index])) index += 1;
+      if (index >= rawArgs.length) break;
+      if (rawArgs[index] !== ",") return undefined;
+      index += 1;
+      while (index < rawArgs.length && /\s/.test(rawArgs[index])) index += 1;
+      if (index >= rawArgs.length) return undefined;
+    }
+    return values;
   }
 
   /** Assign column widths based on actual data: min(label_or_value_width, max_width) */
@@ -1397,27 +2209,29 @@ export default class NoteDatabasePlugin extends Plugin {
       longestValues.set(col.key, col.label.length);
     }
 
-    const folder = config.sourceFolder;
-    if (folder) {
-      const files = this.app.vault.getMarkdownFiles().filter(f => f.path.startsWith(folder + "/"));
-      for (const f of files.slice(0, 200)) {
-        const cache = this.app.metadataCache.getFileCache(f);
-        const fm = cache?.frontmatter as Record<string, unknown> | undefined;
-        if (!fm) continue;
-        if (config.typeFilter && fm["type"] !== config.typeFilter) continue;
-        for (const col of columnsNeedingWidth) {
-          if (col.key === "file.name") {
-            const nameLen = f.basename.length;
-            if (nameLen > (longestValues.get("file.name") || 0)) longestValues.set("file.name", nameLen);
-            continue;
-          }
-          const val = fm[col.key];
+    const records = this.dataSource.getRecordsForDatabase(config);
+    for (const record of records.slice(0, 200)) {
+      const f = record.file;
+      const fm = record.frontmatter;
+      const cache = this.app.metadataCache.getFileCache(f);
+      for (const col of columnsNeedingWidth) {
+        if (isBaseFileField(col.key)) {
+          const val = getFileFieldValue(f, col.key, fm, cache, this.app);
           if (val == null) continue;
           const len = Array.isArray(val)
-            ? Math.max(...val.map((v: any) => String(v).length))
-            : String(val).length;
+            ? Math.max(...val.map((item) => String(item).length), 0)
+            : typeof val === "object"
+              ? JSON.stringify(val).length
+              : String(val).length;
           if (len > (longestValues.get(col.key) || 0)) longestValues.set(col.key, len);
+          continue;
         }
+        const val = fm[col.key];
+        if (val == null) continue;
+        const len = Array.isArray(val)
+          ? Math.max(...val.map((v: any) => String(v).length))
+          : String(val).length;
+        if (len > (longestValues.get(col.key) || 0)) longestValues.set(col.key, len);
       }
     }
 

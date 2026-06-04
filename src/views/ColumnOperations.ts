@@ -1,14 +1,20 @@
 import { Notice, TFile } from "obsidian";
 import { DataSource } from "../data/DataSource";
 import { PropertyService } from "../data/PropertyService";
+import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
 import {
   createUniqueColumnKey,
   ensureColumnOrder,
+  linkDatabaseSchema,
   normalizeColumnOrder,
   updateColumnKeyReferences,
+  updateSummaryFormulaReferences,
+  updateSourceRuleKeyReferences,
 } from "../data/ColumnConfig";
 import { createOptionsFromValues, isOptionColumnType } from "../data/ColumnTypes";
+import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
+import { getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig, StatusOptionDef, ViewConfig } from "../data/types";
 import { ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
@@ -73,56 +79,95 @@ export class ColumnOperations {
     const config = this.deps.getConfig();
     if (!config) return;
 
+    const db = this.deps.getActiveDb();
+    linkDatabaseSchema(db);
     const oldKey = col.key;
     const oldLabel = col.label;
-    const oldComputedKey = col.computedKey || oldKey;
+    const targetCol = this.resolveColumn(config, col, oldKey);
+    const oldComputedKey = getComputedStorageKey(targetCol);
     const newKey = result.key.trim();
     const newLabel = result.label.trim() || newKey;
+    const newComputedKey = targetCol.type === "computed" ? normalizeComputedStorageKey(newKey) : newKey;
     if (!newKey) {
       new Notice(t("column.keyRequired"));
       return;
     }
-    const duplicate = config.schema.columns.some((candidate) => candidate !== col && candidate.key === newKey);
+    const duplicate = config.schema.columns.some((candidate) => candidate !== targetCol && candidate.key === newKey);
     if (duplicate) {
       new Notice(t("column.keyExists", { key: newKey }));
       return;
     }
 
+    const isComputed = targetCol.type === "computed";
+    const displayOnly = this.isDisplayOnlyComputedSync();
+    const renameSavedComputedProperty = isComputed && !displayOnly && oldComputedKey !== newComputedKey
+      ? window.confirm(t("column.confirmRenameComputedSavedProperty", { oldKey: oldComputedKey, newKey: newComputedKey }))
+      : false;
     let migrationNotice = "";
+    const frontmatterChanges = this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey);
     try {
-      if (result.migrateValues) {
-        const migration = await this.propertySync.rename(config, col, oldKey, newKey, true);
+      if (renameSavedComputedProperty) {
+        const migration = await this.deps.propertyService.renameKey(
+          this.deps.getFilesForConfig(config),
+          oldComputedKey,
+          newComputedKey,
+          undefined,
+          true
+        );
+        migrationNotice = t("column.migratedFiles", { count: migration.moved });
+      } else if (!isComputed && result.migrateValues) {
+        const migration = await this.propertySync.rename(config, targetCol, oldKey, newKey, true);
         if (migration) {
           migrationNotice = t("column.migratedFiles", { count: migration.moved });
           if (migration.deletedStale > 0) {
             migrationNotice += t("column.cleanedOldProps", { count: migration.deletedStale });
           }
         }
-      } else if (oldKey !== newKey) {
-        await this.propertySync.delete(config, col);
+      } else if (!isComputed && oldKey !== newKey) {
+        await this.propertySync.delete(config, targetCol);
       }
 
       ensureColumnOrder(config);
       const state = this.deps.getState();
-      if (updateColumnKeyReferences(config, state, oldKey, newKey, oldLabel, newLabel)) {
+      let activeStateChanged = false;
+      for (const view of new Set([config, ...(db.views || [])])) {
+        const changed = updateColumnKeyReferences(
+          view,
+          view === config ? state : undefined,
+          oldKey,
+          newKey,
+          oldLabel,
+          newLabel
+        );
+        if (view === config && changed) activeStateChanged = true;
+      }
+      updateSourceRuleKeyReferences(db.sourceRules, oldKey, newKey);
+      updateSourceRuleTreeKeyReferences(db.sourceRuleTree, oldKey, newKey);
+      updateSummaryFormulaReferences(db, oldKey, newKey, oldLabel, newLabel);
+      if (activeStateChanged) {
         this.deps.viewStateStore.persist(config, state);
       }
-      col.key = newKey;
-      col.label = newLabel;
-      col.wrap = result.wrap || undefined;
-      if (col.type === "computed") {
+      this.removeDuplicateSchemaColumns(db, targetCol, oldKey);
+      targetCol.key = newKey;
+      targetCol.label = newLabel;
+      targetCol.wrap = result.wrap || undefined;
+      if (targetCol.type === "computed") {
         const computed = config.schema.computedFields.find((field) => field.key === oldComputedKey);
         if (computed) {
-          computed.key = newKey;
+          computed.key = newComputedKey;
           computed.label = newLabel;
         }
-        col.computedKey = newKey;
+        targetCol.computedKey = newComputedKey;
       }
-      normalizeColumnOrder(config);
-      // Sync Obsidian property type for the new key
-      await this.deps.propertyService.setObsidianPropertyType(newKey, col.type);
+      linkDatabaseSchema(db);
       this.deps.setPendingUndoLabel(t("undo.columnRenameConfig"));
+      this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveCurrentViewConfig();
+      // Keep the database config durable even if Obsidian property type sync fails.
+      const obsidianPropertyType = isComputed
+        ? config.schema.computedFields.find((field) => field.key === newComputedKey)?.type || "text"
+        : targetCol.type;
+      await this.deps.propertyService.setObsidianPropertyType(isComputed ? newComputedKey : newKey, obsidianPropertyType);
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
       new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
@@ -178,21 +223,40 @@ export class ColumnOperations {
 
   async deleteColumn(col: ColumnDef): Promise<void> {
     if (col.key === "file.name") return;
-    if (!window.confirm(t("column.confirmDelete", { label: col.label, key: col.key }))) return;
     const config = this.deps.getConfig();
     if (!config) return;
+    const db = this.deps.getActiveDb();
+    linkDatabaseSchema(db);
+    const targetCol = this.resolveColumn(config, col, col.key);
+    const isComputed = targetCol.type === "computed";
+    const propertyKey = getComputedStorageKey(targetCol);
+    const displayOnly = this.isDisplayOnlyComputedSync();
+    if (isComputed) {
+      if (!window.confirm(t("column.confirmDeleteComputed", { label: targetCol.label, key: propertyKey }))) return;
+    } else if (!window.confirm(t("column.confirmDelete", { label: targetCol.label, key: targetCol.key }))) {
+      return;
+    }
     ensureColumnOrder(config);
     const files = this.deps.getFilesForConfig(config);
-    const frontmatterChanges = col.type === "computed"
-      ? []
-      : this.getDeleteKeyChanges(config, col.key);
-    const db = this.deps.getActiveDb();
-    this.removeColumnFromSchemas(db, config, col);
+    const cleanupSavedComputedProperty = isComputed && !displayOnly
+      ? window.confirm(t("column.confirmDeleteComputedSavedProperty", { key: propertyKey }))
+      : false;
+    const shouldDeleteFrontmatter = !isComputed || cleanupSavedComputedProperty;
+    const frontmatterChanges = shouldDeleteFrontmatter
+      ? this.getDeleteKeyChanges(config, isComputed ? propertyKey : targetCol.key)
+      : [];
+    const keysToRemove = this.getColumnReferenceKeys(targetCol);
+    this.removeColumnFromSchemas(db, config, targetCol);
+    for (const key of keysToRemove) {
+      this.removeSourceRuleReferences(db.sourceRules, key);
+      db.sourceRuleTree = removeSourceRuleTreeReferences(db.sourceRuleTree, key);
+    }
     const state = this.deps.getState();
     for (const view of db.views || [config]) {
-      this.removeColumnReferences(view, col.key);
+      for (const key of keysToRemove) this.removeColumnReferences(view, key);
+      normalizeColumnOrder(view);
     }
-    this.removeColumnFromState(state, col.key);
+    for (const key of keysToRemove) this.removeColumnFromState(state, key);
     this.deps.viewStateStore.persist(config, state);
     this.deps.viewStateStore.clear();
     this.deps.refreshSchemaChanged();
@@ -201,12 +265,14 @@ export class ColumnOperations {
       this.deps.setPendingUndoLabel(t("undo.deleteColumnConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
-      const result = col.type === "computed"
-        ? { changed: 0, skipped: files.length }
-        : await this.propertySync.delete(config, col);
+      const result = shouldDeleteFrontmatter
+        ? isComputed
+          ? await this.deps.propertyService.deleteKey(files, propertyKey)
+          : await this.propertySync.delete(config, targetCol, files)
+        : { changed: 0, skipped: files.length };
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
-      new Notice(col.type === "computed" ? t("column.deletedComputed") : t("column.deletedColumn", { key: col.key, count: result.changed }));
+      new Notice(targetCol.type === "computed" ? t("column.deletedComputed") : t("column.deletedColumn", { key: targetCol.key, count: result.changed }));
     } catch (err) {
       console.error("Note Database: failed to delete column", err);
       new Notice(t("column.deleteFailed", { error: String(err) }));
@@ -214,11 +280,12 @@ export class ColumnOperations {
   }
 
   private removeColumnFromSchemas(db: DatabaseConfig, config: ViewConfig, col: ColumnDef): void {
-    const computedKey = col.computedKey || col.key;
+    const computedKey = getComputedStorageKey(col);
+    const referenceKeys = this.getColumnReferenceKeys(col);
     const schemas = new Set([db.schema, config.schema, ...(db.views || []).map((view) => view.schema)]);
     for (const schema of schemas) {
       if (!schema) continue;
-      schema.columns = (schema.columns || []).filter((candidate) => candidate.key !== col.key);
+      schema.columns = (schema.columns || []).filter((candidate) => candidate !== col && !referenceKeys.has(candidate.key));
       if (col.type === "computed") {
         schema.computedFields = (schema.computedFields || []).filter((field) => field.key !== computedKey);
       }
@@ -238,10 +305,15 @@ export class ColumnOperations {
       config.sortColumn = undefined;
       config.sortDirection = "asc";
     }
+    if (config.sortColumnOrder === key) config.sortColumnOrder = undefined;
     if (config.groupByField === key) config.groupByField = undefined;
     if (config.titleField === key) config.titleField = undefined;
+    if (config.galleryImageField === key) config.galleryImageField = undefined;
     if (config.boardGroupField === key) config.boardGroupField = undefined;
     if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
+    if (config.summaryRules?.[key]) delete config.summaryRules[key];
+    this.removeSourceRuleReferences(config.sourceRules, key);
+    config.sourceRuleTree = removeSourceRuleTreeReferences(config.sourceRuleTree, key);
     delete config.groupOrders?.[key];
     delete config.collapsedGroups?.[key];
     delete config.boardCardOrders?.[key];
@@ -267,6 +339,13 @@ export class ColumnOperations {
       state.sortDirection = "asc";
     }
     if (state.groupByField === key) state.groupByField = "";
+  }
+
+  private removeSourceRuleReferences(rules: ViewConfig["sourceRules"], key: string): void {
+    if (!rules) return;
+    for (let index = rules.length - 1; index >= 0; index -= 1) {
+      if (rules[index].field === key) rules.splice(index, 1);
+    }
   }
 
   async insertColumnNear(col: ColumnDef, side: "left" | "right"): Promise<void> {
@@ -326,6 +405,7 @@ export class ColumnOperations {
         label: copy.label,
         expression: source?.expression || "",
         type: source?.type || "text",
+        expressionSyntax: source?.expressionSyntax,
       });
     }
     this.deps.markPendingColumn(copyKey);
@@ -347,6 +427,30 @@ export class ColumnOperations {
     }
   }
 
+  private resolveColumn(config: ViewConfig, col: ColumnDef, key: string): ColumnDef {
+    return config.schema.columns.find((candidate) => candidate === col) ||
+      config.schema.columns.find((candidate) => candidate.key === key) ||
+      col;
+  }
+
+  private getColumnReferenceKeys(col: ColumnDef): Set<string> {
+    const keys = new Set([col.key]);
+    if (col.type === "computed") {
+      const storageKey = getComputedStorageKey(col);
+      keys.add(storageKey);
+      keys.add(`formula.${storageKey}`);
+    }
+    return keys;
+  }
+
+  private removeDuplicateSchemaColumns(db: DatabaseConfig, targetCol: ColumnDef, oldKey: string): void {
+    const schemas = new Set([db.schema, ...(db.views || []).map((view) => view.schema)]);
+    for (const schema of schemas) {
+      if (!schema) continue;
+      schema.columns = (schema.columns || []).filter((candidate) => candidate === targetCol || candidate.key !== oldKey);
+    }
+  }
+
   async changeColumnType(col: ColumnDef, type: ColumnDef["type"]): Promise<void> {
     const config = this.deps.getConfig();
     if (!config || col.type === type) return;
@@ -355,6 +459,16 @@ export class ColumnOperations {
     const previousType = target.type;
     const previousComputedKey = target.computedKey || target.key;
     const previousOptions = target.statusOptions?.map((option) => ({ ...option }));
+    const changingToComputed = type === "computed" && previousType !== "computed";
+    const displayOnly = this.isDisplayOnlyComputedSync();
+    let cleanupExistingProperty = false;
+    if (changingToComputed) {
+      if (displayOnly) {
+        cleanupExistingProperty = window.confirm(t("column.confirmConvertComputedCleanup", { key: target.key }));
+      } else if (!window.confirm(t("column.confirmConvertComputedSavedProperty", { key: target.key }))) {
+        return;
+      }
+    }
 
     const inferredOptions = isOptionColumnType(type)
       ? createOptionsFromValues(this.getRecords(config).map((record) => record.frontmatter[target.key]))
@@ -390,15 +504,19 @@ export class ColumnOperations {
     }
 
     try {
-      const frontmatterChanges = type === "computed" || target.key === "file.name"
-        ? []
-        : this.getConvertKeyTypeChanges(config, target.key, type);
+      const frontmatterChanges = type === "computed"
+        ? this.getComputedConversionChanges(config, target.key, cleanupExistingProperty)
+        : target.key === "file.name"
+          ? []
+          : this.getConvertKeyTypeChanges(config, target.key, type);
       this.deps.setPendingUndoLabel(t("undo.columnTypeConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       let changed = 0;
-      if (type !== "computed" && target.key !== "file.name") {
+      if (type === "computed" && cleanupExistingProperty) {
+        changed = (await this.propertySync.delete(config, target)).changed;
+      } else if (type !== "computed" && target.key !== "file.name") {
         await this.deps.propertyService.setObsidianPropertyType(target.key, type);
         changed = (await this.propertySync.convert(config, target, type)).changed;
       }
@@ -448,6 +566,10 @@ export class ColumnOperations {
     return this.deps.dataSource.getRecordsForConfig(db).filter((record) => paths.has(record.file.path));
   }
 
+  private isDisplayOnlyComputedSync(): boolean {
+    return normalizeComputedSyncMode(this.deps.getActiveDb().computedSyncMode) === "display-only";
+  }
+
   private getDeleteKeyChanges(config: ViewConfig, key: string): FrontmatterValueChange[] {
     return this.getRecords(config)
       .filter((record) => Object.prototype.hasOwnProperty.call(record.frontmatter, key))
@@ -459,6 +581,50 @@ export class ColumnOperations {
         oldExists: true,
         newValue: null,
       }));
+  }
+
+  private getRenameColumnChanges(
+    config: ViewConfig,
+    col: ColumnDef,
+    oldKey: string,
+    newKey: string,
+    migrateValues: boolean,
+    renameSavedComputedProperty = false,
+    oldComputedKey = getComputedStorageKey(col),
+    newComputedKey = normalizeComputedStorageKey(newKey)
+  ): FrontmatterValueChange[] {
+    if (oldKey === newKey || oldKey === "file.name") return [];
+    if (col.type === "computed") return renameSavedComputedProperty ? this.getRenameKeyChanges(config, oldComputedKey, newComputedKey) : [];
+    if (!migrateValues) return this.getDeleteKeyChanges(config, oldKey);
+    return this.getRenameKeyChanges(config, oldKey, newKey);
+  }
+
+  private getComputedConversionChanges(config: ViewConfig, key: string, cleanupExistingProperty = false): FrontmatterValueChange[] {
+    return cleanupExistingProperty ? this.getDeleteKeyChanges(config, key) : [];
+  }
+
+  private getRenameKeyChanges(config: ViewConfig, oldKey: string, newKey: string): FrontmatterValueChange[] {
+    const changes: FrontmatterValueChange[] = [];
+    for (const record of this.getRecords(config)) {
+      if (!Object.prototype.hasOwnProperty.call(record.frontmatter, oldKey)) continue;
+      changes.push({
+        file: record.file,
+        path: record.file.path,
+        key: oldKey,
+        oldValue: this.cloneValue(record.frontmatter[oldKey]),
+        oldExists: true,
+        newValue: null,
+      });
+      changes.push({
+        file: record.file,
+        path: record.file.path,
+        key: newKey,
+        oldValue: this.cloneValue(record.frontmatter[newKey]),
+        oldExists: Object.prototype.hasOwnProperty.call(record.frontmatter, newKey),
+        newValue: this.cloneValue(record.frontmatter[oldKey]),
+      });
+    }
+    return changes;
   }
 
   private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {

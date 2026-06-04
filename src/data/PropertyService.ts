@@ -1,5 +1,5 @@
 import { App, TFile } from "obsidian";
-import { getDefaultCellValue, toBooleanValue, toMultiSelectValues } from "./ColumnTypes";
+import { getDefaultCellValue, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "./ColumnTypes";
 import type { FrontmatterMutator } from "./DataSource";
 import { ColumnDef } from "./types";
 
@@ -171,7 +171,7 @@ export class PropertyService {
           result.skipped += 1;
           return;
         }
-        const nextValue = this.convertValueForType(frontmatter[key], type);
+        const nextValue = this.convertValueForType(frontmatter[key], type, key);
         if (nextValue === undefined) {
           result.skipped += 1;
           return;
@@ -219,7 +219,7 @@ export class PropertyService {
     return getDefaultCellValue(col);
   }
 
-  convertValueForType(value: unknown, type: ColumnDef["type"]): unknown {
+  convertValueForType(value: unknown, type: ColumnDef["type"], key = ""): unknown {
     if (value == null || value === "") return "";
     switch (type) {
       case "number":
@@ -241,9 +241,9 @@ export class PropertyService {
         return String(value);
       case "select":
       case "status":
-        return toMultiSelectValues(value)[0] || "";
+        return normalizeOptionValueForKey(key, toMultiSelectValuesForKey(key, value)[0] || "");
       case "multi-select":
-        return toMultiSelectValues(value);
+        return toMultiSelectValuesForKey(key, value);
       case "checkbox":
         return toBooleanValue(value);
       default:

@@ -49,7 +49,7 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     containerEl.addClass("note-database-settings");
-    containerEl.createEl("h2", { text: t("settings.title") });
+    new Setting(containerEl).setName(t("settings.title")).setHeading();
 
     // 分组 1：通用设置
     const general = this.createSettingGroup(containerEl, "settings.groups.general");
@@ -266,7 +266,7 @@ export class SettingsTab extends PluginSettingTab {
     this.renderMobileReorder(heading, index, files.length, (from, to) => this.moveFileDatabase(files, from, to));
 
     const title = heading.createDiv({ cls: "db-settings-database-title" });
-    title.createEl("h4", { text: config.name || entry.file.basename });
+    new Setting(title).setName(config.name || entry.file.basename).setHeading();
 
     // 文件路径
     heading.createSpan({

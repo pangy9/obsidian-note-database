@@ -8,6 +8,13 @@ import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 
+/** Safely append an SVG string to an element without using innerHTML. */
+function appendSvg(el: HTMLElement, svgString: string): void {
+  const doc = new DOMParser().parseFromString(svgString, "image/svg+xml");
+  const svg = doc.querySelector("svg");
+  if (svg) el.appendChild(el.ownerDocument.adoptNode(svg));
+}
+
 export interface ToolbarViewEntry {
   config: DatabaseConfig;
   sourcePath: string;
@@ -211,7 +218,7 @@ export class ToolbarRenderer {
   private renderComputedSyncButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.syncComputedFields) return;
     const btn = this.createIconButton(toolbar, "", t("viewConfig.saveComputedResults"));
-    btn.innerHTML = ToolbarRenderer.ICONS.refresh_fx;
+    appendSvg(btn, ToolbarRenderer.ICONS.refresh_fx);
     btn.onclick = () => actions.syncComputedFields?.();
   }
 
@@ -511,7 +518,7 @@ export class ToolbarRenderer {
       const checkOverflow = () => {
         if (collapsing) return;
         collapsing = true;
-        for (const t of tabEls) t.el.style.display = "";
+        for (const t of tabEls) t.el.setCssProps({ display: "" });
         const oldBtn = tabs.querySelector(".db-view-tab-more");
         if (oldBtn) oldBtn.remove();
         this.collapseOverflowTabs(tabs, tabEls, db, currentViewIndex, actions);
@@ -606,7 +613,7 @@ export class ToolbarRenderer {
     const hiddenTabs = tabEls.filter(t => !visibleSet.has(t.index));
     if (hiddenTabs.length === 0) return;
 
-    for (const t of hiddenTabs) t.el.style.display = "none";
+    for (const t of hiddenTabs) t.el.setCssProps({ display: "none" });
 
     // Create "⋯" overflow dropdown
     const moreBtn = tabs.createEl("button", {
@@ -820,9 +827,9 @@ export class ToolbarRenderer {
   }
 
   private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
-    textarea.style.height = "auto";
+    textarea.setCssProps({ height: "auto" });
     const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${nextHeight}px`;
+    textarea.setCssProps({ height: `${nextHeight}px` });
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }
 
@@ -837,7 +844,7 @@ export class ToolbarRenderer {
     const current = config?.displayWidth || "default";
     const next = current === "wide" ? "default" : "wide";
     const btn = this.createIconButton(toolbar, "", current === "wide" ? t("toolbar.defaultWidth") : t("toolbar.wide"), "db-width-toggle-btn");
-    btn.innerHTML = current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut;
+    appendSvg(btn, current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut);
     btn.addClass(current === "wide" ? "is-active" : "is-inactive");
     btn.onclick = () => actions.setDisplayWidth(next);
   }
@@ -879,7 +886,7 @@ export class ToolbarRenderer {
       ? config?.boardGroupField || state.groupByField
       : state.groupByField;
     const btn = this.createIconButton(toolbar, "", t("toolbar.group"), "db-group-btn");
-    btn.innerHTML = ToolbarRenderer.ICONS.group;
+    appendSvg(btn, ToolbarRenderer.ICONS.group);
     if (groupValue) btn.addClass("is-active");
     btn.onclick = (event) => {
       event.preventDefault();
@@ -1117,7 +1124,7 @@ export class ToolbarRenderer {
 
   private renderViewConfigButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     const btn = this.createIconButton(toolbar, "", t("toolbar.settings"), "db-view-config-btn");
-    btn.innerHTML = ToolbarRenderer.ICONS.settings;
+    appendSvg(btn, ToolbarRenderer.ICONS.settings);
     btn.onclick = () => {
       this.closeDatabasePopover();
       this.closeGroupPopover();
@@ -1150,7 +1157,7 @@ export class ToolbarRenderer {
   private renderExportButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.exportData && !actions.copyViewCode && !actions.exportCsvMarkdownZip) return;
     const btn = this.createIconButton(toolbar, "", t("toolbar.copyFormats"), "db-export-btn");
-    btn.innerHTML = ToolbarRenderer.ICONS.copy;
+    appendSvg(btn, ToolbarRenderer.ICONS.copy);
     btn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1267,7 +1274,7 @@ export class ToolbarRenderer {
       if (!icons?.length) return;
       const iconEls = Array.from(menu.querySelectorAll(".menu-item-icon")) as HTMLElement[];
       iconEls.forEach((el, index) => {
-        if (icons[index]) el.innerHTML = icons[index];
+        if (icons[index]) appendSvg(el, icons[index]);
       });
     });
   }

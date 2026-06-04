@@ -1011,7 +1011,11 @@ export class FormulaModal extends Modal {
   private updateHighlight(): void {
     if (!this.textarea || !this.highlightEl) return;
     const html = this.highlightFormula(this.textarea.value || " ");
-    this.highlightEl.innerHTML = html.endsWith("\n") ? `${html} ` : html;
+    const content = html.endsWith("\n") ? `${html} ` : html;
+    // Use DOMParser for safe HTML insertion instead of innerHTML
+    const fragment = this.highlightEl.ownerDocument.createRange().createContextualFragment(content);
+    this.highlightEl.empty();
+    this.highlightEl.appendChild(fragment);
   }
 
   private syncEditorScroll(): void {
@@ -1204,8 +1208,7 @@ export class FormulaModal extends Modal {
       return;
     }
     const pos = this.estimateCaretPosition();
-    this.propertySuggestEl.style.left = `${pos.left}px`;
-    this.propertySuggestEl.style.top = `${pos.top}px`;
+    this.propertySuggestEl.setCssProps({ left: `${pos.left}px`, top: `${pos.top}px` });
     this.suggestionIndex = -1;
     this.propertySuggestEl.addClass("is-visible");
   }
@@ -1251,12 +1254,7 @@ export class FormulaModal extends Modal {
       "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
       "boxSizing", "wordWrap", "whiteSpace", "tabSize",
     ];
-    mirror.style.position = "absolute";
-    mirror.style.visibility = "hidden";
-    mirror.style.top = "0";
-    mirror.style.left = "-9999px";
-    mirror.style.width = `${this.textarea.clientWidth}px`;
-    mirror.style.overflow = "hidden";
+    mirror.setCssProps({ position: "absolute", visibility: "hidden", top: "0", left: "-9999px", width: `${this.textarea.clientWidth}px`, overflow: "hidden" });
     for (const prop of copyStyles) {
       mirror.style[prop as any] = style[prop as any];
     }

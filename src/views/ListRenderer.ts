@@ -177,8 +177,8 @@ export class ListRenderer {
       if (empty && config.showEmptyFields !== true) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const field = meta.createDiv({ cls: "db-list-field", attr: { "data-note-database-column-key": col.key } });
-      if (col.wrap) field.style.flex = "0 0 auto";
-      else field.style.flexBasis = `${this.getFieldWidth(config, col)}px`;
+      if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
+      else field.setCssProps({ flexBasis: `${this.getFieldWidth(config, col)}px` });
       setFieldTooltip(field, displayValue, col.label);
       if (empty) field.addClass("is-empty-field");
       if (displayType === "checkbox") field.addClass("is-checkbox-field");
@@ -467,8 +467,8 @@ export class ListRenderer {
     const field = document.createElement("div");
     field.className = "db-list-field";
     field.setAttribute("data-note-database-column-key", col.key);
-    if (col.wrap) field.style.flex = "0 0 auto";
-    else field.style.flexBasis = `${this.getFieldWidth(config, col)}px`;
+    if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
+    else field.setCssProps({ flexBasis: `${this.getFieldWidth(config, col)}px` });
     setFieldTooltip(field, displayValue, col.label);
     if (empty) field.classList.add("is-empty-field");
     if (displayType === "checkbox") field.classList.add("is-checkbox-field");

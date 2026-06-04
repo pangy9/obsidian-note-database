@@ -21,12 +21,14 @@ export function positionToolbarPopover(
   const container = panel.closest(".note-database-container") as HTMLElement | null;
 
   panel.addClass("db-anchored-popover");
-  panel.style.position = container ? "absolute" : "fixed";
-  panel.style.right = "auto";
-  panel.style.bottom = "auto";
-  panel.style.boxSizing = "border-box";
-  panel.style.overflowY = "auto";
-  panel.style.overscrollBehavior = "contain";
+  panel.setCssProps({
+    position: container ? "absolute" : "fixed",
+    right: "auto",
+    bottom: "auto",
+    boxSizing: "border-box",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  });
 
   const place = () => {
     if (!panel.isConnected || !anchorEl.isConnected) return;
@@ -42,9 +44,11 @@ export function positionToolbarPopover(
     const maxWidth = Math.max(minWidth, Math.min(maxPreferredWidth, bounds.width - margin * 2));
     const width = Math.min(preferredWidth, maxWidth);
 
-    panel.style.width = `${width}px`;
-    panel.style.maxWidth = `${maxWidth}px`;
-    panel.style.maxHeight = "";
+    panel.setCssProps({
+      width: `${width}px`,
+      maxWidth: `${maxWidth}px`,
+      maxHeight: "",
+    });
     setPosition(panel, bounds.left + margin, bounds.top + margin, containerRect, scrollLeft, scrollTop);
 
     const panelRect = panel.getBoundingClientRect();
@@ -98,12 +102,13 @@ export function setPosition(
   scrollTop: number
 ): void {
   if (!containerRect) {
-    panel.style.left = `${globalLeft}px`;
-    panel.style.top = `${globalTop}px`;
+    panel.setCssProps({ left: `${globalLeft}px`, top: `${globalTop}px` });
     return;
   }
-  panel.style.left = `${globalLeft - containerRect.left + scrollLeft}px`;
-  panel.style.top = `${globalTop - containerRect.top + scrollTop}px`;
+  panel.setCssProps({
+    left: `${globalLeft - containerRect.left + scrollLeft}px`,
+    top: `${globalTop - containerRect.top + scrollTop}px`,
+  });
 }
 
 export function getVisiblePopoverBounds(container: HTMLElement | null): DOMRect {

@@ -441,7 +441,7 @@ export class CellRenderer {
           e.stopPropagation();
           e.preventDefault();
 
-          item.style.opacity = "0.4";
+          item.setCssProps({ opacity: "0.4" });
           let dropLine: HTMLElement | null = null;
           let lastTarget = idx;
 
@@ -477,7 +477,7 @@ export class CellRenderer {
 
           const onUp = () => {
             removeDropLine();
-            item.style.opacity = "";
+            item.setCssProps({ opacity: "" });
             if (lastTarget !== idx && lastTarget >= 0 && lastTarget < optionDefs.length) {
               const [moved] = optionDefs.splice(idx, 1);
               optionDefs.splice(lastTarget, 0, moved);
@@ -523,7 +523,7 @@ export class CellRenderer {
         // Color dot — opens color picker
         const dot = item.createSpan({ cls: "db-option-color-dot" });
         const updateDot = () => {
-          dot.style.cssText = `width:12px;height:12px;border-radius:2px;margin:0 4px;flex-shrink:0;background:var(--status-color-fg-${opt.color});cursor:pointer;`;
+          dot.setCssProps({ width: "12px", height: "12px", borderRadius: "2px", margin: "0 4px", flexShrink: "0", background: `var(--status-color-fg-${opt.color})`, cursor: "pointer" });
         };
         updateDot();
         dot.onclick = (e) => {
@@ -619,10 +619,10 @@ export class CellRenderer {
     const showColorPicker = (anchor: HTMLElement, opt: StatusOptionDef, onUpdate: () => void) => {
       document.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
       const picker = document.body.createDiv({ cls: "db-color-picker-popup" });
-      picker.style.cssText = "position:fixed;display:flex;flex-wrap:wrap;gap:4px;padding:6px;background:var(--background-primary);border:1px solid var(--background-modifier-border);border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:1002;width:124px;";
+      picker.setCssProps({ position: "fixed", display: "flex", flexWrap: "wrap", gap: "4px", padding: "6px", background: "var(--background-primary)", border: "1px solid var(--background-modifier-border)", borderRadius: "6px", boxShadow: "0 4px 14px rgba(0,0,0,.15)", zIndex: "1002", width: "124px" });
       OPTION_COLORS.forEach(color => {
         const swatch = picker.createSpan();
-        swatch.style.cssText = `width:18px;height:18px;border-radius:2px;background:${OPTION_COLOR_HEX[color]};cursor:pointer;${color === opt.color ? 'box-shadow:0 0 0 2px var(--interactive-accent);' : ''}`;
+        swatch.setCssProps({ width: "18px", height: "18px", borderRadius: "2px", background: OPTION_COLOR_HEX[color], cursor: "pointer", boxShadow: color === opt.color ? "0 0 0 2px var(--interactive-accent)" : "" });
         swatch.onclick = (e) => {
           e.stopPropagation();
           const oldColor = opt.color;
@@ -641,8 +641,7 @@ export class CellRenderer {
         };
       });
       const rect = anchor.getBoundingClientRect();
-      picker.style.left = `${rect.left}px`;
-      picker.style.top = `${rect.top}px`;
+      picker.setCssProps({ left: `${rect.left}px`, top: `${rect.top}px` });
       const closePicker = (e: MouseEvent) => {
         if (!picker.contains(e.target as Node)) {
           picker.remove();
@@ -907,11 +906,7 @@ export class CellRenderer {
       const scrollTop = editScrollContainer.scrollTop || 0;
       const relativeTop = tdRect.top - containerRect.top + scrollTop;
 
-      popover.style.position = "absolute";
-      popover.style.left = "0";
-      popover.style.right = "0";
-      popover.style.top = `${relativeTop + tdRect.height + 2}px`;
-      popover.style.zIndex = "1000";
+      popover.setCssProps({ position: "absolute", left: "0", right: "0", top: `${relativeTop + tdRect.height + 2}px`, zIndex: "1000" });
 
       closeBtn = popover.createEl("button", {
         cls: "db-cell-edit-close",
@@ -1095,7 +1090,7 @@ export class CellRenderer {
     const top = useAbove ? rect.bottom - height : rect.top;
     const clampedTop = clamp(top, bounds.top + margin, bounds.bottom - height - margin);
 
-    popover.style.width = `${width}px`;
+    popover.setCssProps({ width: `${width}px` });
     setPosition(
       popover,
       left,
@@ -1185,11 +1180,7 @@ export class CellRenderer {
       const relativeTop = tdRect.top - containerRect.top + scrollTop;
       
       // 定位在单元格正下方
-      popover.style.position = "absolute";
-      popover.style.left = "0";
-      popover.style.right = "0";
-      popover.style.top = `${relativeTop + tdRect.height + 2}px`;
-      popover.style.zIndex = "1000";
+      popover.setCssProps({ position: "absolute", left: "0", right: "0", top: `${relativeTop + tdRect.height + 2}px`, zIndex: "1000" });
       
       // 关闭按钮
       closeBtn = popover.createEl("button", {
@@ -1417,7 +1408,7 @@ export class CellRenderer {
 
   private mountInput(td: HTMLElement, input: HTMLInputElement): void {
     this.addTransientClass(td, "db-cell-editing", 1600);
-    input.style.width = "100%";
+    input.setCssProps({ width: "100%" });
     td.textContent = "";
     td.appendChild(input);
     input.focus();
@@ -1425,19 +1416,14 @@ export class CellRenderer {
   }
 
   private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
-    textarea.style.height = "auto";
+    textarea.setCssProps({ height: "auto" });
     const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    textarea.setCssProps({ height: `${nextHeight}px`, overflowY: textarea.scrollHeight > maxHeight ? "auto" : "hidden" });
   }
 
   private positionTextEditPopover(popover: HTMLElement, td: HTMLElement, container: HTMLElement | null, isMobile = false): void {
     if (isMobile) {
-      popover.style.left = "10px";
-      popover.style.right = "10px";
-      popover.style.bottom = "calc(10px + env(safe-area-inset-bottom, 0px))";
-      popover.style.top = "";
-      popover.style.width = "auto";
+      popover.setCssProps({ left: "10px", right: "10px", bottom: "calc(10px + env(safe-area-inset-bottom, 0px))", top: "", width: "auto" });
       return;
     }
     const margin = 8;
@@ -1453,7 +1439,7 @@ export class CellRenderer {
     const top = useAbove ? rect.bottom - height : rect.top;
     const clampedTop = clamp(top, bounds.top + margin, bounds.bottom - height - margin);
 
-    popover.style.width = `${width}px`;
+    popover.setCssProps({ width: `${width}px` });
     setPosition(
       popover,
       left,
@@ -1592,8 +1578,7 @@ export class CellRenderer {
     const globalTop = useAbove ? anchorY - gap - height : anchorY + gap;
     const globalClampedTop = clamp(globalTop, bounds.top + margin, bounds.bottom - height - margin);
 
-    popover.style.width = `${width}px`;
-    popover.style.maxHeight = `${Math.min(availableHeight, maxHeight)}px`;
+    popover.setCssProps({ width: `${width}px`, maxHeight: `${Math.min(availableHeight, maxHeight)}px` });
 
     setPosition(
       popover,

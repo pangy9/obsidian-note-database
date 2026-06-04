@@ -1,7 +1,7 @@
-import { App, Modal } from "obsidian";
+import { App, Modal, setIcon } from "obsidian";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
-import { PROPERTY_TYPE_ICON_NAMES, PROPERTY_TYPE_ICON_SVG, renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { PROPERTY_TYPE_ICON_NAMES, renderPropertyTypeIcon } from "../PropertyTypeIcon";
 
 export interface BaseImportColumn extends ColumnDef {
   /** Number of files that have this property */
@@ -96,7 +96,7 @@ export class BaseImportConfirmModal extends Modal {
         col.type = select.value as ColumnDef["type"];
         const iconName = PROPERTY_TYPE_ICON_NAMES[col.type];
         iconEl.setAttribute("data-icon", iconName);
-        iconEl.innerHTML = PROPERTY_TYPE_ICON_SVG[iconName] || PROPERTY_TYPE_ICON_SVG["letter-case"];
+        setIcon(iconEl, iconName);
       };
       const checkTd = tr.createEl("td");
       checkTd.addClass("base-import-check-cell");

@@ -108,7 +108,7 @@ export class ColumnHeaderController {
       table.style.minWidth = `${layout.tableWidth}px`;
       if (selectionCol) {
         selectionCol.setAttr("width", "34");
-        selectionCol.style.width = "34px";
+        selectionCol.setCssProps({ width: "34px" });
       }
 
       dataCols.forEach((colEl, index) => {

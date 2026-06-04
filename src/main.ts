@@ -24,7 +24,10 @@ import { linkDatabaseSchemas } from "./data/ColumnConfig";
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
   dataSource!: DataSource;
-  private dbView: DatabaseView | null = null;
+  private getActiveDbView(): DatabaseView | null {
+    const leaf = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE)[0];
+    return leaf?.view instanceof DatabaseView ? leaf.view : null;
+  }
   private switchingDatabaseFileView = false;
   private markdownDatabaseFileBypass = new Map<string, number>();
   private databaseFileConfigCache = new Map<string, DatabaseConfig>();
@@ -173,7 +176,7 @@ export default class NoteDatabasePlugin extends Plugin {
     this.registerView(
       DATABASE_VIEW_TYPE,
       (leaf: WorkspaceLeaf) => {
-        this.dbView = new DatabaseView(
+        return new DatabaseView(
           leaf,
           this.dataSource,
           this.settings.databaseFileOrder || [],
@@ -182,7 +185,6 @@ export default class NoteDatabasePlugin extends Plugin {
           this.settings.defaultStatusPresetId,
           () => this.saveSettings()
         );
-        return this.dbView;
       }
     );
     this.registerView(
@@ -252,7 +254,7 @@ export default class NoteDatabasePlugin extends Plugin {
       id: "undo-last-database-edit",
       name: t("command.undoDatabaseEdit"),
       callback: async () => {
-        await this.dbView?.undoLastEdit();
+        await this.getActiveDbView()?.undoLastEdit();
       },
     });
 
@@ -385,13 +387,14 @@ export default class NoteDatabasePlugin extends Plugin {
   /** Open the dashboard and switch to a specific file database. */
   async openDashboardReference(sourcePath: string): Promise<void> {
     await this.openDashboard();
-    this.dbView?.openViewReference(sourcePath);
+    this.getActiveDbView()?.openViewReference(sourcePath);
   }
 
   /** Notify the database view and status bar that settings have changed */
   notifyViewSettingsChanged(): void {
-    if (this.dbView) {
-      this.dbView.updateConfigs(
+    const dbView = this.getActiveDbView();
+    if (dbView) {
+      dbView.updateConfigs(
         this.settings.databaseFileOrder || [],
         this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
         this.settings.defaultStatusPresetId
@@ -2345,8 +2348,9 @@ export default class NoteDatabasePlugin extends Plugin {
     if (migrated > 0) {
       new Notice(t("notice.databasesMigrated", { count: migrated }));
       // Refresh the dashboard view if open
-      if (this.dbView) {
-        this.dbView.updateConfigs(
+      const dbView = this.getActiveDbView();
+      if (dbView) {
+        dbView.updateConfigs(
           this.settings.databaseFileOrder || [],
           this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
           this.settings.defaultStatusPresetId

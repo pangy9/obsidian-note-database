@@ -1,4 +1,5 @@
 import { ColumnDef, ComputedFieldDef } from "./types";
+import { safeEval } from "./SafeEval";
 import { t } from "../i18n";
 
 declare const moment: any;
@@ -363,25 +364,27 @@ export class ComputedFieldEngine {
     const normalizedExpr = this.normalizeFormula(expr);
     if (!normalizedExpr) return { value: null, error: t("formula.error.empty") };
 
-    // Block dangerous patterns before passing to new Function
+    // Block dangerous patterns before evaluation
     const securityError = this.validateFormulaSecurity(normalizedExpr);
     if (securityError) return { value: null, error: securityError };
 
-    // Only use safe identifiers as function parameters
-    const varNames = Object.keys(context).filter((k) => this.isIdentifierSafe(k));
-    const varValues = varNames.map((k) => context[k]);
+    // Build scope from context with common globals
+    const scope: Record<string, unknown> = {
+      Math, Number, String, Boolean, Array, Object, JSON, Date,
+      isNaN, isFinite, parseFloat, parseInt,
+      ...context,
+    };
 
     let expressionError: unknown;
     try {
-      const fn = new Function(...varNames, `return (${normalizedExpr});`);
-      const result = fn(...varValues);
+      const result = safeEval(normalizedExpr, scope);
       return { value: result };
     } catch (err) {
       expressionError = err;
-      // Try as statement (for expressions like `if(...)`)
+      // Try as statement (for expressions like `if(...) return val;`)
       try {
-        const fn = new Function(...varNames, `${normalizedExpr}`);
-        return { value: fn(...varValues) };
+        const result = safeEval(normalizedExpr, scope, { allowStatements: true });
+        return { value: result };
       } catch (statementErr) {
         return { value: null, error: this.formatEvaluationError(statementErr || expressionError) };
       }
@@ -390,7 +393,7 @@ export class ComputedFieldEngine {
 
   /**
    * Validate that the formula expression does not contain patterns
-   * that could escape the new Function sandbox or cause infinite recursion.
+   * that could cause harm or infinite recursion.
    * Returns an error message string if unsafe, null if safe.
    */
   private validateFormulaSecurity(normalizedExpr: string): string | null {

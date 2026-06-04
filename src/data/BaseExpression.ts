@@ -1,6 +1,7 @@
 import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian";
 import { hasObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { ComputedFieldEngine } from "./ComputedField";
+import { safeEval } from "./SafeEval";
 import { ColumnDef, ComputedFieldDef } from "./types";
 
 declare const moment: any;
@@ -62,8 +63,7 @@ export function evaluateBaseExpression(expression: string, context: BaseExpressi
   const normalized = normalizeBaseExpression(expression);
   validateBaseExpression(normalized, true);
   const vars = createBaseContext(context);
-  const fn = new Function("__scope", `with (__scope) { return (${normalized}); }`);
-  return fn(createBaseScope(vars));
+  return safeEval(normalized, createBaseScope(vars));
 }
 
 export function evaluateBaseComputedFields(

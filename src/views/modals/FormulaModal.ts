@@ -1012,10 +1012,12 @@ export class FormulaModal extends Modal {
     if (!this.textarea || !this.highlightEl) return;
     const html = this.highlightFormula(this.textarea.value || " ");
     const content = html.endsWith("\n") ? `${html} ` : html;
-    // Use DOMParser for safe HTML insertion instead of innerHTML
-    const fragment = this.highlightEl.ownerDocument.createRange().createContextualFragment(content);
+    // Use DOMParser for safe HTML insertion instead of innerHTML/createContextualFragment
+    const doc = new DOMParser().parseFromString(content, "text/html");
     this.highlightEl.empty();
-    this.highlightEl.appendChild(fragment);
+    while (doc.body.firstChild) {
+      this.highlightEl.appendChild(this.highlightEl.ownerDocument.adoptNode(doc.body.firstChild));
+    }
   }
 
   private syncEditorScroll(): void {
@@ -1334,7 +1336,7 @@ export class FormulaModal extends Modal {
         ],
         syntaxTitle: "## Syntax Rules",
         syntaxRules: [
-          "Formulas are JavaScript expressions evaluated with `new Function()`.",
+          "Formulas are JavaScript expressions evaluated with a safe expression parser.",
           "Use `===` for equality and `!==` for inequality.",
           "Use single or double quotes for text.",
           "Formulas can optionally start with `=`.",
@@ -1362,7 +1364,7 @@ export class FormulaModal extends Modal {
           ],
           syntaxTitle: "## 語法規則",
           syntaxRules: [
-            "公式是以 `new Function()` 求值的 JavaScript 運算式。",
+            "公式是通過安全表達式解析器求值的 JavaScript 運算式。",
             "相等比較請使用 `===`，不相等請使用 `!==`。",
             "文字請使用單引號或雙引號。",
             "公式可以選擇性地以 `=` 開頭。",
@@ -1389,7 +1391,7 @@ export class FormulaModal extends Modal {
           ],
           syntaxTitle: "## 语法规则",
           syntaxRules: [
-            "公式是通过 `new Function()` 求值的 JavaScript 表达式。",
+            "公式是通过安全表达式解析器求值的 JavaScript 表达式。",
             "相等比较请使用 `===`，不相等请使用 `!==`。",
             "文本请使用单引号或双引号。",
             "公式可以选择性地以 `=` 开头。",

@@ -336,6 +336,7 @@ export class DatabaseView extends ItemView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      editFormula: (col) => this.showFormulaModal(col),
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -357,6 +358,7 @@ export class DatabaseView extends ItemView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      editFormula: (col) => this.showFormulaModal(col),
     });
     this.listRenderer = new ListRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -377,6 +379,7 @@ export class DatabaseView extends ItemView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      editFormula: (col) => this.showFormulaModal(col),
     });
     this.columnMenu = new ColumnMenu({
       editColumn: (col) => this.showColumnRenameModal(col),

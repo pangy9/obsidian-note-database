@@ -52,6 +52,7 @@ export interface BoardRendererActions {
   toggleGroupCollapsed?(field: string, key: string): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
+  editFormula?(col: ColumnDef): void;
   readonly isReadOnly?: boolean;
   readonly canReorderGroups?: boolean;
 }
@@ -724,12 +725,22 @@ export class BoardRenderer {
       valueEl.addClass("db-checkbox-cell");
       const cb = valueEl.createEl("input", { attr: { type: "checkbox" } });
       cb.checked = toBooleanValue(value);
-      cb.onclick = (event) => event.stopPropagation();
-      cb.disabled = this.actions.isReadOnly || col.type === "computed";
-      if (!this.actions.isReadOnly && col.type !== "computed") {
-        cb.onchange = () => {
-          void this.actions.editCell(valueEl, row, col);
+      if (col.type === "computed") {
+        // 计算型 checkbox：点击打开公式编辑器
+        cb.disabled = !!this.actions.isReadOnly;
+        cb.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!this.actions.isReadOnly) this.actions.editFormula?.(col);
         };
+      } else {
+        cb.onclick = (event) => event.stopPropagation();
+        cb.disabled = !!this.actions.isReadOnly;
+        if (!this.actions.isReadOnly) {
+          cb.onchange = () => {
+            void this.actions.editCell(valueEl, row, col);
+          };
+        }
       }
       setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
       return;

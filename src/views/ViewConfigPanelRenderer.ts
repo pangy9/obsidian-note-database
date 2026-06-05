@@ -240,8 +240,8 @@ export class ViewConfigPanelRenderer {
     this.renderStatusPresetSettings(panel, {
       presets: actions.viewStatusPresets || [],
       defaultPresetId: actions.defaultViewStatusPresetId,
-      onDefaultPresetChange: actions.onDefaultViewStatusPresetChange,
-      onManagePresets: actions.onManageViewStatusPresets,
+      onDefaultPresetChange: (presetId) => actions.onDefaultViewStatusPresetChange?.(presetId),
+      onManagePresets: () => actions.onManageViewStatusPresets?.(),
     });
     this.renderDefaultColumnWidth(panel, config, actions);
     if (config.viewType !== "table") {
@@ -329,8 +329,8 @@ export class ViewConfigPanelRenderer {
     this.renderStatusPresetSettings(panel, {
       presets: actions.statusPresets || [],
       defaultPresetId: actions.defaultStatusPresetId,
-      onDefaultPresetChange: actions.onDefaultStatusPresetChange,
-      onManagePresets: actions.onManageStatusPresets,
+      onDefaultPresetChange: (presetId) => actions.onDefaultStatusPresetChange?.(presetId),
+      onManagePresets: () => actions.onManageStatusPresets?.(),
     }, readOnly);
   }
 

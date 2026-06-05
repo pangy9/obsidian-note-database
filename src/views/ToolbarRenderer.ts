@@ -134,7 +134,7 @@ export class ToolbarRenderer {
       if (actions.renameDatabase) {
         heading.ondblclick = (event) => {
           this.closeDatabasePopover();
-          this.startDatabaseTextEdit(event, heading, currentDb?.name || "", false, actions.renameDatabase!);
+          this.startDatabaseTextEdit(event, heading, currentDb?.name || "", false, (name) => actions.renameDatabase?.(name));
         };
       }
       if (!actions.hideDatabaseActions) {
@@ -157,7 +157,7 @@ export class ToolbarRenderer {
           },
         });
         if (actions.updateDatabaseDescription) {
-          descEl.ondblclick = (event) => this.startDatabaseTextEdit(event, descEl, description, true, actions.updateDatabaseDescription!);
+          descEl.ondblclick = (event) => this.startDatabaseTextEdit(event, descEl, description, true, (value) => actions.updateDatabaseDescription?.(value));
         }
       }
     }
@@ -426,7 +426,7 @@ export class ToolbarRenderer {
 
     if (actions.renameDatabase) {
       this.renderTitleActionsPopoverRow(panel, t("toolbar.renameDatabase"), "pencil", (rowEvent) => {
-        this.startDatabaseTextEdit(rowEvent, headingEl, currentName, false, actions.renameDatabase!);
+        this.startDatabaseTextEdit(rowEvent, headingEl, currentName, false, (name) => actions.renameDatabase?.(name));
       });
     }
     if (actions.copyCurrentDatabase) {

@@ -357,7 +357,7 @@ export class TableRenderer {
     groupField?: string,
     groupKey?: string
   ): void {
-    const canMoveGroup = Boolean(groupField && groupKey != null && this.actions.moveRowsToGroup);
+    const canMoveGroup = Boolean(groupField && groupKey != null && typeof this.actions.moveRowsToGroup === "function");
     const canReorder = this.canManualReorder(config);
     if (this.actions.isReadOnly || (!canMoveGroup && !canReorder)) return;
     if (this.isPhoneLayout()) return;

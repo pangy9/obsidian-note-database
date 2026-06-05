@@ -220,7 +220,7 @@ export class FormulaModal extends Modal {
     this.textarea = codeWrap.createEl("textarea", {
       cls: "db-formula-textarea",
       attr: {
-        placeholder: '=IF([status] === "done", 1, 0)',
+        placeholder: '=if([status] === "done", 1, 0)',
         rows: "9",
         autocapitalize: "off",
         autocomplete: "off",

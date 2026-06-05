@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
-    "lint": "eslint src/"
+    "lint": "eslint \"src/**/*.ts\" --ignore-pattern \"src/__tests__/**\"",
+    "lint:all": "eslint src/"
   },
   "keywords": [
     "obsidian",

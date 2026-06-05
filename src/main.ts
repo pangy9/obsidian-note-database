@@ -1391,7 +1391,7 @@ export default class NoteDatabasePlugin extends Plugin {
     return result;
   }
 
-  private parseBaseYamlView(view: unknown): any | undefined {
+  private parseBaseYamlView(view: unknown): any {
     if (!view || typeof view !== "object") return undefined;
     const source = view as Record<string, any>;
     const filters = this.parseBaseFilters(source["filters"]);

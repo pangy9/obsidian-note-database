@@ -540,7 +540,6 @@ export class DatabaseView extends ItemView {
     const db = this.getActiveDb();
     const config = this.getConfig();
     if (!db || !config) return null;
-    const _state = this.vs();
     const rows = this.rows.length > 0 ? this.rows : this.getRowsForView(this.currentViewIndex);
     if (rows.length === 0) {
       new Notice(t("errors.noDataExport"));
@@ -714,7 +713,7 @@ export class DatabaseView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Note Database";
+    return "Note database";
   }
 
   getIcon(): string {

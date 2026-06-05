@@ -974,7 +974,6 @@ function maskStringLiterals(expression: string): string {
 }
 
 function createBaseContext(context: BaseExpressionContext): Record<string, unknown> {
-  const cache = context.app.metadataCache.getFileCache(context.file);
   const properties = normalizeBasePropertyRecord(context, context.frontmatter);
   const note = createPropertyProxy(properties);
   const formulaValues = context.computedValues || evaluateFormulaValues(context);
@@ -1255,13 +1254,9 @@ function resolveBaseFile(context: BaseExpressionContext, path: unknown, sourcePa
   if (!target) return null;
   const vault = context.app.vault as unknown as { getAbstractFileByPath?: (path: string) => unknown };
   const direct = vault.getAbstractFileByPath?.(normalizePath(stripLinkSubpath(target)));
-  if (isMarkdownFileLike(direct)) return direct as TFile;
+  if (direct instanceof TFile) return direct;
   const linked = context.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
   return linked || null;
-}
-
-function isMarkdownFileLike(value: unknown): boolean {
-  return !!value && typeof value === "object" && "path" in value && "stat" in value;
 }
 
 function getFileTags(cache: CachedMetadata | null, frontmatter: Record<string, unknown>): string[] {

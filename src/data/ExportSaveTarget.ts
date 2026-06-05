@@ -8,6 +8,11 @@ export interface SavedZipResult {
 }
 
 type RequireFn = (id: string) => any;
+interface FileSystemModule {
+  promises: {
+    writeFile(path: string, data: Uint8Array): Promise<void>;
+  };
+}
 
 interface SaveDialogResult {
   canceled?: boolean;
@@ -62,9 +67,8 @@ async function chooseExternalSavePath(app: App, defaultFilename: string): Promis
 async function writeExternalBinary(path: string, zip: ArrayBuffer): Promise<void> {
   const requireFn = getRequire();
   if (!requireFn) throw new Error("File system access is unavailable");
-  const fs = requireFn("fs");
-  const bufferCtor = requireFn("buffer").Buffer as typeof Buffer;
-  await fs.promises.writeFile(path, bufferCtor.from(new Uint8Array(zip)));
+  const fs = requireFn("fs") as FileSystemModule;
+  await fs.promises.writeFile(path, new Uint8Array(zip));
 }
 
 async function writeVaultBinary(

@@ -967,8 +967,8 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 				case ">": return (left as number) > (right as number);
 				case "<=": return (left as number) <= (right as number);
 				case ">=": return (left as number) >= (right as number);
-				case "==": return left == right; // eslint-disable-line eqeqeq -- intentional loose equality for formula semantics
-				case "!=": return left != right; // eslint-disable-line eqeqeq -- intentional loose equality for formula semantics
+				case "==": return left == right;
+				case "!=": return left != right;
 				case "===": return left === right;
 				case "!==": return left !== right;
 				default: throw new Error(`Unknown operator: ${node.op}`);

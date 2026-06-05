@@ -77,7 +77,7 @@ export class SettingsTab extends PluginSettingTab {
       .setDesc(t("settings.databaseFolder.desc"))
       .addText((text) =>
         text
-          .setPlaceholder("database")
+          .setPlaceholder("Database")
           .setValue(this.plugin.settings.databaseFolder || "database")
           .onChange(async (value) => {
             this.plugin.settings.databaseFolder = value.trim() || "database";

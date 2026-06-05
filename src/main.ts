@@ -56,6 +56,8 @@ export default class NoteDatabasePlugin extends Plugin {
   private switchingDatabaseFileView = false;
   private markdownDatabaseFileBypass = new Map<string, number>();
   private databaseFileConfigCache = new Map<string, DatabaseConfig>();
+  /** 防抖 timer，防止 file-open / active-leaf-change / layout-change 同时触发导致重复打开 */
+  private pendingDatabaseFileOpen: number | null = null;
   private readonly commandNameKeys: Record<string, string> = {
     "open-dashboard": "command.openDashboard",
     "convert-active-base-to-database": "command.convertBase",
@@ -320,8 +322,17 @@ export default class NoteDatabasePlugin extends Plugin {
     window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
   }
 
+  /**
+   * 防抖调度：取消前一个待执行的定时器，只保留最后一次调用。
+   * 解决 file-open / active-leaf-change / layout-change 三个事件
+   * 在同一用户操作中同时触发导致重复打开数据库文件视图的问题。
+   */
   private scheduleDatabaseFileViewOpen(file: TFile, leaf?: WorkspaceLeaf, delay = 0): void {
-    window.setTimeout(() => {
+    if (this.pendingDatabaseFileOpen !== null) {
+      window.clearTimeout(this.pendingDatabaseFileOpen);
+    }
+    this.pendingDatabaseFileOpen = window.setTimeout(() => {
+      this.pendingDatabaseFileOpen = null;
       void this.openDatabaseFileViewIfNeeded(file, leaf);
     }, delay);
   }

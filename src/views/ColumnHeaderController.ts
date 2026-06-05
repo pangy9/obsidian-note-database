@@ -1,5 +1,6 @@
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { isHTMLElement } from "./DomGuards";
 import { getTableColumnStyle, getTableLayout } from "./TableLayout";
 
 export interface ColumnHeaderActions {
@@ -21,7 +22,7 @@ export class ColumnHeaderController {
     th.addEventListener("click", (event) => {
       if (Date.now() < this.suppressSortUntil) return;
       const target = event.target;
-      if (target instanceof HTMLElement && target.closest("button, .db-resize-handle")) return;
+      if (isHTMLElement(target) && target.closest("button, .db-resize-handle")) return;
       this.actions.sortByColumn(col);
     });
     th.addEventListener("contextmenu", (e) => this.actions.showContextMenu(e, col, th));

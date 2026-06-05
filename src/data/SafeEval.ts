@@ -1013,7 +1013,7 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 					args.push(evalNode(a, scope));
 				}
 			}
-			return (callee as Function).apply(thisObj, args);
+			return (callee as { apply(thisArg: unknown, args: unknown[]): unknown }).apply(thisObj, args);
 		}
 
 		case "Member": {

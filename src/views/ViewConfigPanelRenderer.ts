@@ -1,4 +1,4 @@
-import { Notice, setIcon } from "obsidian";
+import { App, Notice, setIcon } from "obsidian";
 import { ColumnDef, ComputedSyncMode, DatabaseConfig, DatabaseViewType, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusPresetDef, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { isObsidianTagsKey } from "../data/ColumnTypes";
@@ -7,6 +7,7 @@ import { BASE_FILE_FIELD_KEYS, getBaseFileFieldType, isBaseFileField } from "../
 import { getSourceRuleTree, isSourceRuleExpression, isSourceRuleGroup, isSourceRuleNot } from "../data/SourceRules";
 import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { confirmWithModal } from "./modals/ConfirmModal";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
 
@@ -192,6 +193,7 @@ function isPropertyPresenceRuleField(field: string): boolean {
 }
 
 export interface ViewConfigPanelActions {
+  app: App;
   onChange(): void;
   onViewTypeChange?(viewType: DatabaseViewType): void;
   onDatabaseChange?(): void;
@@ -700,12 +702,16 @@ export class ViewConfigPanelRenderer {
         card.toggleClass("is-active", active);
       }
     };
-    const changeMode = (rawNextMode: ComputedSyncMode): boolean => {
+    const changeMode = async (rawNextMode: ComputedSyncMode): Promise<boolean> => {
       const nextMode = normalizeComputedSyncMode(rawNextMode);
       const previousMode = normalizeComputedSyncMode(database.computedSyncMode);
       if (nextMode === previousMode) return true;
       if (previousMode === "display-only" && nextMode === "automatic") {
-        const confirmed = window.confirm(t("viewConfig.computedSync.confirmAutomatic"));
+        const confirmed = await confirmWithModal(actions.app, {
+          title: t("viewConfig.saveComputedResults"),
+          message: t("viewConfig.computedSync.confirmAutomatic"),
+          confirmText: t("common.save"),
+        });
         if (!confirmed) return false;
       }
       database.computedSyncMode = nextMode;
@@ -727,9 +733,9 @@ export class ViewConfigPanelRenderer {
         attr: { type: "radio", name: "computed-sync-mode", value: option.value },
       });
       radio.checked = option.value === mode;
-      radio.onchange = () => {
+      radio.onchange = async () => {
         if (!radio.checked) return;
-        if (!changeMode(option.value)) syncActiveCard();
+        if (!await changeMode(option.value)) syncActiveCard();
       };
       const body = card.createDiv({ cls: "db-computed-sync-card-body" });
       body.createDiv({ cls: "db-computed-sync-card-title", text: option.title });

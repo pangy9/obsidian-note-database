@@ -1,4 +1,4 @@
-import { Menu } from "obsidian";
+import { Menu, MenuItem } from "obsidian";
 import { COLUMN_TYPE_LABELS, isOptionColumnType } from "../data/ColumnTypes";
 import { ColumnDef } from "../data/types";
 import { t } from "../i18n";
@@ -27,6 +27,8 @@ export interface ColumnMenuOptions {
   includeLayoutActions?: boolean;
   includeWidthActions?: boolean;
 }
+
+type MenuItemWithSubmenu = MenuItem & { setSubmenu(): Menu };
 
 export class ColumnMenu {
   constructor(private actions: ColumnMenuActions) {}
@@ -69,7 +71,7 @@ export class ColumnMenu {
       }
 
       menu.addItem((item) => {
-        const sub = (item as any).setTitle(t("menu.changeType")).setIcon("layers").setSubmenu() as Menu;
+        const sub = (item as MenuItemWithSubmenu).setTitle(t("menu.changeType")).setIcon("layers").setSubmenu();
         const types: ColumnDef["type"][] = [
           "text",
           "number",
@@ -82,7 +84,7 @@ export class ColumnMenu {
           "computed",
         ];
         for (const type of types) {
-          (sub as any).addItem((subItem: any) => {
+          sub.addItem((subItem) => {
             const label = COLUMN_TYPE_LABELS()[type];
             subItem.setTitle(type === col.type ? `✓ ${label}` : label);
             if (type === col.type) subItem.setIcon("check");

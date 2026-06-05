@@ -1,4 +1,4 @@
-import { Notice, TFile } from "obsidian";
+import { App, Notice, TFile } from "obsidian";
 import { DataSource } from "../data/DataSource";
 import { PropertyService } from "../data/PropertyService";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
@@ -17,6 +17,7 @@ import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences } fro
 import { getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig, StatusOptionDef, ViewConfig } from "../data/types";
 import { ColumnRenameResult } from "./modals/ColumnRenameModal";
+import { confirmWithModal } from "./modals/ConfirmModal";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { ColumnPropertySync } from "./ColumnPropertySync";
 
@@ -30,6 +31,7 @@ export interface FrontmatterValueChange {
 }
 
 export interface ColumnOperationsDeps {
+  app: App;
   dataSource: DataSource;
   propertyService: PropertyService;
   viewStateStore: ViewStateStore;
@@ -101,7 +103,11 @@ export class ColumnOperations {
     const isComputed = targetCol.type === "computed";
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = isComputed && !displayOnly && oldComputedKey !== newComputedKey
-      ? window.confirm(t("column.confirmRenameComputedSavedProperty", { oldKey: oldComputedKey, newKey: newComputedKey }))
+      ? await confirmWithModal(this.deps.app, {
+        title: t("menu.editProperty", { name: newLabel }),
+        message: t("column.confirmRenameComputedSavedProperty", { oldKey: oldComputedKey, newKey: newComputedKey }),
+        confirmText: t("common.save"),
+      })
       : false;
     let migrationNotice = "";
     const frontmatterChanges = this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey);
@@ -232,14 +238,29 @@ export class ColumnOperations {
     const propertyKey = getComputedStorageKey(targetCol);
     const displayOnly = this.isDisplayOnlyComputedSync();
     if (isComputed) {
-      if (!window.confirm(t("column.confirmDeleteComputed", { label: targetCol.label, key: propertyKey }))) return;
-    } else if (!window.confirm(t("column.confirmDelete", { label: targetCol.label, key: targetCol.key }))) {
+      if (!await confirmWithModal(this.deps.app, {
+        title: t("common.delete"),
+        message: t("column.confirmDeleteComputed", { label: targetCol.label, key: propertyKey }),
+        confirmText: t("common.delete"),
+        danger: true,
+      })) return;
+    } else if (!await confirmWithModal(this.deps.app, {
+      title: t("common.delete"),
+      message: t("column.confirmDelete", { label: targetCol.label, key: targetCol.key }),
+      confirmText: t("common.delete"),
+      danger: true,
+    })) {
       return;
     }
     ensureColumnOrder(config);
     const files = this.deps.getFilesForConfig(config);
     const cleanupSavedComputedProperty = isComputed && !displayOnly
-      ? window.confirm(t("column.confirmDeleteComputedSavedProperty", { key: propertyKey }))
+      ? await confirmWithModal(this.deps.app, {
+        title: t("common.delete"),
+        message: t("column.confirmDeleteComputedSavedProperty", { key: propertyKey }),
+        confirmText: t("common.delete"),
+        danger: true,
+      })
       : false;
     const shouldDeleteFrontmatter = !isComputed || cleanupSavedComputedProperty;
     const frontmatterChanges = shouldDeleteFrontmatter
@@ -464,8 +485,17 @@ export class ColumnOperations {
     let cleanupExistingProperty = false;
     if (changingToComputed) {
       if (displayOnly) {
-        cleanupExistingProperty = window.confirm(t("column.confirmConvertComputedCleanup", { key: target.key }));
-      } else if (!window.confirm(t("column.confirmConvertComputedSavedProperty", { key: target.key }))) {
+        cleanupExistingProperty = await confirmWithModal(this.deps.app, {
+          title: t("menu.changeType"),
+          message: t("column.confirmConvertComputedCleanup", { key: target.key }),
+          confirmText: t("common.delete"),
+          danger: true,
+        });
+      } else if (!await confirmWithModal(this.deps.app, {
+        title: t("menu.changeType"),
+        message: t("column.confirmConvertComputedSavedProperty", { key: target.key }),
+        confirmText: t("common.save"),
+      })) {
         return;
       }
     }

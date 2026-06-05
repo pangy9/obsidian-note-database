@@ -2537,7 +2537,7 @@ class BaseFileSuggestModal extends FuzzySuggestModal<TFile> {
   }
 
   onOpen(): void {
-    super.onOpen();
+    void super.onOpen();
     this.titleEl.setText(t("baseImport.chooseBaseFile"));
   }
 

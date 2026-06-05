@@ -6,6 +6,7 @@ import { getComputedStorageKey } from "../../data/ColumnDisplay";
 import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef } from "../../data/types";
 import { getEffectiveLocale, t } from "../../i18n";
 import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { confirmWithModal } from "./ConfirmModal";
 
 export interface FormulaSaveResult {
   expression: string;
@@ -118,6 +119,8 @@ export class FormulaModal extends Modal {
   private expressionSyntax: ComputedFieldDef["expressionSyntax"] = "note-database";
   private saved = false;
   private resizeObserver?: ResizeObserver;
+  private closeConfirmed = false;
+  private closeConfirmationPending = false;
 
   constructor(
     app: App,
@@ -1251,14 +1254,14 @@ export class FormulaModal extends Modal {
     const mirror = window.activeDocument.createElement("div");
     const style = getComputedStyle(this.textarea);
     const copyStyles = [
-      "fontFamily", "fontSize", "fontWeight", "letterSpacing",
-      "lineHeight", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-      "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
-      "boxSizing", "wordWrap", "whiteSpace", "tabSize",
+      "font-family", "font-size", "font-weight", "letter-spacing",
+      "line-height", "padding-top", "padding-right", "padding-bottom", "padding-left",
+      "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+      "box-sizing", "overflow-wrap", "white-space", "tab-size",
     ];
     mirror.setCssProps({ position: "absolute", visibility: "hidden", top: "0", left: "-9999px", width: `${this.textarea.clientWidth}px`, overflow: "hidden" });
     for (const prop of copyStyles) {
-      mirror.style[prop as any] = style[prop as any];
+      mirror.style.setProperty(prop, style.getPropertyValue(prop));
     }
     mirror.textContent = textBeforeCursor;
 
@@ -1271,9 +1274,6 @@ export class FormulaModal extends Modal {
     const caretOffset = caretSpan.offsetLeft - mirror.scrollLeft;
     const caretLineTop = caretSpan.offsetTop - mirror.scrollTop;
     window.activeDocument.body.removeChild(mirror);
-
-    const editorBox = this.textarea.getBoundingClientRect();
-    const _modalBox = this.textarea.closest(".modal")?.getBoundingClientRect() || editorBox;
 
     return {
       left: Math.min(
@@ -1458,14 +1458,31 @@ export class FormulaModal extends Modal {
       || this.typeSelect.value !== this.originalResultType;
   }
 
-  onClose(): void {
-    if (this.hasUnsavedChanges() && !this.saved) {
-      if (!window.confirm(t("formula.confirmDiscard"))) {
-        return;
-      }
+  close(): void {
+    if (this.saved || this.closeConfirmed || !this.hasUnsavedChanges()) {
+      super.close();
+      return;
     }
+    if (this.closeConfirmationPending) return;
+    this.closeConfirmationPending = true;
+    void confirmWithModal(this.app, {
+      title: t("common.cancel"),
+      message: t("formula.confirmDiscard"),
+      confirmText: t("formula.discard"),
+      danger: true,
+    }).then((confirmed) => {
+      this.closeConfirmationPending = false;
+      if (!confirmed) return;
+      this.closeConfirmed = true;
+      this.close();
+    });
+  }
+
+  onClose(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = undefined;
+    this.closeConfirmationPending = false;
+    this.closeConfirmed = false;
     this.modalEl.removeClass("formula-workbench-modal-host");
     this.contentEl.empty();
   }

@@ -8,6 +8,7 @@ import {
 } from "../views/ViewConfigPanelRenderer";
 
 vi.mock("obsidian", () => ({
+  Modal: class {},
   Notice: class {},
   setIcon: () => undefined,
 }));

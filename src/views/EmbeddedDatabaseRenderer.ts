@@ -33,6 +33,7 @@ import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
+import { isHTMLElement } from "./DomGuards";
 import { ToolbarRenderer } from "./ToolbarRenderer";
 import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
@@ -133,9 +134,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       undefined,
       undefined,
       (row) => this.getFileTitleInfo(row),
-      () => this.config?.schema.computedFields || []
+      () => this.config?.schema.computedFields || [],
+      this.app
     );
     this.rowMenu = new RowMenu({
+      app: this.app,
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
       isReadOnly: isCodeBlock,
@@ -819,6 +822,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private renderViewConfigPanel(config: ViewConfig): void {
     this.viewConfigPanelRenderer.render(this.containerEl, this.showViewConfigPanel, config, {
+      app: this.app,
       database: this.currentDbConfig,
       isDatabaseReadOnly: true,
       onChange: () => {
@@ -1310,7 +1314,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
     const triggerBtn = this.containerEl.querySelector(".db-group-btn");
     const host = this.containerEl;
-    const anchorEl = triggerBtn instanceof HTMLElement ? triggerBtn : undefined;
+    const anchorEl = isHTMLElement(triggerBtn) ? triggerBtn : undefined;
 
     const popover = host.createDiv({ cls: "db-group-order-popover" });
     this.groupOrderPopover = popover;
@@ -1781,15 +1785,15 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!config) return;
     const state = this.vs(config);
     const filterBtn = this.containerEl.querySelector(".db-filter-btn");
-    if (filterBtn instanceof HTMLElement) this.updateToolbarBadge(filterBtn, getEffectiveFilterRules(state.filters).length);
+    if (isHTMLElement(filterBtn)) this.updateToolbarBadge(filterBtn, getEffectiveFilterRules(state.filters).length);
     const sortBtn = this.containerEl.querySelector(".db-sort-btn");
-    if (sortBtn instanceof HTMLElement) {
+    if (isHTMLElement(sortBtn)) {
       const count = state.sortRules.filter((rule) => rule.field && rule.direction).length ||
         (state.sortColumn ? 1 : 0);
       this.updateToolbarBadge(sortBtn, count);
     }
     const colBtn = this.containerEl.querySelector(".db-col-manager-btn");
-    if (colBtn instanceof HTMLElement) this.updateToolbarBadge(colBtn, Math.max(0, (config.schema.columns.length || 0) - state.hiddenColumns.size));
+    if (isHTMLElement(colBtn)) this.updateToolbarBadge(colBtn, Math.max(0, (config.schema.columns.length || 0) - state.hiddenColumns.size));
   }
 
   private updateToolbarBadge(button: HTMLElement, count: number): void {
@@ -2089,7 +2093,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private handleEmbedKeydown(event: KeyboardEvent): void {
     if (!this.containerEl.isConnected) return;
     const target = event.target;
-    const eventTarget = target instanceof HTMLElement ? target : null;
+    const eventTarget = isHTMLElement(target) ? target : null;
     const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
     if (isEditing) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && this.cellSelection) {

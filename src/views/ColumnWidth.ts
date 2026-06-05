@@ -66,7 +66,7 @@ function measureText(text: string, fontSize: number, fontWeight: number): number
 
 function getMeasureContext(): CanvasRenderingContext2D | null {
   if (measureContext !== undefined) return measureContext;
-  if (typeof document === "undefined") {
+  if (typeof window === "undefined" || !window.activeDocument) {
     measureContext = null;
     return measureContext;
   }
@@ -76,7 +76,7 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
 
 function getFontFamily(): string {
   if (cachedFontFamily) return cachedFontFamily;
-  if (typeof window === "undefined" || typeof document === "undefined") {
+  if (typeof window === "undefined" || !window.activeDocument) {
     cachedFontFamily = "system-ui, sans-serif";
     return cachedFontFamily;
   }

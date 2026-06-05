@@ -48,6 +48,7 @@ import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
 import { ColumnRenameModal } from "./modals/ColumnRenameModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
+import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
 import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportConfirmModal";
 import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
@@ -67,6 +68,7 @@ import { saveZipWithPicker } from "../data/ExportSaveTarget";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
+import { isHTMLElement } from "./DomGuards";
 import { positionToolbarPopover } from "./PopoverPosition";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
@@ -233,9 +235,11 @@ export class DatabaseView extends ItemView {
       (row, col, transaction) => this.commitCellOptionTransaction(row, col, transaction),
       (row, col, value) => this.saveCellValueWithHistory(row, col, value),
       (row) => this.getFileTitleInfo(row),
-      () => this.getConfig()?.schema.computedFields || []
+      () => this.getConfig()?.schema.computedFields || [],
+      this.app
     );
     this.columnOperations = new ColumnOperations({
+      app: this.app,
       dataSource: this.dataSource,
       propertyService: this.propertyService,
       viewStateStore: this.viewStateStore,
@@ -260,6 +264,7 @@ export class DatabaseView extends ItemView {
       getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
     });
     this.rowMenu = new RowMenu({
+      app: this.app,
       openRow: (row) => { void this.openRow(row); },
       deleteRow: (row) => this.deleteRow(row),
     });
@@ -795,7 +800,7 @@ export class DatabaseView extends ItemView {
     if (!this.containerEl_?.isConnected) return;
     const active = window.activeDocument.activeElement;
     const target = event.target;
-    const eventTarget = target instanceof HTMLElement ? target : null;
+    const eventTarget = isHTMLElement(target) ? target : null;
     const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
     const isInsideView = active instanceof Node && this.containerEl_.contains(active);
     if (!isInsideView && !this.containerEl_.matches(":hover")) return;
@@ -1146,7 +1151,7 @@ export class DatabaseView extends ItemView {
 
     const triggerBtn = this.headerPopoverAnchorEl || this.containerEl_?.querySelector(".db-group-btn");
     const host = this.containerEl_ || window.activeDocument.body;
-    const anchorEl = triggerBtn instanceof HTMLElement ? triggerBtn : undefined;
+    const anchorEl = isHTMLElement(triggerBtn) ? triggerBtn : undefined;
 
     const popover = host.createDiv({ cls: "db-group-order-popover" });
     this.groupOrderPopover = popover;
@@ -2278,7 +2283,7 @@ export class DatabaseView extends ItemView {
   }
 
   private isInteractiveCellTarget(target: EventTarget | null): boolean {
-    return target instanceof HTMLElement &&
+    return isHTMLElement(target) &&
       Boolean(target.closest("input, textarea, select, button, a, .db-cell-fill-handle, .db-cell-editing"));
   }
 
@@ -2347,7 +2352,12 @@ export class DatabaseView extends ItemView {
   private async deleteSelectedRows(): Promise<void> {
     const rows = this.rows.filter((row) => this.selectedRows.has(row.file.path));
     if (rows.length === 0) return;
-    if (!window.confirm(t("confirm.deleteSelected", { count: rows.length }))) return;
+    if (!await confirmWithModal(this.app, {
+      title: t("common.delete"),
+      message: t("confirm.deleteSelected", { count: rows.length }),
+      confirmText: t("common.delete"),
+      danger: true,
+    })) return;
     for (const row of rows) {
       await this.dataSource.trashNote(row.file);
     }
@@ -2413,15 +2423,15 @@ export class DatabaseView extends ItemView {
     if (!this.containerEl_) return;
     const state = this.vs();
     const filterBtn = this.containerEl_.querySelector(".db-filter-btn");
-    if (filterBtn instanceof HTMLElement) this.updateToolbarBadge(filterBtn, getEffectiveFilterRules(state.filters).length);
+    if (isHTMLElement(filterBtn)) this.updateToolbarBadge(filterBtn, getEffectiveFilterRules(state.filters).length);
     const sortBtn = this.containerEl_.querySelector(".db-sort-btn");
-    if (sortBtn instanceof HTMLElement) {
+    if (isHTMLElement(sortBtn)) {
       const count = state.sortRules.filter((rule) => rule.field && rule.direction).length ||
         (state.sortColumn ? 1 : 0);
       this.updateToolbarBadge(sortBtn, count);
     }
     const colBtn = this.containerEl_.querySelector(".db-col-manager-btn");
-    if (colBtn instanceof HTMLElement) this.updateToolbarBadge(colBtn, Math.max(0, (this.getConfig()?.schema.columns.length || 0) - state.hiddenColumns.size));
+    if (isHTMLElement(colBtn)) this.updateToolbarBadge(colBtn, Math.max(0, (this.getConfig()?.schema.columns.length || 0) - state.hiddenColumns.size));
   }
 
   private updateToolbarBadge(button: HTMLElement, count: number): void {
@@ -2466,6 +2476,7 @@ export class DatabaseView extends ItemView {
     const config = this.getConfig();
     const db = this.getActiveDb();
     this.viewConfigPanelRenderer.render(this.containerEl_, this.showViewConfigPanel, config, {
+      app: this.app,
       database: db,
       onChange: () => {
         this.scheduleConfigSave();
@@ -4083,7 +4094,12 @@ export class DatabaseView extends ItemView {
       new Notice(plan.skipped > 0 ? t("notice.noEditableCellsSkipped", { skipped: plan.skipped }) : t("notice.noEditableCells"));
       return;
     }
-    if (plan.targets.length > 20 && !window.confirm(t("confirm.clearCells", { count: plan.targets.length }))) return;
+    if (plan.targets.length > 20 && !await confirmWithModal(this.app, {
+      title: t("common.delete"),
+      message: t("confirm.clearCells", { count: plan.targets.length }),
+      confirmText: t("common.delete"),
+      danger: true,
+    })) return;
     const changes = plan.targets.map((target) => this.createCellChange(target.row, target.col, null));
     await this.applyCellChanges(changes, t("undo.clearCells"));
     this.showBatchNotice("cleared", changes.length, plan.skipped);

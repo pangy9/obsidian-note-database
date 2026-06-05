@@ -7,6 +7,7 @@ import { DEFAULT_STATUS_PRESET_ID, getBuiltinStatusPresets, normalizeStatusPrese
 import { StatusPresetManagerModal } from "./views/modals/StatusPresetManagerModal";
 import { AddDatabaseModal } from "./views/modals/AddDatabaseModal";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
+import { confirmWithModal } from "./views/modals/ConfirmModal";
 
 /** Default databases shipped with the plugin. Keep empty for a neutral marketplace first run. */
 export const DEFAULT_DATABASES: DatabaseConfig[] = [];
@@ -482,19 +483,28 @@ class TrashManagerModal extends Modal {
       });
       setIcon(permDeleteBtn, "trash-2");
       permDeleteBtn.onclick = async () => {
-        if (window.confirm(t("settings.trash.confirmPermanentDelete", { name: item.database.name || t("common.untitled") }))) {
-          trash.splice(i, 1);
-          await this.plugin.saveSettings();
-          this.onRefresh();
-          this.onOpen();
-        }
+        const confirmed = await confirmWithModal(this.app, {
+          title: t("common.permanentlyDelete"),
+          message: t("settings.trash.confirmPermanentDelete", { name: item.database.name || t("common.untitled") }),
+          confirmText: t("common.permanentlyDelete"),
+          danger: true,
+        });
+        if (!confirmed) return;
+        trash.splice(i, 1);
+        await this.plugin.saveSettings();
+        this.onRefresh();
+        this.onOpen();
       };
     }
   }
 
   /** 恢复确认弹窗：选择恢复为数据库文件 */
   private openRestoreConfirmModal(item: TrashedDatabase, index: number, trash: TrashedDatabase[]): void {
-    const self = this;
+    const plugin = this.plugin;
+    const rerenderTrash = () => {
+      this.onRefresh();
+      this.onOpen();
+    };
     const restoreModal = new class extends Modal {
       onOpen(): void {
         this.contentEl.empty();
@@ -511,7 +521,7 @@ class TrashManagerModal extends Modal {
         });
         fileBtn.onclick = async () => {
           const existing = new Set([
-            ...self.plugin.dataSource.getViewDefFiles().map((e) => e.config.name),
+            ...plugin.dataSource.getViewDefFiles().map((e) => e.config.name),
           ]);
           let name = item.database.name || t("defaults.newDatabase");
           if (existing.has(name)) {
@@ -522,17 +532,16 @@ class TrashManagerModal extends Modal {
           try {
             const database = JSON.parse(JSON.stringify(item.database)) as DatabaseConfig;
             database.name = name;
-            const file = await self.plugin.dataSource.createViewDefFile(
-              self.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+            const file = await plugin.dataSource.createViewDefFile(
+              plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
               name,
               database,
             );
             trash.splice(index, 1);
-            await self.plugin.saveSettings();
-            self.onRefresh();
+            await plugin.saveSettings();
+            rerenderTrash();
             this.close();
             new Notice(t("notice.createdDbFile", { path: file.path }));
-            self.onOpen();
           } catch (e) {
             new Notice(t("errors.createFailed", { error: String(e) }));
           }

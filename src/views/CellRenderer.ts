@@ -1,4 +1,4 @@
-import { Notice, Platform, normalizePath, setIcon } from "obsidian";
+import { App, Notice, Platform, normalizePath, setIcon } from "obsidian";
 import {
   getColumnOptions,
   normalizeOptionValueForKey,
@@ -13,6 +13,8 @@ import { t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
 import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./FileTitleDisplay";
+import { isHTMLElement } from "./DomGuards";
+import { confirmWithModal } from "./modals/ConfirmModal";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -61,7 +63,8 @@ export class CellRenderer {
     private commitCellOptionTransaction?: (row: RowData, col: ColumnDef, transaction: CellOptionTransaction) => Promise<void>,
     private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>,
     private getFileTitleInfo: (row: RowData) => FileTitleDisplay = (row) => getFileTitleDisplay(row, [row]),
-    private getComputedFields: () => ComputedFieldDef[] = () => []
+    private getComputedFields: () => ComputedFieldDef[] = () => [],
+    private app?: App
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -310,7 +313,7 @@ export class CellRenderer {
   }
 
   private focusExistingEditor(target: HTMLElement, event?: Event, preventDefault = true): boolean {
-    const eventTarget = event?.target instanceof HTMLElement ? event.target : null;
+    const eventTarget = isHTMLElement(event?.target) ? event.target : null;
     const existingEditor =
       eventTarget?.closest<HTMLInputElement | HTMLTextAreaElement>("input, textarea") ||
       target.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea");
@@ -371,7 +374,7 @@ export class CellRenderer {
         close();
         return;
       }
-      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select")) return;
+      if (isHTMLElement(event.target) && event.target.closest("input, textarea, select")) return;
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
       const items = Array.from(popover.querySelectorAll<HTMLButtonElement>(".db-cell-option-item"));
       if (!items.length) return;
@@ -579,10 +582,15 @@ export class CellRenderer {
         });
         setIcon(deleteButton, "trash");
         deleteButton.onmousedown = (event) => event.preventDefault();
-        deleteButton.onclick = (event) => {
+        deleteButton.onclick = async (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!window.confirm(t("modal.confirmDeleteOption", { name: opt.value }))) return;
+          if (!this.app || !await confirmWithModal(this.app, {
+            title: t("common.delete"),
+            message: t("modal.confirmDeleteOption", { name: opt.value }),
+            confirmText: t("common.delete"),
+            danger: true,
+          })) return;
           const removed = opt.value;
           optionDefs.splice(idx, 1);
           const wasSelected = selected.delete(removed);

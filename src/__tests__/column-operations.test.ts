@@ -3,10 +3,24 @@ import { ColumnOperations } from "../views/ColumnOperations";
 import { ColumnDef, DatabaseConfig, ViewConfig } from "../data/types";
 
 vi.mock("obsidian", () => ({
+  Modal: class Modal {
+    app: unknown;
+    contentEl = { empty: vi.fn(), addClass: vi.fn(), createEl: vi.fn(), createDiv: vi.fn() };
+    modalEl = { isShown: vi.fn().mockReturnValue(false) };
+    constructor(app: unknown) {
+      this.app = app;
+    }
+    open(): void {}
+    close(): void {}
+  },
   Notice: class Notice {
     constructor(_message?: string) {}
   },
   TFile: class TFile {},
+}));
+
+vi.mock("../views/modals/ConfirmModal", () => ({
+  confirmWithModal: vi.fn().mockResolvedValue(true),
 }));
 
 (globalThis as any).document = { documentElement: { lang: "en" } };
@@ -37,6 +51,7 @@ function makeOps(db: DatabaseConfig, view: ViewConfig) {
     setObsidianPropertyType: vi.fn().mockResolvedValue(undefined),
   };
   const ops = new ColumnOperations({
+    app: {} as any,
     dataSource: { getRecordsForConfig: vi.fn().mockReturnValue([]) } as any,
     propertyService: propertyService as any,
     viewStateStore: { persist: vi.fn(), clear: vi.fn() } as any,

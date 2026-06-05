@@ -2,6 +2,7 @@ import { App, Modal, Notice, setIcon } from "obsidian";
 import { COLUMN_TYPE_LABELS, DEFAULT_STATUS_OPTIONS, getBuiltinStatusPresets } from "../../data/ColumnTypes";
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../data/types";
 import { t } from "../../i18n";
+import { confirmWithModal } from "./ConfirmModal";
 
 const COLORS: StatusColor[] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -168,8 +169,13 @@ export class StatusOptionsModal extends Modal {
         attr: { title: t("common.delete"), "aria-label": t("common.delete") },
       });
       setIcon(deleteBtn, "trash");
-      deleteBtn.onclick = () => {
-        if (!window.confirm(t("modal.confirmDeleteOption", { name: option.value }))) return;
+      deleteBtn.onclick = async () => {
+        if (!await confirmWithModal(this.app, {
+          title: t("common.delete"),
+          message: t("modal.confirmDeleteOption", { name: option.value }),
+          confirmText: t("common.delete"),
+          danger: true,
+        })) return;
         this.options.splice(index, 1);
         this.renderList();
       };

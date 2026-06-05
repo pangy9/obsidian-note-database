@@ -4,6 +4,7 @@ import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
@@ -210,7 +211,7 @@ export class GalleryRenderer {
 
   private attachRowContextMenu(el: HTMLElement, row: RowData): void {
     el.addEventListener("contextmenu", (event) => {
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button")) return;
+      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row);
     });
   }
@@ -218,7 +219,7 @@ export class GalleryRenderer {
   private attachColumnContextMenu(el: HTMLElement, col: ColumnDef): void {
     el.addEventListener("contextmenu", (event) => {
       if (!this.actions.showColumnMenu) return;
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, a")) return;
+      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button, a")) return;
       event.preventDefault();
       event.stopPropagation();
       this.actions.showColumnMenu(event, col, el);
@@ -286,7 +287,7 @@ export class GalleryRenderer {
     if (this.isPhoneLayout()) return;
     card.draggable = true;
     card.addEventListener("dragstart", (event) => {
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
+      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
         event.preventDefault();
         return;
       }
@@ -302,7 +303,7 @@ export class GalleryRenderer {
     if (this.actions.isReadOnly || this.isPhoneLayout() || !this.canManualReorder(config)) return;
     card.draggable = true;
     card.addEventListener("dragstart", (event) => {
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
+      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button, .db-gallery-card-resize-handle")) {
         event.preventDefault();
         return;
       }
@@ -464,7 +465,7 @@ export class GalleryRenderer {
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     item.addEventListener("click", (event) => {
       if (this.actions.isReadOnly) return;
-      if (event.target instanceof HTMLElement && event.target.closest("a, button, input, textarea, .db-cell-editing")) return;
+      if (isHTMLElement(event.target) && event.target.closest("a, button, input, textarea, .db-cell-editing")) return;
       event.stopPropagation();
       this.actions.editCell(valueEl, row, col, event);
     });

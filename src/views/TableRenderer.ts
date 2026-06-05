@@ -2,6 +2,7 @@ import { Menu } from "obsidian";
 import { ColumnDef, RowData, ViewConfig } from "../data/types";
 import { toBooleanValue } from "../data/ColumnTypes";
 import { t } from "../i18n";
+import { isHTMLElement } from "./DomGuards";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
@@ -364,7 +365,7 @@ export class TableRenderer {
     tr.draggable = true;
     tr.addClass("is-manual-row-draggable");
     tr.addEventListener("dragstart", (event) => {
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, button, .db-cell-fill-handle")) {
+      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button, .db-cell-fill-handle")) {
         event.preventDefault();
         return;
       }

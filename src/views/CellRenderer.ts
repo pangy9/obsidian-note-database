@@ -194,13 +194,16 @@ export class CellRenderer {
     setFieldTooltip(td, toBooleanValue(value) ? t("common.true") : t("common.false"));
     const checkbox = td.createEl("input", { attr: { type: "checkbox" } });
     checkbox.checked = toBooleanValue(value);
-    checkbox.disabled = this.isReadOnly || col.type === "computed";
-    checkbox.onclick = (event) => event.stopPropagation();
-    if (this.isReadOnly) return;
-    if (col.type === "computed") {
+    if (this.isReadOnly) {
+      checkbox.disabled = true;
+    } else if (col.type === "computed") {
+      // Use CSS instead of disabled so click/dblclick events still bubble to td
+      checkbox.style.pointerEvents = "none";
       this.makeComputedEditable(td, col);
       return;
     }
+    checkbox.onclick = (event) => event.stopPropagation();
+    if (this.isReadOnly) return;
     checkbox.onchange = () => {
       void this.saveValue(row, col, checkbox.checked);
     };

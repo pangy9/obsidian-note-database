@@ -20,6 +20,7 @@ import { setLocale, t } from "./i18n";
 import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { BASE_FILE_FIELD_KEYS, getFileFieldValue, isBaseFileField } from "./data/FileFields";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
+import { registerPropertyTypeIcons } from "./views/PropertyTypeIcon";
 
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
@@ -41,6 +42,9 @@ export default class NoteDatabasePlugin extends Plugin {
   };
 
   async onload(): Promise<void> {
+    // Register custom property-type icons with Obsidian's icon registry
+    registerPropertyTypeIcons();
+
     // Load and migrate settings with defensive fallback
     try {
       const loaded = await this.loadData();

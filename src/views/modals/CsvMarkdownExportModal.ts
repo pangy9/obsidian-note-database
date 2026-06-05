@@ -6,7 +6,7 @@ export class CsvMarkdownExportModal extends Modal {
   private resolve?: (options: CsvMarkdownExportOptions | null) => void;
   private includeFrontmatter = true;
 
-  open(): Promise<CsvMarkdownExportOptions | null> {
+  openAndWait(): Promise<CsvMarkdownExportOptions | null> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();

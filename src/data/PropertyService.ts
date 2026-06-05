@@ -15,7 +15,7 @@ export interface FrontmatterBatchResult {
 }
 
 export class PropertyService {
-  /** Serialize writes to .obsidian/types.json to prevent read-modify-write races */
+  /** Serialize writes to Obsidian property type metadata to prevent read-modify-write races */
   private typesJsonWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -33,7 +33,7 @@ export class PropertyService {
 
   private async doSetObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
     const adapter = this.app.vault.adapter;
-    const configPath = ".obsidian/types.json";
+    const configPath = `${this.app.vault.configDir}/types.json`;
     let data: { types?: Record<string, string> } = {};
 
     try {

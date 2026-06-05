@@ -208,7 +208,7 @@ export class ColumnManagerRenderer {
     const colBtn = containerEl.querySelector(".db-col-manager-btn");
     if (colBtn) {
       colBtn.querySelector(".db-toolbar-badge")?.remove();
-      if (colBtn instanceof HTMLElement) {
+      if (colBtn.instanceOf(HTMLElement)) {
         const visibleCount = Math.max(0, columns.length - state.hiddenColumns.size);
         if (visibleCount > 0) colBtn.createSpan({ cls: "db-toolbar-badge", text: String(visibleCount) });
       }

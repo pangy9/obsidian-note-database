@@ -19,7 +19,7 @@ export class DeleteDatabaseModal extends Modal {
     super(app);
   }
 
-  open(): Promise<DeleteDatabaseModalResult | null> {
+  openAndWait(): Promise<DeleteDatabaseModalResult | null> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();

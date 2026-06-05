@@ -163,7 +163,7 @@ export class SettingsTab extends PluginSettingTab {
       const result = await new AddDatabaseModal(
         this.app,
         this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
-      ).open();
+      ).openAndWait();
       if (!result) return;
       const name = this.getUniqueDatabaseName(result.name || t("defaults.newDatabase"));
       const db = this.createEmptyDatabase(name, result.sourceFolder, result.typeFilter);
@@ -301,7 +301,7 @@ export class SettingsTab extends PluginSettingTab {
     deleteButton.onclick = async () => {
       // 文件型数据库也能查询到关联的笔记记录
       const records = this.plugin.dataSource?.getRecordsForConfig(config) || [];
-      const result = await new DeleteDatabaseModal(this.app, config.name || entry.file.basename, records.length).open();
+      const result = await new DeleteDatabaseModal(this.app, config.name || entry.file.basename, records.length).openAndWait();
       if (!result) return;
 
       // 如果勾选了同时删除关联笔记文件，将它们移至系统回收站

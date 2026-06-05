@@ -20,7 +20,7 @@ export class AddDatabaseModal extends Modal {
     super(app);
   }
 
-  open(): Promise<AddDatabaseModalResult | null> {
+  openAndWait(): Promise<AddDatabaseModalResult | null> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();

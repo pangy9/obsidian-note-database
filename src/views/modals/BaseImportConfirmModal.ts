@@ -40,7 +40,7 @@ export class BaseImportConfirmModal extends Modal {
     this.defaultUnchecked = options?.defaultUnchecked ?? false;
   }
 
-  open(): Promise<BaseImportColumn[] | null> {
+  openAndWait(): Promise<BaseImportColumn[] | null> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();

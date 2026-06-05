@@ -526,7 +526,7 @@ export class DatabaseView extends ItemView {
   }
 
   async exportCurrentViewAsCsvMarkdownZip(): Promise<TFile | null> {
-    const options = await new CsvMarkdownExportModal(this.app).open();
+    const options = await new CsvMarkdownExportModal(this.app).openAndWait();
     if (!options) return null;
     return this.createCsvMarkdownZip(options);
   }
@@ -728,7 +728,7 @@ export class DatabaseView extends ItemView {
       this.registerDomEvent(this.containerEl_.parentElement, "wheel", (event) => this.forwardOuterWheelScroll(event));
     }
     window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
-    this.registerDomEvent(document, "keydown", (event) => this.handleDatabaseKeydown(event));
+    this.registerDomEvent(window.activeDocument, "keydown", (event) => this.handleDatabaseKeydown(event));
     this.registerDomEvent(window, "focus", () => this.refreshOnActivation());
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
       if (leaf === this.leaf) this.refreshOnActivation();
@@ -874,7 +874,7 @@ export class DatabaseView extends ItemView {
       isReadOnly: needsSetup,
       showDatabaseChrome: true,
       hideDatabaseActions: this.hideDatabaseActions,
-      addDatabase: () => this.addDatabase(),
+      addDatabase: () => { void this.addDatabase(); },
       deleteDatabase: () => { void this.deleteDatabase(); },
       copyCurrentDatabase: () => { void this.duplicateCurrentDatabase(); },
       copyCurrentView: (viewIndex) => this.duplicateView(viewIndex),
@@ -1518,7 +1518,7 @@ export class DatabaseView extends ItemView {
   /** Add a new database via modal dialog */
   private async addDatabase(): Promise<void> {
     const modal = new AddDatabaseModal(this.app, this.databaseFolder);
-    const result = await modal.open();
+    const result = await modal.openAndWait();
     if (!result) return;
 
     const dbName = this.getUniqueDatabaseName(result.name);
@@ -1585,7 +1585,7 @@ export class DatabaseView extends ItemView {
           descText: t("addDatabase.scanDesc"),
           defaultUnchecked: true,
         }
-      ).open();
+      ).openAndWait();
       if (!confirmed) return;
 
       // Collect statusOptions for columns where user changed to option types
@@ -1683,7 +1683,7 @@ export class DatabaseView extends ItemView {
     const records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(db));
     const fileCount = records.length;
 
-    const result = await new DeleteDatabaseModal(this.app, db.name, fileCount).open();
+    const result = await new DeleteDatabaseModal(this.app, db.name, fileCount).openAndWait();
     if (!result) return;
 
     // Optionally delete associated files

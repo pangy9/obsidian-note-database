@@ -862,7 +862,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       leaf = this.app.workspace.getLeaf(false);
       await leaf.setViewState({ type: DATABASE_VIEW_TYPE, active: true });
     }
-    this.app.workspace.revealLeaf(leaf);
+    void this.app.workspace.revealLeaf(leaf);
     const view = leaf.view;
     if (view instanceof DatabaseView) {
       view.openViewReference(this.currentSourcePath, config.id);
@@ -1976,7 +1976,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const config = this.config || this.getEmbeddedConfig();
     if (!config || !this.currentDbConfig) return;
     const dbConfig = this.currentDbConfig;
-    const options = await new CsvMarkdownExportModal(this.app).open();
+    const options = await new CsvMarkdownExportModal(this.app).openAndWait();
     if (!options) return;
     const getExportCellValue = (row: RowData, col: ColumnDef): string => {
       const value = isBaseFileField(col.key)
@@ -2136,7 +2136,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (firstRow) {
       const seen = new Set<string>();
       return Array.from(firstRow.children)
-        .filter((cell): cell is HTMLElement => cell instanceof HTMLElement && cell.matches("td[data-note-database-column-key]"))
+        .filter((cell): cell is HTMLElement => cell.instanceOf(HTMLElement) && cell.matches("td[data-note-database-column-key]"))
         .map((cell) => cell.dataset.noteDatabaseColumnKey)
         .filter((key): key is string => {
           if (!key || seen.has(key)) return false;

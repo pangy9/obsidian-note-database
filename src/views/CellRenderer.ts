@@ -197,8 +197,8 @@ export class CellRenderer {
     if (this.isReadOnly) {
       checkbox.disabled = true;
     } else if (col.type === "computed") {
-      // Use CSS instead of disabled so click/dblclick events still bubble to td
-      checkbox.style.pointerEvents = "none";
+      // Keep events bubbling to the cell so computed checkbox formulas are editable.
+      checkbox.addClass("db-computed-checkbox-preview");
       this.makeComputedEditable(td, col);
       return;
     }

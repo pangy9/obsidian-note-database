@@ -237,12 +237,12 @@ export class DataSource {
 
   /** Open a note in the workspace */
   openNote(file: TFile): void {
-    this.app.workspace.getLeaf(false)?.openFile(file);
+    void this.app.workspace.getLeaf(false)?.openFile(file);
   }
 
   /** Move a note to trash instead of deleting permanently. */
   async trashNote(file: TFile): Promise<void> {
-    await this.vault.trash(file, true);
+    await this.app.fileManager.trashFile(file);
   }
 
   fileExists(path: string): boolean {

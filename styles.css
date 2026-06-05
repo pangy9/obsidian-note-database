@@ -1575,6 +1575,10 @@
   stroke-width: 2;
 }
 
+.note-database-container .db-computed-checkbox-preview {
+  pointer-events: none;
+}
+
 .note-database-container .db-property-icon-text {
   font-size: 13px;
   font-weight: 600;

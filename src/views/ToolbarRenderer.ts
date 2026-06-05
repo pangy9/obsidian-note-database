@@ -8,7 +8,7 @@ import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 
-/** Safely append an SVG string to an element without using innerHTML. */
+/** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
   const doc = new DOMParser().parseFromString(svgString, "image/svg+xml");
   const svg = doc.querySelector("svg");

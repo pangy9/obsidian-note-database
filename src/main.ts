@@ -300,7 +300,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const bypassUntil = this.markdownDatabaseFileBypass.get(file.path) || 0;
     if (Date.now() < bypassUntil) return;
     if (!(await this.isDatabaseViewFile(file))) return;
-    const leaf = targetLeaf || this.app.workspace.activeLeaf;
+    const leaf = targetLeaf || this.app.workspace.getLeaf(false);
     if (!leaf || leaf.view.getViewType() === DATABASE_FILE_VIEW_TYPE) return;
     const leafFile = this.getLeafFile(leaf);
     if (leafFile instanceof TFile && leafFile.path !== file.path) return;
@@ -358,7 +358,7 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private async openDatabaseFileAsMarkdown(file: TFile): Promise<void> {
     this.markdownDatabaseFileBypass.set(file.path, Date.now() + 1000);
-    const leaf = this.app.workspace.activeLeaf || this.app.workspace.getLeaf("tab");
+    const leaf = this.app.workspace.getLeaf(false) || this.app.workspace.getLeaf("tab");
     await leaf.setViewState({
       type: "markdown",
       state: { file: file.path, mode: "source" },
@@ -370,7 +370,7 @@ export default class NoteDatabasePlugin extends Plugin {
   async openDashboard(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE);
     if (leaves.length > 0) {
-      this.app.workspace.revealLeaf(leaves[0]);
+      void this.app.workspace.revealLeaf(leaves[0]);
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");
@@ -478,7 +478,7 @@ export default class NoteDatabasePlugin extends Plugin {
     if (mapViewDowngraded) new Notice(t("notice.baseMapViewDowngraded"));
 
     // Show confirmation modal for column type review
-    const confirmed = await new BaseImportConfirmModal(this.app, inferredColumns).open();
+    const confirmed = await new BaseImportConfirmModal(this.app, inferredColumns).openAndWait();
     if (!confirmed) {
       new Notice(t("notice.importCancelled"));
       return;
@@ -557,7 +557,7 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   async importCsvMarkdownFiles(): Promise<void> {
-    const result = await new CsvMarkdownImportModal(this.app, this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder).open();
+    const result = await new CsvMarkdownImportModal(this.app, this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder).openAndWait();
     if (!result) return;
     const metadata = result.metadataFile ? await this.readCsvMarkdownMetadata(result.metadataFile) : null;
     await this.importFromCsvs(result, metadata);
@@ -655,7 +655,7 @@ export default class NoteDatabasePlugin extends Plugin {
           }).filter(Boolean);
           return { ...col, fileCount: values.length };
         });
-      const confirmed = await new BaseImportConfirmModal(this.app, inferColumns).open();
+      const confirmed = await new BaseImportConfirmModal(this.app, inferColumns).openAndWait();
       if (!confirmed) return;
       // Apply confirmed types back to columns and regenerate options
       for (const confirmedCol of confirmed) {
@@ -2397,7 +2397,7 @@ class CsvMarkdownImportModal extends Modal {
     super(app);
   }
 
-  open(): Promise<CsvMarkdownImportResult | null> {
+  openAndWait(): Promise<CsvMarkdownImportResult | null> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();

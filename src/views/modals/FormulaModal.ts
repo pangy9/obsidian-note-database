@@ -1012,7 +1012,7 @@ export class FormulaModal extends Modal {
     if (!this.textarea || !this.highlightEl) return;
     const html = this.highlightFormula(this.textarea.value || " ");
     const content = html.endsWith("\n") ? `${html} ` : html;
-    // Use DOMParser for safe HTML insertion instead of innerHTML/createContextualFragment
+    // Use DOMParser for safe HTML insertion instead of direct HTML fragment APIs.
     const doc = new DOMParser().parseFromString(content, "text/html");
     this.highlightEl.empty();
     while (doc.body.firstChild) {

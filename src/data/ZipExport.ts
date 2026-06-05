@@ -68,7 +68,9 @@ export function createStoredZip(entries: ZipEntry[]): ArrayBuffer {
   endView.setUint32(16, centralOffset, true);
 
   const bytes = concatUint8Arrays([...localParts, ...centralParts, end]);
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
 }
 
 function normalizeZipPath(path: string): string {

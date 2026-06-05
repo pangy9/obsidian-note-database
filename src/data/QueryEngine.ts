@@ -1,6 +1,7 @@
 import { getColumnOptionValues, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 import { compareMultiSelect } from "./MultiSelect";
+import { stringifyValue } from "./Stringify";
 import { ColumnDef, RowData, FilterRule, SortRule } from "./types";
 import { t } from "../i18n";
 
@@ -46,8 +47,8 @@ export class QueryEngine {
   private compareRowsByColumn(a: RowData, b: RowData, column: ColumnDef): number {
     if (column.type === "select" || column.type === "status") {
       return this.compareOptionValues(
-        String(this.getFieldValue(a, column.key) ?? ""),
-        String(this.getFieldValue(b, column.key) ?? ""),
+        stringifyValue(this.getFieldValue(a, column.key)),
+        stringifyValue(this.getFieldValue(b, column.key)),
         this.getComparableOptionValues(column)
       );
     }
@@ -153,19 +154,19 @@ export class QueryEngine {
     const val = this.getFieldValue(row, col.key);
     if (val == null) return "";
     if (col.type === "number" || col.type === "currency") {
-      return typeof val === "number" ? val : parseFloat(String(val)) || 0;
+      return typeof val === "number" ? val : parseFloat(stringifyValue(val)) || 0;
     }
     if (col.type === "date") {
       if (typeof val === "string") return val;
-      return String(val);
+      return stringifyValue(val);
     }
     if (col.type === "checkbox") {
       return val === true ? 1 : 0;
     }
     if (Array.isArray(val)) {
-      return val.map((item) => String(item)).join(", ");
+      return val.map((item) => stringifyValue(item)).join(", ");
     }
-    return String(val);
+    return stringifyValue(val);
   }
 
   private compareFilterValue(left: string, right: string, column?: ColumnDef): number {
@@ -188,8 +189,8 @@ export class QueryEngine {
   }
 
   private compareNumbers(left: string, right: string): number {
-    const a = Number(String(left).replace(/[^0-9.-]/g, ""));
-    const b = Number(String(right).replace(/[^0-9.-]/g, ""));
+    const a = Number(stringifyValue(left).replace(/[^0-9.-]/g, ""));
+    const b = Number(stringifyValue(right).replace(/[^0-9.-]/g, ""));
     if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN;
     return a - b;
   }
@@ -212,7 +213,7 @@ export class QueryEngine {
   }
 
   private parseDateValue(value: string): number {
-    const text = String(value || "").trim();
+    const text = stringifyValue(value).trim();
     if (!text) return Number.NaN;
     const match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
     if (match) {
@@ -223,15 +224,15 @@ export class QueryEngine {
   }
 
   private toBooleanRank(value: string): number {
-    return ["true", "1", "yes", "y", "✓", "checked"].includes(String(value).trim().toLowerCase()) ? 1 : 0;
+    return ["true", "1", "yes", "y", "✓", "checked"].includes(stringifyValue(value).trim().toLowerCase()) ? 1 : 0;
   }
 
   private getComparableValues(value: unknown): string[] {
     if (Array.isArray(value)) {
-      return value.map((item) => String(item)).filter((item) => item.length > 0);
+      return value.map((item) => stringifyValue(item)).filter((item) => item.length > 0);
     }
     if (value == null || value === "") return [];
-    return [String(value)];
+    return [stringifyValue(value)];
   }
 
   private getGroupKeys(value: unknown): string[] {

@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { stringifyValue } from "./Stringify";
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "./types";
 
 export const STATUS_OPTION_PRESETS: Array<{ key: string; label: string; options: StatusOptionDef[] }> = [
@@ -70,8 +71,8 @@ export function normalizeStatusPresets(presets: unknown, fallback: StatusPresetD
   for (const item of presets) {
     if (!item || typeof item !== "object") continue;
     const raw = item as Record<string, unknown>;
-    const name = String(raw["name"] ?? raw["label"] ?? "").trim();
-    const id = String(raw["id"] ?? raw["key"] ?? "").trim() || createStatusPresetId(name || "preset", normalized.length);
+    const name = stringifyValue(raw["name"] ?? raw["label"]).trim();
+    const id = stringifyValue(raw["id"] ?? raw["key"]).trim() || createStatusPresetId(name || "preset", normalized.length);
     const options = cloneStatusOptions(raw["options"] as StatusOptionDef[] | undefined);
     if (!name || options.length === 0 || seen.has(id)) continue;
     normalized.push({ id, name, options });
@@ -155,10 +156,10 @@ export function getDefaultCellValue(col: ColumnDef): unknown {
 
 export function toMultiSelectValues(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
+    return value.map((item) => stringifyValue(item).trim()).filter(Boolean);
   }
   if (value == null || value === "") return [];
-  return String(value)
+  return stringifyValue(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
@@ -169,7 +170,7 @@ export function isObsidianTagsKey(key: string): boolean {
 }
 
 export function normalizeObsidianTagValue(value: unknown): string {
-  return String(value ?? "").trim().replace(/^#/, "");
+  return stringifyValue(value).trim().replace(/^#/, "");
 }
 
 export function toObsidianTagValues(value: unknown): string[] {
@@ -177,7 +178,7 @@ export function toObsidianTagValues(value: unknown): string[] {
     ? value
     : value == null || value === ""
       ? []
-      : String(value).split(/[,\s]+/);
+      : stringifyValue(value).split(/[,\s]+/);
   const seen = new Set<string>();
   const values: string[] = [];
   for (const raw of rawValues) {
@@ -199,13 +200,13 @@ export function toMultiSelectValuesForKey(key: string, value: unknown): string[]
 }
 
 export function normalizeOptionValueForKey(key: string, value: unknown): string {
-  return isObsidianTagsKey(key) ? normalizeObsidianTagValue(value) : String(value ?? "").trim();
+  return isObsidianTagsKey(key) ? normalizeObsidianTagValue(value) : stringifyValue(value).trim();
 }
 
 export function toBooleanValue(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = stringifyValue(value).trim().toLowerCase();
   return ["true", "yes", "y", "1", "on", "checked", "是", "已勾选"].includes(normalized);
 }
 
@@ -216,7 +217,7 @@ export function createOptionsFromValues(values: unknown[]): StatusOptionDef[] {
     const parts = Array.isArray(value) ? value : [value];
     for (const part of parts) {
       if (part == null || part === "") continue;
-      const text = String(part).trim();
+      const text = stringifyValue(part).trim();
       if (!text || seen.has(text)) continue;
       seen.add(text);
       options.push({ value: text, color: OPTION_COLORS[options.length % OPTION_COLORS.length] });

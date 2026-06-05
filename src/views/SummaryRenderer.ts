@@ -1,5 +1,6 @@
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "../data/types";
 import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { stringifyValue } from "../data/Stringify";
 import { t } from "../i18n";
 
 export class SummaryRenderer {
@@ -161,7 +162,7 @@ export class SummaryRenderer {
       if (Math.abs(value) >= 86400000 && value % 86400000 === 0) return `${value / 86400000}d`;
       return Number.isInteger(value) ? String(value) : String(Math.round(value * 1000) / 1000);
     }
-    return String(value ?? "");
+    return stringifyValue(value);
   }
 
   private isEmpty(value: unknown): boolean {
@@ -203,7 +204,7 @@ export class SummaryRenderer {
     const result: string[] = [];
     const seen = new Set<string>();
     for (const value of values) {
-      const text = Array.isArray(value) ? value.map((item) => String(item ?? "")).join(", ") : String(value ?? "");
+      const text = Array.isArray(value) ? value.map((item) => stringifyValue(item)).join(", ") : stringifyValue(value);
       if (!text || seen.has(text)) continue;
       seen.add(text);
       result.push(text);

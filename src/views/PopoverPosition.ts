@@ -20,7 +20,8 @@ export function positionToolbarPopover(
   const minWidth = options.minWidth ?? 160;
   const preferredWidth = options.preferredWidth ?? 520;
   const maxPreferredWidth = options.maxWidth ?? preferredWidth;
-  const container = panel.closest(".note-database-container") as HTMLElement | null;
+  const rawContainer = panel.closest(".note-database-container");
+  const container = isHTMLElement(rawContainer) ? rawContainer : null;
 
   panel.addClass("db-anchored-popover");
   panel.setCssProps({

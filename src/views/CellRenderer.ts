@@ -14,6 +14,7 @@ import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
 import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./FileTitleDisplay";
 import { isHTMLElement } from "./DomGuards";
+import { safeString } from "../data/SafeString";
 import { confirmWithModal } from "./modals/ConfirmModal";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
@@ -345,7 +346,8 @@ export class CellRenderer {
     multiple: boolean,
     anchorPoint?: { x: number; y: number }
   ): void {
-    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const rawContainer = td.closest(".note-database-container");
+    const container = isHTMLElement(rawContainer) ? rawContainer : null;
     const host = container || window.activeDocument.body;
     host.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
     const originalValues = multiple
@@ -720,7 +722,7 @@ export class CellRenderer {
     currentValue: unknown,
     origText: string
   ): void {
-    this.editSingleLinePopover(td, String(currentValue ?? ""), "number", async (inputValue) => {
+    this.editSingleLinePopover(td, safeString(currentValue), "number", async (inputValue) => {
       const raw = inputValue;
       const newVal = raw ? parseFloat(raw) : "";
       if (String(newVal) !== String(currentValue)) {
@@ -745,7 +747,7 @@ export class CellRenderer {
     this.addTransientClass(td, "db-cell-editing", 1600);
     td.textContent = "";
 
-    const parts = String(currentValue ?? "").substring(0, 10).split("-");
+    const parts = safeString(currentValue).substring(0, 10).split("-");
     const initYear = parts[0] || "";
     const initMonth = parts[1] || "";
     const initDay = parts[2] || "";
@@ -777,7 +779,7 @@ export class CellRenderer {
       const rawD = dayInp.value;
       const allEmpty = !y && !rawM && !rawD;
       if (allEmpty) {
-        if (String(currentValue ?? "").substring(0, 10)) {
+        if (safeString(currentValue).substring(0, 10)) {
           await this.saveValue(row, col, null);
         } else {
           restore();
@@ -799,7 +801,7 @@ export class CellRenderer {
       const maxD = daysInMonth(yr, m);
       const clampedD = Math.min(Math.max(d, 1), maxD);
       const newVal = `${y}-${pad2(String(m))}-${pad2(String(clampedD))}`;
-      if (newVal !== String(currentValue ?? "").substring(0, 10)) {
+      if (newVal !== safeString(currentValue).substring(0, 10)) {
         await this.saveValue(row, col, newVal);
       } else {
         restore();
@@ -889,14 +891,15 @@ export class CellRenderer {
     col: ColumnDef,
     currentValue: unknown,
   ): void {
-    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const rawContainer = td.closest(".note-database-container");
+    const container = isHTMLElement(rawContainer) ? rawContainer : null;
     const isMobile = Platform.isMobile || window.activeDocument.body.classList.contains("is-phone");
     const host = isMobile ? null : (container || window.activeDocument.body);
 
     this.activeTextEditClose?.();
     td.addClass("db-cell-editing");
 
-    const parts = String(currentValue ?? "").substring(0, 10).split("-");
+    const parts = safeString(currentValue).substring(0, 10).split("-");
     const initYear = parts[0] || "";
     const initMonth = parts[1] || "";
     const initDay = parts[2] || "";
@@ -963,7 +966,7 @@ export class CellRenderer {
       const rawD = dayInp.value;
       const allEmpty = !y && !rawM && !rawD;
       if (allEmpty) {
-        if (String(currentValue ?? "").substring(0, 10)) {
+        if (safeString(currentValue).substring(0, 10)) {
           await this.saveValue(row, col, null);
         }
         close();
@@ -981,7 +984,7 @@ export class CellRenderer {
         new Notice(t("cell.invalidDate"));
       }
       const newVal = `${y}-${pad2(String(clampedM))}-${pad2(String(clampedD))}`;
-      if (newVal !== String(currentValue ?? "").substring(0, 10)) {
+      if (newVal !== safeString(currentValue).substring(0, 10)) {
         await this.saveValue(row, col, newVal);
       }
       close();
@@ -1119,7 +1122,7 @@ export class CellRenderer {
     currentValue: unknown,
     origText: string
   ): void {
-    const valueText = String(currentValue ?? "");
+    const valueText = safeString(currentValue);
     if (this.shouldUsePopoverEditor(td, col, valueText)) {
       this.editTextPopover(td, row, col, valueText);
       return;
@@ -1136,7 +1139,7 @@ export class CellRenderer {
       if (committed) return;
       committed = true;
       const newVal = inp.value;
-      if (newVal !== String(currentValue ?? "")) {
+      if (newVal !== safeString(currentValue)) {
         await this.saveValue(row, col, newVal);
       } else {
         this.restoreTextDisplay(td, currentValue, origText);
@@ -1158,7 +1161,8 @@ export class CellRenderer {
     col: ColumnDef,
     currentValue: string
   ): void {
-    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const rawContainer = td.closest(".note-database-container");
+    const container = isHTMLElement(rawContainer) ? rawContainer : null;
     const isMobile = Platform.isMobile || window.activeDocument.body.classList.contains("is-phone");
     const host = isMobile ? null : (container || window.activeDocument.body);
 
@@ -1335,7 +1339,7 @@ export class CellRenderer {
   }
 
   private restoreTextDisplay(td: HTMLElement, currentValue: unknown, origText: string): void {
-    td.textContent = origText || String(currentValue ?? "");
+    td.textContent = origText || safeString(currentValue);
   }
 
   private shouldUsePopoverEditor(_target: HTMLElement, col: ColumnDef, _value: string): boolean {
@@ -1349,7 +1353,8 @@ export class CellRenderer {
     saveValue: (value: string) => Promise<void>,
     restore: () => void
   ): void {
-    const container = td.closest(".note-database-container") as HTMLElement | null;
+    const rawContainer = td.closest(".note-database-container");
+    const container = isHTMLElement(rawContainer) ? rawContainer : null;
     const host = container || window.activeDocument.body;
     this.activeTextEditClose?.();
     td.addClass("db-cell-popover-editing");

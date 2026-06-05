@@ -69,11 +69,30 @@ import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { isHTMLElement } from "./DomGuards";
+import { safeString } from "../data/SafeString";
 import { positionToolbarPopover } from "./PopoverPosition";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 
 export const DATABASE_VIEW_TYPE = "note-database-view";
+
+/**
+ * Safely retrieve the NoteDatabasePlugin instance from the Obsidian app registry.
+ * Returns null if the plugin is not loaded (e.g. during hot-reload or tests).
+ */
+interface NoteDatabasePluginLike {
+  settings: import("../data/types").PluginSettings;
+  saveSettings(): Promise<void>;
+}
+
+function getNoteDatabasePlugin(app: App): NoteDatabasePluginLike | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+  const instance = plugins?.plugins?.["note-database"];
+  if (instance && typeof (instance as NoteDatabasePluginLike).saveSettings === "function") {
+    return instance as NoteDatabasePluginLike;
+  }
+  return null;
+}
 
 interface FillTarget {
   row: RowData;
@@ -894,7 +913,7 @@ export class DatabaseView extends ItemView {
     if (!this.containerEl_) return;
     const update = () => {
       if (!this.containerEl_) return;
-      const header = this.containerEl_.querySelector(":scope > .db-header") as HTMLElement | null;
+      const header = this.containerEl_.querySelector(":scope > .db-header");
       const height = header ? Math.ceil(header.getBoundingClientRect().height) : 96;
       this.containerEl_.style.setProperty("--db-table-header-top", `${height}px`);
     };
@@ -1549,7 +1568,7 @@ export class DatabaseView extends ItemView {
       for (const [key, label] of allKeys) {
         if (key === "file.name") continue;
         const type = inferColumnType(key, sampleValues.get(key) || []);
-        const col: any = { key, label, type };
+        const col: BaseImportColumn = { key, label, type, fileCount: fileCounts.get(key) || 0 };
 
         // Pre-populate options for option-based types
         if (type === "multi-select" && isObsidianTagsKey(key)) {
@@ -1578,7 +1597,7 @@ export class DatabaseView extends ItemView {
           }
         }
 
-        inferredColumns.push({ ...col, fileCount: fileCounts.get(key) || 0 });
+        inferredColumns.push(col);
       }
 
       const confirmed = await new BaseImportConfirmModal(
@@ -1603,7 +1622,7 @@ export class DatabaseView extends ItemView {
             }));
           }
         }
-        columns.push({ key: col.key, label: col.label || col.key, type: col.type, statusOptions: (col as any).statusOptions });
+        columns.push({ key: col.key, label: col.label || col.key, type: col.type, statusOptions: col.statusOptions });
       }
     } else {
       // No frontmatter found
@@ -1703,9 +1722,9 @@ export class DatabaseView extends ItemView {
 
     // Both actions remove the live database file. Plugin trash additionally keeps a restorable snapshot.
     const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
-    if (file) {
+    if (file && file instanceof TFile) {
       try {
-        await this.dataSource.trashNote(file as any);
+        await this.dataSource.trashNote(file);
       } catch (e) {
         new Notice(t("errors.deleteFailed", { error: String(e) }));
         return;
@@ -1715,11 +1734,11 @@ export class DatabaseView extends ItemView {
     // Move to plugin trash or system trash
     if (result.action === "plugin-trash") {
       // Store in plugin settings trashedDatabases
-      const plugin = (this.app as any).plugins?.plugins?.["note-database"];
-      if (plugin?.settings) {
+      const plugin = getNoteDatabasePlugin(this.app);
+      if (plugin) {
         if (!plugin.settings.trashedDatabases) plugin.settings.trashedDatabases = [];
         plugin.settings.trashedDatabases.push({
-          database: JSON.parse(JSON.stringify(db)),
+          database: JSON.parse(JSON.stringify(db)) as DatabaseConfig,
           deletedAt: Date.now(),
         });
         try {
@@ -1777,7 +1796,7 @@ export class DatabaseView extends ItemView {
       if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
       if (Array.isArray(value)) return value.map((v) => String(v)).join(", ");
       if (typeof value === "boolean") return value ? "✓" : "";
-      return String(value);
+      return safeString(value);
     };
 
     let content: string;
@@ -1823,11 +1842,11 @@ export class DatabaseView extends ItemView {
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
     if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
     if (typeof value === "boolean") return value ? "true" : "false";
-    return String(value);
+    return safeString(value);
   }
 
   private csvEscape(value: string): string {
-    return `"${String(value ?? "").replace(/"/g, '""')}"`;
+    return `"${safeString(value).replace(/"/g, '""')}"`;
   }
 
   private stripFrontmatter(content: string): string {
@@ -2514,17 +2533,17 @@ export class DatabaseView extends ItemView {
   private updateDatabaseChrome(): void {
     if (!this.containerEl_) return;
     const db = this.getActiveDb();
-    const heading = this.containerEl_.querySelector(":scope > .db-header .db-heading") as HTMLElement | null;
+    const heading = this.containerEl_.querySelector(":scope > .db-header .db-heading");
     if (heading) {
       const name = db?.name || t("common.untitledDatabase");
-      const headingText = heading.querySelector(".db-heading-text") as HTMLElement | null;
+      const headingText = heading.querySelector(".db-heading-text");
       if (headingText) headingText.textContent = name;
       else heading.textContent = name;
       heading.setAttribute("title", name);
     }
-    const header = this.containerEl_.querySelector(":scope > .db-header") as HTMLElement | null;
+    const header = this.containerEl_.querySelector(":scope > .db-header");
     if (!header) return;
-    const existing = header.querySelector(".db-description") as HTMLElement | null;
+    const existing = header.querySelector(".db-description");
     const desc = existing || header.createDiv({ cls: "db-description" });
     const description = db?.description || "";
     const placeholder = t("viewConfig.descriptionPlaceholder");
@@ -2750,7 +2769,7 @@ export class DatabaseView extends ItemView {
         if (this.areCellValuesEqual(values, normalized)) continue;
         newValue = normalized;
       } else {
-        const current = String(oldValue ?? "");
+        const current = safeString(oldValue);
         if (renameMap.has(current)) {
           newValue = renameMap.get(current) || current;
         } else if (removedValues.has(current)) {
@@ -2831,7 +2850,7 @@ export class DatabaseView extends ItemView {
     const computedField = config.schema.computedFields.find((field) => field.key === computedKey);
     const baseThisFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
     const baseThisFrontmatter = baseThisFile instanceof TFile
-      ? this.app.metadataCache.getFileCache(baseThisFile)?.frontmatter as Record<string, unknown> | undefined
+      ? this.app.metadataCache.getFileCache(baseThisFile)?.frontmatter
       : undefined;
     new FormulaModal(this.app, col, computedField, this.rows, config.schema.columns, normalizeComputedSyncMode(entry.config.computedSyncMode), async (result) => {
       await this.saveFormula(entry, config, col, result);
@@ -3437,7 +3456,7 @@ export class DatabaseView extends ItemView {
     if (typeof value === "number") return !Number.isFinite(value);
     if (Array.isArray(value)) return value.length === 0;
     if (value instanceof Date) return !Number.isFinite(value.getTime());
-    if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+    if (value && typeof value === "object") return Object.keys(value).length === 0;
     return false;
   }
 
@@ -3454,7 +3473,7 @@ export class DatabaseView extends ItemView {
       if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate === rightDate;
     }
     if (rule.valueType) return sourceRuleValuesLooseEqual(value, rule);
-    return String(value ?? "") === expected;
+    return safeString(value) === expected;
   }
 
   private shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {
@@ -3815,8 +3834,8 @@ export class DatabaseView extends ItemView {
     const rows = Array.from(tbody.querySelectorAll<HTMLElement>("tr[data-note-database-row-path]"));
     const sourceRow = sourceCell.closest("tr");
     const targetRow = targetCell.closest("tr");
-    const sourceIndex = sourceRow ? rows.indexOf(sourceRow as HTMLElement) : -1;
-    const targetIndex = targetRow ? rows.indexOf(targetRow as HTMLElement) : -1;
+    const sourceIndex = sourceRow ? rows.indexOf(sourceRow) : -1;
+    const targetIndex = targetRow ? rows.indexOf(targetRow) : -1;
     if (sourceIndex < 0 || targetIndex < 0) return [];
 
     const firstRow = rows[0];
@@ -3881,7 +3900,7 @@ export class DatabaseView extends ItemView {
   }
 
   private cloneFillValue(value: unknown): unknown {
-    if (Array.isArray(value)) return [...value];
+    if (Array.isArray(value)) return [...(value as unknown[])];
     if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
     return value;
   }
@@ -3898,7 +3917,7 @@ export class DatabaseView extends ItemView {
   }
 
   private normalizeFrontmatterValueChange(change: FrontmatterValueChange): CellEditChange {
-    return this.cloneCellChange(change as CellEditChange);
+    return this.cloneCellChange(change);
   }
 
   private async applyFrontmatterChanges(changes: CellEditChange[], direction: "old" | "new"): Promise<void> {
@@ -4795,10 +4814,10 @@ export class DatabaseView extends ItemView {
       try {
         return JSON.stringify(value);
       } catch {
-        return String(value);
+        return safeString(value);
       }
     }
-    return String(value);
+    return safeString(value);
   }
 
   /** Refresh after waiting for metadata cache to catch up */
@@ -4837,7 +4856,7 @@ export class DatabaseView extends ItemView {
       const key = getComputedStorageKey(col);
       const value = computed[key];
       const nextValue = value == null ? "" : value;
-      if (String(frontmatter[key] ?? "") !== String(nextValue ?? "")) {
+      if (safeString(frontmatter[key]) !== safeString(nextValue)) {
         updates[key] = nextValue;
       }
     }
@@ -4898,7 +4917,7 @@ export class DatabaseView extends ItemView {
           const key = getComputedStorageKey(col);
           const value = computed[key];
           const nextValue = value == null ? "" : value;
-          if (String(record.frontmatter[key] ?? "") !== String(nextValue ?? "")) {
+          if (safeString(record.frontmatter[key]) !== safeString(nextValue)) {
             updates[key] = nextValue;
           }
         }
@@ -4930,7 +4949,7 @@ export class DatabaseView extends ItemView {
       file,
       thisFile: thisFile instanceof TFile ? thisFile : undefined,
       thisFrontmatter: thisFile instanceof TFile
-        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter
         : undefined,
     };
   }
@@ -4987,9 +5006,9 @@ function compareScalarSourceRuleValue(value: unknown, expected: string, preferDa
     ? value.getTime()
     : typeof value === "number" && Number.isFinite(rightDate)
       ? value
-      : Date.parse(String(value));
+      : Date.parse(safeString(value));
   if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
-  return String(value ?? "").localeCompare(expected);
+  return safeString(value).localeCompare(expected);
 }
 
 function shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {

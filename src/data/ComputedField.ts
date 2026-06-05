@@ -1,8 +1,10 @@
 import { ColumnDef, ComputedFieldDef } from "./types";
 import { safeEval } from "./SafeEval";
+import { safeString } from "./SafeString";
+import type { MomentConstructor, MomentLike } from "./MomentTypes";
 import { t } from "../i18n";
 
-declare const moment: any;
+declare const moment: MomentConstructor;
 
 export interface ComputedFieldEvaluationResult {
   value: unknown;
@@ -13,7 +15,7 @@ export interface ComputedFieldEvaluationResult {
  * Parse a date string with strict ISO_8601 first, then fallback formats.
  * This allows frontmatter dates in YYYY-MM-DD, YYYY/MM/DD, or YYYY年M月D日.
  */
-function parseMoment(value: string): any {
+function parseMoment(value: string): MomentLike | null {
   if (value == null) return null;
   const m = moment(value, moment.ISO_8601, true);
   if (m.isValid()) return m;
@@ -206,30 +208,30 @@ export class ComputedFieldEngine {
       },
       concat: (...args: string[]) => args.filter(a => a != null).join(""),
       // String functions
-      trim: (s: unknown) => (s != null ? String(s).trim() : ""),
-      upper: (s: unknown) => (s != null ? String(s).toUpperCase() : ""),
-      lower: (s: unknown) => (s != null ? String(s).toLowerCase() : ""),
+      trim: (s: unknown) => (s != null ? safeString(s).trim() : ""),
+      upper: (s: unknown) => (s != null ? safeString(s).toUpperCase() : ""),
+      lower: (s: unknown) => (s != null ? safeString(s).toLowerCase() : ""),
       proper: (s: unknown) => {
         if (s == null) return "";
-        return String(s).replace(/\b\w/g, (c) => c.toUpperCase());
+        return safeString(s).replace(/\b\w/g, (c) => c.toUpperCase());
       },
-      len: (s: unknown) => (s != null ? String(s).length : 0),
+      len: (s: unknown) => (s != null ? safeString(s).length : 0),
       contains: (s: unknown, sub: unknown) => {
         if (s == null || sub == null) return false;
-        return String(s).includes(String(sub));
+        return safeString(s).includes(safeString(sub));
       },
       startsWith: (s: unknown, prefix: unknown) => {
         if (s == null || prefix == null) return false;
-        return String(s).startsWith(String(prefix));
+        return safeString(s).startsWith(safeString(prefix));
       },
       endsWith: (s: unknown, suffix: unknown) => {
         if (s == null || suffix == null) return false;
-        return String(s).endsWith(String(suffix));
+        return safeString(s).endsWith(safeString(suffix));
       },
       replace: (s: unknown, find: unknown, repl: unknown) => {
         if (s == null) return "";
-        if (find == null) return String(s);
-        return String(s).split(String(find)).join(String(repl ?? ""));
+        if (find == null) return safeString(s);
+        return safeString(s).split(safeString(find)).join(safeString(repl));
       },
       // Date functions
       eomonth: (d: string, n: number) => {
@@ -301,13 +303,13 @@ export class ComputedFieldEngine {
       UPPER: context.upper,
       LOWER: context.lower,
       PROPER: context.proper,
-      LEFT: (value: unknown, count = 1) => String(value ?? "").slice(0, Number(count)),
-      RIGHT: (value: unknown, count = 1) => String(value ?? "").slice(-Number(count)),
+      LEFT: (value: unknown, count = 1) => safeString(value).slice(0, Number(count)),
+      RIGHT: (value: unknown, count = 1) => safeString(value).slice(-Number(count)),
       MID: (value: unknown, start = 1, count = 1) =>
-        String(value ?? "").slice(Number(start) - 1, Number(start) - 1 + Number(count)),
-      FIND: (find: unknown, value: unknown) => String(value ?? "").indexOf(String(find ?? "")) + 1,
+        safeString(value).slice(Number(start) - 1, Number(start) - 1 + Number(count)),
+      FIND: (find: unknown, value: unknown) => safeString(value).indexOf(safeString(find)) + 1,
       SEARCH: (find: unknown, value: unknown) =>
-        String(value ?? "").toLowerCase().indexOf(String(find ?? "").toLowerCase()) + 1,
+        safeString(value).toLowerCase().indexOf(safeString(find).toLowerCase()) + 1,
       SUBSTITUTE: context.replace,
       CONTAINS: context.contains,
       STARTSWITH: context.startsWith,
@@ -448,7 +450,7 @@ export class ComputedFieldEngine {
   }
 
   private formatEvaluationError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error || "");
+    const message = error instanceof Error ? error.message : safeString(error);
     const errorName = error instanceof Error ? error.constructor.name : "";
 
     // Undefined variable/field
@@ -539,7 +541,7 @@ export class ComputedFieldEngine {
     if (date == null) return "";
     const md = parseMoment(date);
     if (!md) return "";
-    const normalizedUnit = String(unit || "days").toLowerCase();
+    const normalizedUnit = safeString(unit, "days").toLowerCase();
     const safeUnit = normalizedUnit.startsWith("month")
       ? "months"
       : normalizedUnit.startsWith("year")
@@ -559,17 +561,17 @@ export class ComputedFieldEngine {
       const decimals = format.includes(".") ? format.split(".")[1].length : 0;
       return num.toFixed(decimals);
     }
-    return String(value);
+    return safeString(value);
   }
 
   private countIf(values: unknown, criterion: unknown): number {
     const items = Array.isArray(values) ? values : [values];
-    const rule = String(criterion ?? "");
+    const rule = safeString(criterion);
     return items.filter((item) => this.matchesCriterion(item, rule)).length;
   }
 
   private matchesCriterion(value: unknown, criterion: string): boolean {
-    const text = String(value ?? "");
+    const text = safeString(value);
     const num = Number(value);
     const match = criterion.match(/^(>=|<=|<>|>|<|=)(.*)$/);
     if (!match) return text === criterion;

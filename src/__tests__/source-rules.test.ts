@@ -17,7 +17,7 @@ describe("SourceRules", () => {
       ],
     };
 
-    expect(combineSourceRuleTrees(tree, JSON.parse(JSON.stringify(tree)))).toEqual(tree);
+    expect(combineSourceRuleTrees(tree, JSON.parse(JSON.stringify(tree)) as SourceRuleNode)).toEqual(tree);
   });
 
   it("updates expression field references without changing string literals", () => {

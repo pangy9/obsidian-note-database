@@ -20,6 +20,31 @@ import { setLocale, t } from "./i18n";
 import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { BASE_FILE_FIELD_KEYS, getFileFieldValue, isBaseFileField } from "./data/FileFields";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
+import { safeString, isRecord } from "./data/SafeString";
+
+/** Parsed view data from a .base file */
+interface BaseFileViewData {
+  type: string;
+  name: string;
+  order: string[];
+  sort: Array<{ property: string; direction: string }>;
+  columnSize: Record<string, number>;
+  groupBy?: { property: string; direction: string };
+  image?: string;
+  imageAspectRatio?: number;
+  cardSize?: number;
+  imageFit?: "cover" | "contain";
+  limit?: number;
+  summaries?: Record<string, string>;
+  sourceRuleTree?: SourceRuleNode;
+  sourceRules?: NonNullable<ViewConfig["sourceRules"]>;
+  sourceLogic?: "and" | "or";
+  unsupportedFilters?: boolean;
+  coordinates?: string;
+  markerIcon?: string;
+  markerColor?: string;
+  [key: string]: unknown;
+}
 
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
@@ -43,19 +68,21 @@ export default class NoteDatabasePlugin extends Plugin {
   async onload(): Promise<void> {
     // Load and migrate settings with defensive fallback
     try {
-      const loaded = await this.loadData();
-      if (loaded && typeof loaded === "object" && !Array.isArray(loaded)) {
-        const rawSettings = Object.assign(createDefaultSettings(), loaded);
+      const loaded: unknown = await this.loadData();
+      if (isRecord(loaded)) {
+        const rawSettings = Object.assign(createDefaultSettings(), loaded as Partial<PluginSettings>);
+        const rawSettingsRecord = rawSettings as unknown as Record<string, unknown>;
 
         // Migrate old format: settings.views[] → settings.databases[]
-        if (Array.isArray(rawSettings.views) && !rawSettings.databases) {
-          rawSettings.databases = (rawSettings.views as any[]).map((v: any, i: number) => {
+        const rawViews = loaded["views"];
+        if (Array.isArray(rawViews) && !rawSettingsRecord["databases"]) {
+          rawSettingsRecord["databases"] = rawViews.map((v: unknown, i: number) => {
             const defaultView = DEFAULT_SETTINGS.databases[i];
-            if (!v || typeof v !== "object") return defaultView || this.createFallbackDatabase();
+            if (!isRecord(v)) return defaultView || this.createFallbackDatabase();
             // Sanitize the view config
-            if (!v.schema) v.schema = defaultView?.schema || { columns: [], computedFields: [] };
-            if (!v.schema.columns) v.schema.columns = defaultView?.schema?.columns || [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }];
-            if (!v.schema.computedFields) v.schema.computedFields = [];
+            const schema = v.schema && isRecord(v.schema) ? v.schema : defaultView?.schema || { columns: [], computedFields: [] };
+            if (!isRecord(schema) || !schema.columns) schema.columns = defaultView?.schema?.columns || [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }];
+            if (!isRecord(schema) || !schema.computedFields) schema.computedFields = [];
             if (v.columnOrder != null && !Array.isArray(v.columnOrder)) v.columnOrder = undefined;
             if (v.hiddenColumns != null && !Array.isArray(v.hiddenColumns)) v.hiddenColumns = undefined;
             if (v.filters != null && !Array.isArray(v.filters)) v.filters = undefined;
@@ -63,62 +90,65 @@ export default class NoteDatabasePlugin extends Plugin {
             if (!v.name) v.name = `${t("common.database")} ${i + 1}`;
             if (v.viewType !== "board" && v.viewType !== "gallery" && v.viewType !== "list") v.viewType = "table";
             // Wrap as DatabaseConfig with one ViewConfig child
-            const viewCopy = { ...v, id: v.id || generateId() };
+            const viewCopy = { ...v, id: (v.id as string) || generateId() };
             return {
               id: generateId(),
-              name: v.name,
-              description: v.description,
-              sourceFolder: v.sourceFolder || "",
-              sourceRules: v.sourceRules,
-              sourceLogic: v.sourceLogic,
-              sourceRuleTree: v.sourceRuleTree,
-              newRecordFolder: v.newRecordFolder,
-              typeFilter: v.typeFilter,
-              schema: v.schema,
-              views: [viewCopy],
+              name: v.name as string,
+              description: v.description as string | undefined,
+              sourceFolder: (v.sourceFolder as string) || "",
+              sourceRules: v.sourceRules as NonNullable<ViewConfig["sourceRules"]> | undefined,
+              sourceLogic: v.sourceLogic as "and" | "or" | undefined,
+              sourceRuleTree: v.sourceRuleTree as SourceRuleNode | undefined,
+              newRecordFolder: v.newRecordFolder as string | undefined,
+              typeFilter: v.typeFilter as string[] | undefined,
+              schema: schema as DatabaseConfig["schema"],
+              views: [viewCopy as unknown as ViewConfig],
             } as DatabaseConfig;
           });
-          delete (rawSettings as any).views;
+          delete (rawSettings as unknown as Record<string, unknown>)["views"];
         }
 
         // Sanitize databases array
-        if (Array.isArray(rawSettings.databases)) {
-          rawSettings.databases = rawSettings.databases.map((db: any) => {
-            if (!db || typeof db !== "object") return this.createFallbackDatabase();
+        if (Array.isArray(rawSettingsRecord["databases"])) {
+          rawSettingsRecord["databases"] = rawSettingsRecord["databases"].map((db: unknown) => {
+            if (!isRecord(db)) return this.createFallbackDatabase();
             if (!db.id) db.id = generateId();
-            if (db.description != null) db.description = String(db.description);
-            if (!db.views || !Array.isArray(db.views) || db.views.length === 0) {
-              db.views = [this.createDefaultView(db)];
+            if (db.description != null) db.description = safeString(db.description);
+            if (!db.views || !Array.isArray(db.views) || (db.views as unknown[]).length === 0) {
+              db.views = [this.createDefaultView(db as unknown as DatabaseConfig)];
             }
-            if (!db.schema) db.schema = db.views[0]?.schema || { columns: [], computedFields: [] };
-            for (const view of db.views) {
-              if (!view || typeof view !== "object") continue;
+            const dbViews = db.views as unknown[];
+            if (!db.schema) db.schema = (isRecord(dbViews[0]) ? dbViews[0].schema : undefined) || { columns: [], computedFields: [] };
+            for (const view of dbViews) {
+              if (!isRecord(view)) continue;
               if (view.viewType !== "board" && view.viewType !== "gallery" && view.viewType !== "list") view.viewType = "table";
             }
-            return db;
+            return db as unknown as DatabaseConfig;
           });
         }
 
         // Re-establish shared schema references broken by JSON round-trip.
         // All views within a database must point to the same schema object.
-        if (Array.isArray(rawSettings.databases)) {
-          linkDatabaseSchemas(rawSettings.databases);
+        if (Array.isArray(rawSettingsRecord["databases"])) {
+          linkDatabaseSchemas(rawSettingsRecord["databases"] as DatabaseConfig[]);
         }
 
         if (!rawSettings.databaseFolder) rawSettings.databaseFolder = DEFAULT_SETTINGS.databaseFolder;
         if (!Array.isArray(rawSettings.databaseFileOrder)) rawSettings.databaseFileOrder = [];
         rawSettings.statusPresets = normalizeStatusPresets(rawSettings.statusPresets);
         rawSettings.defaultStatusPresetId = resolveDefaultStatusPresetId(rawSettings.statusPresets, rawSettings.defaultStatusPresetId);
-        if (Array.isArray(rawSettings.databases)) {
-          for (const db of rawSettings.databases) {
-            db.statusPresets = normalizeStatusPresets(db.statusPresets || [], []);
-            const mergedPresets = [...rawSettings.statusPresets, ...db.statusPresets];
+        if (Array.isArray(rawSettingsRecord["databases"])) {
+          for (const db of rawSettingsRecord["databases"] as DatabaseConfig[]) {
+            const dbPresets = normalizeStatusPresets(db.statusPresets || [], []);
+            db.statusPresets = dbPresets;
+            const mergedPresets = [...rawSettings.statusPresets, ...dbPresets];
             db.defaultStatusPresetId = db.defaultStatusPresetId
               ? resolveDefaultStatusPresetId(mergedPresets, db.defaultStatusPresetId)
               : undefined;
             for (const view of db.views || []) {
-              view.statusPresets = normalizeStatusPresets(view.statusPresets || [], []);
-              const viewMergedPresets = [...mergedPresets, ...view.statusPresets];
+              const viewPresets = normalizeStatusPresets(view.statusPresets || [], []);
+              view.statusPresets = viewPresets;
+              const viewMergedPresets = [...mergedPresets, ...viewPresets];
               view.defaultStatusPresetId = view.defaultStatusPresetId
                 ? resolveDefaultStatusPresetId(viewMergedPresets, view.defaultStatusPresetId)
                 : undefined;
@@ -167,7 +197,8 @@ export default class NoteDatabasePlugin extends Plugin {
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFilesInExplorer();
       // Migrate legacy settings-based databases to files
-      if (!this.settings.databasesMigrated && Array.isArray(this.settings.databases) && this.settings.databases.length > 0) {
+      const legacyDatabases = this.getLegacySettingsDatabases();
+      if (!this.settings.databasesMigrated && legacyDatabases.length > 0) {
         void this.migrateDatabasesToFiles();
       }
     });
@@ -191,7 +222,7 @@ export default class NoteDatabasePlugin extends Plugin {
       DATABASE_FILE_VIEW_TYPE,
       (leaf: WorkspaceLeaf) => {
         const state = leaf.getViewState();
-        const filePath = (state.state as any)?.file as string || "";
+        const filePath = (state.state as Record<string, unknown>)?.file as string || "";
         const file = filePath ? this.app.vault.getAbstractFileByPath(filePath) : null;
         let configs: DatabaseConfig[] = [];
         if (file instanceof TFile) {
@@ -329,7 +360,7 @@ export default class NoteDatabasePlugin extends Plugin {
   private getDatabaseFileConfig(file: TFile): DatabaseConfig | null {
     const cached = this.databaseFileConfigCache.get(file.path);
     if (cached) return cached;
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
     if (fm?.db_view !== true) return null;
     const config = this.dataSource.parseDatabaseConfig(fm);
     if (config) this.databaseFileConfigCache.set(file.path, config);
@@ -341,7 +372,7 @@ export default class NoteDatabasePlugin extends Plugin {
       const content = await this.app.vault.cachedRead(file);
       const match = content.match(/^\uFEFF?---\s*\n([\s\S]*?)\n---(?:\n|$)/);
       if (!match) return null;
-      const parsed = parseYaml(match[1]);
+      const parsed: unknown = parseYaml(match[1]);
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed as Record<string, unknown>
         : null;
@@ -403,7 +434,9 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   refreshCommandNames(): void {
-    const commands = (this.app as any).commands?.commands as Record<string, { name?: string }> | undefined;
+    type AppCommands = { commands?: Record<string, { name?: string }> };
+    const appInternal = this.app as unknown as { commands?: AppCommands };
+    const commands = appInternal.commands?.commands;
     if (!commands) return;
     for (const [commandId, key] of Object.entries(this.commandNameKeys)) {
       const command = commands[`${this.manifest.id}:${commandId}`];
@@ -418,10 +451,12 @@ export default class NoteDatabasePlugin extends Plugin {
 
   showDatabaseFiles(): void {
     // 打开插件设置界面，定位到数据库列表分组
-    const setting = (this.app as any).setting;
+    type AppSetting = { open?: () => void; openTabById?: (id: string) => void };
+    const appInternal = this.app as unknown as { setting?: AppSetting };
+    const setting = appInternal.setting;
     if (setting) {
-      setting.open();
-      setting.openTabById(this.manifest.id);
+      setting.open?.();
+      setting.openTabById?.(this.manifest.id);
       // 等待 DOM 渲染后滚动到数据库列表分组
       window.requestAnimationFrame(() => {
         const el = window.activeDocument.getElementById("db-settings-database-group");
@@ -445,7 +480,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const viewTypes = [DATABASE_VIEW_TYPE, DATABASE_FILE_VIEW_TYPE];
     for (const viewType of viewTypes) {
       for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
-        if ((leaf as any).active && leaf.view instanceof DatabaseView) {
+        if ((leaf as unknown as { active?: boolean }).active && leaf.view instanceof DatabaseView) {
           return leaf.view;
         }
       }
@@ -495,12 +530,12 @@ export default class NoteDatabasePlugin extends Plugin {
       if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && originalType !== col.type) {
         const uniqueValues = collectUniqueStringValues(this.app, col.key, config.sourceFolder, config.sourceRules, config.sourceLogic, config.sourceRuleTree);
         if (uniqueValues.length > 0) {
-          (schemaCol as any).statusOptions = uniqueValues.map((val: string, i: number) => ({
+          schemaCol.statusOptions = uniqueValues.map((val: string, i: number) => ({
             value: val,
             color: STATUS_COLORS[i % STATUS_COLORS.length],
           }));
         } else if (col.type === "status") {
-          (schemaCol as any).statusOptions = this.getDefaultStatusOptions();
+          schemaCol.statusOptions = this.getDefaultStatusOptions();
         }
       }
     }
@@ -707,7 +742,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const schema = {
       columns,
       computedFields: metadata?.database?.schema?.computedFields
-        ? JSON.parse(JSON.stringify(metadata.database.schema.computedFields))
+        ? JSON.parse(JSON.stringify(metadata.database.schema.computedFields)) as ComputedFieldDef[]
         : [],
     };
     const dbName = this.getUniqueDatabaseName(result.databaseName || result.csvFiles[0].name.replace(/\.csv$/i, ""));
@@ -824,7 +859,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n)?/);
     if (!match) return { frontmatter: {}, body: text };
     try {
-      const frontmatter = parseYaml(match[1]);
+      const frontmatter: unknown = parseYaml(match[1]);
       return {
         frontmatter: frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter)
           ? frontmatter as Record<string, unknown>
@@ -978,7 +1013,7 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   private createFallbackDatabase(): DatabaseConfig {
-    const schema = { columns: [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" } as ColumnDef], computedFields: [] as any[] };
+    const schema = { columns: [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" } as ColumnDef], computedFields: [] as ComputedFieldDef[] };
     return {
       id: generateId(),
       name: t("common.database"),
@@ -1092,7 +1127,7 @@ export default class NoteDatabasePlugin extends Plugin {
           return col;
         }
         const type = inferColumnType(key, sampleValues.get(key) || []);
-        const col: any = { key, label, type };
+        const col: ColumnDef & { fileCount?: number } = { key, label, type };
         // For tags field, pre-populate options from vault tags
         if (isObsidianTagsKey(key) && type === "multi-select") {
           const vaultTags = getVaultTags(this.app, sourceFolder, parsed.sourceRules, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
@@ -1139,7 +1174,7 @@ export default class NoteDatabasePlugin extends Plugin {
 
       // Extract sort rules
       const sortRules: SortRule[] = (bv.sort || [])
-        .map((s: any) => ({
+        .map((s) => ({
           field: this.cleanBaseKey(s.property),
           direction: (s.direction || "ASC").toLowerCase() === "desc" ? "desc" as const : "asc" as const,
         }))
@@ -1220,7 +1255,7 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   private getBaseGroupOrders(
-    view: { groupBy?: { direction?: string }; [key: string]: any },
+    view: { groupBy?: { direction?: string }; [key: string]: unknown },
     field: string,
     sourceFolder: string,
     sourceRules: NonNullable<ViewConfig["sourceRules"]>,
@@ -1280,30 +1315,9 @@ export default class NoteDatabasePlugin extends Plugin {
     sourceLogic: "and" | "or";
     sourceRuleTree?: SourceRuleNode;
     unsupportedFilters: boolean;
-    views: Array<{
-      type: string;
-      name: string;
-      order: string[];
-      sort: Array<{ property: string; direction: string }>;
-      columnSize: Record<string, number>;
-      groupBy?: { property: string; direction: string };
-      image?: string;
-      imageAspectRatio?: number;
-      cardSize?: number;
-      imageFit?: "cover" | "contain";
-      limit?: number;
-      summaries?: Record<string, string>;
-      sourceRuleTree?: SourceRuleNode;
-      sourceRules?: NonNullable<ViewConfig["sourceRules"]>;
-      sourceLogic?: "and" | "or";
-      unsupportedFilters?: boolean;
-      coordinates?: string;
-      markerIcon?: string;
-      markerColor?: string;
-      [key: string]: any;
-    }>;
+    views: BaseFileViewData[];
     formulas: Record<string, string>;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     summaries: Record<string, string>;
     mapViewCount: number;
   } {
@@ -1313,23 +1327,23 @@ export default class NoteDatabasePlugin extends Plugin {
       sourceLogic: "and" as "and" | "or",
       sourceRuleTree: undefined as SourceRuleNode | undefined,
       unsupportedFilters: false,
-      views: [] as any[],
+      views: [] as BaseFileViewData[],
       formulas: {} as Record<string, string>,
-      properties: {} as Record<string, any>,
+      properties: {} as Record<string, unknown>,
       summaries: {} as Record<string, string>,
       mapViewCount: 0,
     };
 
-    let parsed: Record<string, any> | null = null;
+    let parsed: Record<string, unknown> | null = null;
     try {
-      parsed = parseYaml(source) as Record<string, any> | null;
+      parsed = parseYaml(source) as Record<string, unknown> | null;
     } catch {
       parsed = null;
     }
     if (parsed) {
-      result.sourceFolder = String(parsed["sourceFolder"] || "");
+      result.sourceFolder = safeString(parsed["sourceFolder"]);
       result.formulas = this.getBaseFormulas(parsed["formulas"]);
-      result.properties = parsed["properties"] && typeof parsed["properties"] === "object" ? parsed["properties"] : {};
+      result.properties = parsed["properties"] && typeof parsed["properties"] === "object" ? parsed["properties"] as Record<string, unknown> : {};
       result.summaries = this.getBaseStringMap(parsed["summaries"]);
       const filters = this.parseBaseFilters(parsed["filters"]);
       result.sourceRuleTree = filters.sourceRuleTree;
@@ -1337,7 +1351,7 @@ export default class NoteDatabasePlugin extends Plugin {
       result.sourceLogic = filters.sourceRuleTree && isSourceRuleGroup(filters.sourceRuleTree) ? filters.sourceRuleTree.logic : "and";
       result.unsupportedFilters = !filters.supported;
       if (Array.isArray(parsed["views"])) {
-        result.views = parsed["views"].map((view: unknown) => this.parseBaseYamlView(view)).filter((view): view is any => !!view);
+        result.views = parsed["views"].map((view: unknown) => this.parseBaseYamlView(view)).filter((view): view is BaseFileViewData => !!view);
         result.unsupportedFilters = result.unsupportedFilters || result.views.some((view) => !!view.unsupportedFilters);
       }
     } else {
@@ -1391,31 +1405,31 @@ export default class NoteDatabasePlugin extends Plugin {
     return result;
   }
 
-  private parseBaseYamlView(view: unknown): any {
+  private parseBaseYamlView(view: unknown): BaseFileViewData | undefined {
     if (!view || typeof view !== "object") return undefined;
-    const source = view as Record<string, any>;
+    const source = view as Record<string, unknown>;
     const filters = this.parseBaseFilters(source["filters"]);
     const sourceRuleTree = filters.sourceRuleTree;
     return {
-      type: String(source["type"] || "table"),
-      name: source["name"] != null ? String(source["name"]) : "",
-      order: Array.isArray(source["order"]) ? source["order"].map((item: unknown) => String(item)) : [],
-      sort: Array.isArray(source["sort"]) ? source["sort"] : [],
-      columnSize: source["columnSize"] && typeof source["columnSize"] === "object" ? source["columnSize"] : {},
-      groupBy: source["groupBy"] && typeof source["groupBy"] === "object" ? source["groupBy"] : undefined,
-      image: source["image"] != null ? String(source["image"]) : undefined,
+      type: safeString(source["type"], "table"),
+      name: source["name"] != null ? safeString(source["name"]) : "",
+      order: Array.isArray(source["order"]) ? source["order"].map((item: unknown) => safeString(item)) : [],
+      sort: Array.isArray(source["sort"]) ? source["sort"] as Array<{ property: string; direction: string }> : [],
+      columnSize: source["columnSize"] && typeof source["columnSize"] === "object" ? source["columnSize"] as Record<string, number> : {},
+      groupBy: source["groupBy"] && typeof source["groupBy"] === "object" ? source["groupBy"] as { property: string; direction: string } : undefined,
+      image: source["image"] != null ? safeString(source["image"]) : undefined,
       imageAspectRatio: typeof source["imageAspectRatio"] === "number" ? source["imageAspectRatio"] : undefined,
       cardSize: typeof source["cardSize"] === "number" ? source["cardSize"] : undefined,
       imageFit: source["imageFit"] === "cover" || source["imageFit"] === "contain" ? source["imageFit"] : undefined,
       limit: this.parseBaseLimit(source["limit"]),
       summaries: this.getBaseStringMap(source["summaries"]),
-      coordinates: source["coordinates"] != null ? String(source["coordinates"]) : undefined,
-      markerIcon: source["markerIcon"] != null ? String(source["markerIcon"]) : undefined,
-      markerColor: source["markerColor"] != null ? String(source["markerColor"]) : undefined,
-      latitude: source["latitude"] != null ? String(source["latitude"]) : undefined,
-      longitude: source["longitude"] != null ? String(source["longitude"]) : undefined,
-      lat: source["lat"] != null ? String(source["lat"]) : undefined,
-      lng: source["lng"] != null ? String(source["lng"]) : undefined,
+      coordinates: source["coordinates"] != null ? safeString(source["coordinates"]) : undefined,
+      markerIcon: source["markerIcon"] != null ? safeString(source["markerIcon"]) : undefined,
+      markerColor: source["markerColor"] != null ? safeString(source["markerColor"]) : undefined,
+      latitude: source["latitude"] != null ? safeString(source["latitude"]) : undefined,
+      longitude: source["longitude"] != null ? safeString(source["longitude"]) : undefined,
+      lat: source["lat"] != null ? safeString(source["lat"]) : undefined,
+      lng: source["lng"] != null ? safeString(source["lng"]) : undefined,
       sourceRuleTree,
       sourceRules: getPositiveSourceRules(sourceRuleTree),
       sourceLogic: sourceRuleTree && isSourceRuleGroup(sourceRuleTree) ? sourceRuleTree.logic : "and",
@@ -1424,11 +1438,11 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   /** Parse a single view entry from the views: array */
-  private parseBaseViewEntry(lines: string[], start: number, end: number): any {
+  private parseBaseViewEntry(lines: string[], start: number, end: number): BaseFileViewData {
     const entryIndent = lines[start].match(/^(\s*)/)?.[1].length || 0;
-    const view: any = { type: "table", name: "", order: [], sort: [], columnSize: {} };
+    const view: BaseFileViewData = { type: "table", name: "", order: [], sort: [], columnSize: {} };
     let section = ""; // "order" | "sort" | "columnSize" | "groupBy" | ""
-    let sortEntry: any = null;
+    let sortEntry: { property: string; direction: string } | null = null;
 
     for (let i = start; i < end; i++) {
       const line = lines[i];
@@ -1450,7 +1464,7 @@ export default class NoteDatabasePlugin extends Plugin {
       if (/^order\s*:\s*$/.test(trimmed)) { section = "order"; continue; }
       if (/^sort\s*:\s*$/.test(trimmed)) { section = "sort"; continue; }
       if (/^columnSize\s*:\s*$/.test(trimmed)) { section = "columnSize"; continue; }
-      if (/^groupBy\s*:\s*$/.test(trimmed)) { section = "groupBy"; view.groupBy = {}; continue; }
+      if (/^groupBy\s*:\s*$/.test(trimmed)) { section = "groupBy"; view.groupBy = { property: "", direction: "" }; continue; }
 
       // Simple key-value at view level
       const nameM = trimmed.match(/^name\s*:\s*(.*)/);
@@ -1488,9 +1502,10 @@ export default class NoteDatabasePlugin extends Plugin {
         } else if (section === "sort") {
           const kv = item.match(/(\w[\w-]*)\s*:\s*(.*)/);
           if (kv) {
-            if (!sortEntry) sortEntry = {};
-            sortEntry[kv[1]] = kv[2].trim();
-            if (kv[1] === "direction") {
+            if (!sortEntry) sortEntry = { property: "", direction: "" };
+            if (kv[1] === "property") sortEntry.property = kv[2].trim();
+            else if (kv[1] === "direction") sortEntry.direction = kv[2].trim();
+            if (sortEntry.direction) {
               view.sort.push(sortEntry);
               sortEntry = null;
             }
@@ -1503,8 +1518,9 @@ export default class NoteDatabasePlugin extends Plugin {
       if (section === "sort" && sortEntry) {
         const kv = trimmed.match(/^(\w[\w-]*)\s*:\s*(.*)/);
         if (kv) {
-          sortEntry[kv[1]] = kv[2].trim();
-          if (kv[1] === "direction") {
+          if (kv[1] === "property") sortEntry.property = kv[2].trim();
+          else if (kv[1] === "direction") sortEntry.direction = kv[2].trim();
+          if (sortEntry.direction) {
             view.sort.push(sortEntry);
             sortEntry = null;
           }
@@ -1521,7 +1537,11 @@ export default class NoteDatabasePlugin extends Plugin {
       // GroupBy entries: "property: category"
       if (section === "groupBy" && view.groupBy) {
         const gbM = trimmed.match(/^(\w[\w-]*)\s*:\s*(.*)/);
-        if (gbM) { (view.groupBy as any)[gbM[1]] = gbM[2].trim(); continue; }
+        if (gbM) {
+          if (gbM[1] === "property") view.groupBy.property = gbM[2].trim();
+          else if (gbM[1] === "direction") view.groupBy.direction = gbM[2].trim();
+          continue;
+        }
       }
     }
 
@@ -1548,7 +1568,7 @@ export default class NoteDatabasePlugin extends Plugin {
     return !key.startsWith("file.") || isBaseFileField(key) || key.startsWith("formula.");
   }
 
-  private getBaseViewOrderKeys(view: { order?: string[]; type?: string; [key: string]: any }): string[] {
+  private getBaseViewOrderKeys(view: { order?: string[]; type?: string; [key: string]: unknown }): string[] {
     const keys = [...(Array.isArray(view.order) ? view.order : [])];
     if (view.type === "map") {
       for (const candidate of ["coordinates", "markerIcon", "markerColor", "latitude", "longitude", "lat", "lng"]) {
@@ -1572,7 +1592,7 @@ export default class NoteDatabasePlugin extends Plugin {
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     const map: Record<string, string> = {};
     for (const [key, expression] of Object.entries(value as Record<string, unknown>)) {
-      if (expression != null && key.trim()) map[key.trim()] = String(expression);
+      if (expression != null && key.trim()) map[key.trim()] = safeString(expression);
     }
     return map;
   }
@@ -1605,13 +1625,13 @@ export default class NoteDatabasePlugin extends Plugin {
     return Object.keys(widths).length > 0 ? widths : undefined;
   }
 
-  private getBasePropertyDisplayName(properties: Record<string, any>, rawKey: string, fallback: string): string {
+  private getBasePropertyDisplayName(properties: Record<string, unknown>, rawKey: string, fallback: string): string {
     const key = this.cleanBaseKey(rawKey);
     const candidates = [rawKey, key];
     if (key.startsWith("formula.")) candidates.push(`formula.${key.slice("formula.".length)}`);
     for (const candidate of candidates) {
       const prop = properties?.[candidate];
-      if (prop && typeof prop === "object" && prop["displayName"] != null) return String(prop["displayName"]);
+      if (isRecord(prop) && prop["displayName"] != null) return safeString(prop["displayName"]);
     }
     return fallback;
   }
@@ -1641,10 +1661,10 @@ export default class NoteDatabasePlugin extends Plugin {
     if (entries.length !== 1) return undefined;
     const [operator, children] = entries[0];
     if (operator === "not") {
-      const child = Array.isArray(children)
+      const childItems: unknown = Array.isArray(children)
         ? (children.length === 1 ? children[0] : { or: children })
         : children;
-      const rule = this.parseBaseSourceRuleNode(child);
+      const rule = this.parseBaseSourceRuleNode(childItems);
       return rule ? { type: "not", rule } : undefined;
     }
     if ((operator !== "and" && operator !== "or") || !Array.isArray(children)) return undefined;
@@ -2222,18 +2242,18 @@ export default class NoteDatabasePlugin extends Plugin {
           const val = getFileFieldValue(f, col.key, fm, cache, this.app);
           if (val == null) continue;
           const len = Array.isArray(val)
-            ? Math.max(...val.map((item) => String(item).length), 0)
+            ? Math.max(...val.map((item) => safeString(item).length), 0)
             : typeof val === "object"
               ? JSON.stringify(val).length
-              : String(val).length;
+              : safeString(val).length;
           if (len > (longestValues.get(col.key) || 0)) longestValues.set(col.key, len);
           continue;
         }
         const val = fm[col.key];
         if (val == null) continue;
         const len = Array.isArray(val)
-          ? Math.max(...val.map((v: any) => String(v).length))
-          : String(val).length;
+          ? Math.max(...val.map((v: unknown) => safeString(v).length))
+          : safeString(val).length;
         if (len > (longestValues.get(col.key) || 0)) longestValues.set(col.key, len);
       }
     }
@@ -2267,11 +2287,11 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private markDatabaseFileTabs(): void {
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      const view = leaf.view as any;
-      const file = view?.file as TFile | undefined;
-      const tabHeaderEl = (leaf as any).tabHeaderEl as HTMLElement | undefined;
+      const view = leaf.view as unknown as { file?: TFile; containerEl?: HTMLElement };
+      const file = view.file;
+      const tabHeaderEl = (leaf as unknown as { tabHeaderEl?: HTMLElement }).tabHeaderEl;
       const fm = file instanceof TFile
-        ? this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined
+        ? this.app.metadataCache.getFileCache(file)?.frontmatter
         : undefined;
       const isDatabaseFile = file instanceof TFile && fm?.["db_view"] === true;
       tabHeaderEl?.toggleClass("note-database-file-tab", isDatabaseFile);
@@ -2293,7 +2313,7 @@ export default class NoteDatabasePlugin extends Plugin {
         if (!path) continue;
         const file = this.app.vault.getAbstractFileByPath(path);
         const fm = file instanceof TFile
-          ? this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined
+          ? this.app.metadataCache.getFileCache(file)?.frontmatter
           : undefined;
         const isDb = file instanceof TFile && fm?.["db_view"] === true;
 
@@ -2314,18 +2334,19 @@ export default class NoteDatabasePlugin extends Plugin {
 
   /** Migrate legacy settings-based databases to vault files. */
   private async migrateDatabasesToFiles(): Promise<void> {
-    const databases = this.settings.databases;
-    if (!databases || databases.length === 0) return;
+    const databases = this.getLegacySettingsDatabases();
+    if (databases.length === 0) return;
 
     let migrated = 0;
     for (const db of databases) {
       try {
         // Migrate dashboardDisplayWidth → displayWidth on each view
         for (const view of db.views || []) {
-          if ((view as any).dashboardDisplayWidth && !view.displayWidth) {
-            view.displayWidth = (view as any).dashboardDisplayWidth;
+          const viewRecord = view as unknown as Record<string, unknown>;
+          if (viewRecord.dashboardDisplayWidth && !view.displayWidth) {
+            view.displayWidth = viewRecord.dashboardDisplayWidth as ViewConfig["displayWidth"];
           }
-          delete (view as any).dashboardDisplayWidth;
+          delete viewRecord.dashboardDisplayWidth;
         }
         const uniqueName = this.getUniqueDatabaseName(db.name || t("common.database"));
         db.name = uniqueName;
@@ -2340,9 +2361,9 @@ export default class NoteDatabasePlugin extends Plugin {
       }
     }
 
-    this.settings.databases = [];
+    this.setLegacySettingsDatabases([]);
     this.settings.databasesMigrated = true;
-    delete (this.settings as any).dashboardInitialSource;
+    delete (this.settings as unknown as Record<string, unknown>)["dashboardInitialSource"];
     await this.saveSettings();
 
     if (migrated > 0) {
@@ -2357,6 +2378,15 @@ export default class NoteDatabasePlugin extends Plugin {
         );
       }
     }
+  }
+
+  private getLegacySettingsDatabases(): DatabaseConfig[] {
+    const value = (this.settings as unknown as { databases?: unknown }).databases;
+    return Array.isArray(value) ? value as DatabaseConfig[] : [];
+  }
+
+  private setLegacySettingsDatabases(databases: DatabaseConfig[]): void {
+    (this.settings as unknown as { databases: DatabaseConfig[] }).databases = databases;
   }
 
   onunload(): void {

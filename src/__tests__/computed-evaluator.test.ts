@@ -2,14 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import { ColumnDef, ComputedFieldDef } from "../data/types";
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 vi.mock("obsidian", () => ({
   getAllTags: () => [],
   normalizePath: (path: string) => path.replace(/\/+/g, "/").replace(/\/+$/, ""),
 }));
 
-(globalThis as any).moment = Object.assign(
+_g.moment = Object.assign(
   (value: unknown) => {
-    const date = value == null ? new Date() : new Date(value as any);
+    const date = value == null ? new Date() : new Date(value as string | number | Date);
     return {
       format: () => "2026-06-03",
       isValid: () => !Number.isNaN(date.getTime()),
@@ -26,30 +29,41 @@ const columns: ColumnDef[] = [
   { key: "summary", label: "Summary", type: "computed", computedKey: "summary" },
 ];
 
+interface MockFileObj {
+  name: string;
+  basename: string;
+  path: string;
+  extension: string;
+  parent: { path: string };
+  stat: { size: number; ctime: number; mtime: number };
+}
+
 const app = {
   metadataCache: {
     getFileCache: () => null,
     getFirstLinkpathDest: () => null,
   },
-} as any;
+} as unknown as Parameters<typeof evaluateComputedFields> extends [unknown, unknown, unknown, infer Ctx | undefined]
+  ? Ctx extends { app: unknown } ? { app: Ctx["app"] } : never
+  : never;
 
-const file = {
+const file: MockFileObj = {
   name: "task.md",
   basename: "task",
   path: "Projects/task.md",
   extension: "md",
   parent: { path: "Projects" },
   stat: { size: 10, ctime: 0, mtime: 0 },
-} as any;
+};
 
-const baseFile = {
+const baseFile: MockFileObj = {
   name: "source.base",
   basename: "source",
   path: "Projects/source.base",
   extension: "base",
   parent: { path: "Projects" },
   stat: { size: 10, ctime: 0, mtime: 0 },
-} as any;
+};
 
 describe("evaluateComputedFields", () => {
   it("evaluates mixed note-database and Bases formulas in definition order", () => {
@@ -59,7 +73,7 @@ describe("evaluateComputedFields", () => {
       { key: "summary", label: "Summary", expression: "field('baseTotal') + 1", type: "number" },
     ];
 
-    expect(evaluateComputedFields(defs, columns, { estimate: 4, bonus: 3 }, { app, file })).toEqual({
+    expect(evaluateComputedFields(defs, columns, { estimate: 4, bonus: 3 }, { app, file: file as never })).toEqual({
       double: 8,
       baseTotal: 11,
       summary: 12,
@@ -81,8 +95,8 @@ describe("evaluateComputedFields", () => {
 
     expect(evaluateComputedFields(defs, columns, {}, {
       app,
-      file,
-      thisFile: baseFile,
+      file: file as never,
+      thisFile: baseFile as never,
       thisFrontmatter: {},
     })).toEqual({
       summary: "source.base:task.md",

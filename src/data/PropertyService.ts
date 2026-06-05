@@ -1,6 +1,7 @@
 import { App, TFile } from "obsidian";
 import { getDefaultCellValue, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "./ColumnTypes";
 import type { FrontmatterMutator } from "./DataSource";
+import { stringifyValue } from "./Stringify";
 import { ColumnDef } from "./types";
 
 export interface RenameFrontmatterResult {
@@ -39,7 +40,7 @@ export class PropertyService {
     try {
       if (await adapter.exists(configPath)) {
         const raw = await adapter.read(configPath);
-        data = raw.trim() ? JSON.parse(raw) : {};
+        data = raw.trim() ? JSON.parse(raw) as { types?: Record<string, string> } : {};
       }
     } catch (err) {
       console.warn("Note Database: failed to read Obsidian property types", err);
@@ -224,21 +225,21 @@ export class PropertyService {
     switch (type) {
       case "number":
       case "currency": {
-        const parsed = typeof value === "number" ? value : parseFloat(String(value).replace(/,/g, ""));
+        const parsed = typeof value === "number" ? value : parseFloat(stringifyValue(value).replace(/,/g, ""));
         return Number.isFinite(parsed) ? parsed : "";
       }
       case "date": {
         if (value instanceof Date && !isNaN(value.getTime())) {
           return value.toISOString().substring(0, 10);
         }
-        const text = String(value).trim();
+        const text = stringifyValue(value).trim();
         const match = text.match(/^\d{4}-\d{2}-\d{2}/);
         if (match) return match[0];
         const parsed = new Date(text);
         return isNaN(parsed.getTime()) ? "" : parsed.toISOString().substring(0, 10);
       }
       case "text":
-        return String(value);
+        return stringifyValue(value);
       case "select":
       case "status":
         return normalizeOptionValueForKey(key, toMultiSelectValuesForKey(key, value)[0] || "");
@@ -252,7 +253,7 @@ export class PropertyService {
   }
 
   private cloneValue(value: unknown): unknown {
-    if (Array.isArray(value)) return [...value];
+    if (Array.isArray(value)) return [...(value as unknown[])];
     if (value && typeof value === "object") return { ...(value as Record<string, unknown>) };
     return value;
   }

@@ -2,9 +2,11 @@ import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian"
 import { hasObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { ComputedFieldEngine } from "./ComputedField";
 import { safeEval } from "./SafeEval";
+import { safeString } from "./SafeString";
 import { ColumnDef, ComputedFieldDef } from "./types";
+import type { MomentConstructor, MomentDurationLike } from "./MomentTypes";
 
-declare const moment: any;
+declare const moment: MomentConstructor;
 
 export interface BaseExpressionContext {
   app: App;
@@ -286,7 +288,7 @@ function findNextDateDurationOperation(source: string): {
     if (leftStart < 0) continue;
     let rightStart = index + 1;
     while (rightStart < source.length && /\s/.test(source[rightStart])) rightStart += 1;
-    const right = parseBaseDurationOperand(source, rightStart, char as "+" | "-");
+    const right = parseBaseDurationOperand(source, rightStart, char);
     if (!right) continue;
     return {
       leftStart,
@@ -1001,18 +1003,18 @@ function createBaseContext(context: BaseExpressionContext): Record<string, unkno
     IF: (condition: unknown, trueValue: unknown, falseValue: unknown = null) => condition ? trueValue : falseValue,
     date: (value: unknown) => toBaseDate(value),
     duration: (value: string) => toDuration(value),
-    html: (value: unknown) => String(value ?? ""),
+    html: (value: unknown) => safeString(value),
     image: (value: unknown) => value,
     icon: (value: string) => value,
     link: (path: unknown, display?: unknown) => createBaseLinkValue(context, path, display),
-    list: (value: unknown) => Array.isArray(value) ? value : [value],
+    list: (value: unknown): unknown[] => Array.isArray(value) ? value : [value],
     max: Math.max,
     min: Math.min,
     now: () => toBaseDate(Date.now()),
     number: (value: unknown) => Number(value),
     today: () => toBaseDate(moment().startOf("day")),
     random: Math.random,
-    escapeHTML: (value: unknown) => String(value ?? "")
+    escapeHTML: (value: unknown) => safeString(value)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -1022,12 +1024,12 @@ function createBaseContext(context: BaseExpressionContext): Record<string, unkno
     __durationBetween: (left: unknown, right: unknown) => toDuration(moment.duration(toDate(left).getTime() - toDate(right).getTime())),
     __regexMatches: (pattern: RegExp, value: unknown) => {
       pattern.lastIndex = 0;
-      return pattern.test(String(value ?? ""));
+      return pattern.test(safeString(value));
     },
     __isType: (value: unknown, type: string) => {
-      const normalizedType = String(type ?? "").trim().toLowerCase();
+      const normalizedType = safeString(type).trim().toLowerCase();
       if (normalizedType === "list" || normalizedType === "array") return Array.isArray(value);
-      if (normalizedType === "date") return value instanceof BaseDateValue || value instanceof Date || moment.isMoment(value as any);
+      if (normalizedType === "date") return value instanceof BaseDateValue || value instanceof Date || moment.isMoment(value);
       if (normalizedType === "duration") return isBaseDurationValue(value) || moment.isDuration(value);
       if (normalizedType === "file") return isBaseFileValue(value);
       if (normalizedType === "link") return isBaseLinkValue(value);
@@ -1041,30 +1043,30 @@ function createBaseContext(context: BaseExpressionContext): Record<string, unkno
     __containsAny: (value: unknown, ...needles: unknown[]) => expandNeedles(needles).some((needle) => containsValue(value, needle)),
     __containsValue: containsValue,
     __isTruthy: (value: unknown) => Boolean(value),
-    __toString: (value: unknown) => String(value ?? ""),
-    __startsWith: (value: unknown, query: unknown) => value != null && String(value).startsWith(String(query ?? "")),
-    __endsWith: (value: unknown, query: unknown) => value != null && String(value).endsWith(String(query ?? "")),
-    __trim: (value: unknown) => String(value ?? "").trim(),
-    __split: (value: unknown, separator: unknown, limit?: unknown) => String(value ?? "").split(String(separator ?? ""), limit == null ? undefined : Number(limit)),
-    __join: (value: unknown, separator: unknown = ",") => toList(value).map((item) => String(item ?? "")).join(String(separator ?? "")),
+    __toString: (value: unknown) => safeString(value),
+    __startsWith: (value: unknown, query: unknown) => value != null && safeString(value).startsWith(safeString(query)),
+    __endsWith: (value: unknown, query: unknown) => value != null && safeString(value).endsWith(safeString(query)),
+    __trim: (value: unknown) => safeString(value).trim(),
+    __split: (value: unknown, separator: unknown, limit?: unknown) => safeString(value).split(safeString(separator), limit == null ? undefined : Number(limit)),
+    __join: (value: unknown, separator: unknown = ",") => toList(value).map((item) => safeString(item)).join(safeString(separator)),
     __slice: (value: unknown, start?: unknown, end?: unknown) => {
       const from = start == null ? undefined : Number(start);
       const to = end == null ? undefined : Number(end);
-      return Array.isArray(value) ? value.slice(from, to) : String(value ?? "").slice(from, to);
+      return Array.isArray(value) ? value.slice(from, to) : safeString(value).slice(from, to);
     },
     __repeat: (value: unknown, count: unknown) => {
       const times = Number(count);
-      return String(value ?? "").repeat(Number.isFinite(times) ? Math.max(0, Math.floor(times)) : 0);
+      return safeString(value).repeat(Number.isFinite(times) ? Math.max(0, Math.floor(times)) : 0);
     },
     __baseEquals: baseValuesLooseEqual,
     __baseStrictEquals: baseValuesEqual,
     __replace: replaceBaseString,
     __isEmpty: isEmptyValue,
-    __keys: (value: unknown) => value != null && typeof value === "object" ? Object.keys(value as Record<string, unknown>) : [],
+    __keys: (value: unknown) => value != null && typeof value === "object" ? Object.keys(value) : [],
     __values: (value: unknown) => value != null && typeof value === "object" ? Object.values(value as Record<string, unknown>) : [],
-    __lower: (value: unknown) => String(value ?? "").toLowerCase(),
-    __title: (value: unknown) => String(value ?? "").replace(/\b\w/g, (char) => char.toUpperCase()),
-    __reverse: (value: unknown) => Array.isArray(value) ? [...value].reverse() : String(value ?? "").split("").reverse().join(""),
+    __lower: (value: unknown) => safeString(value).toLowerCase(),
+    __title: (value: unknown) => safeString(value).replace(/\b\w/g, (char) => char.toUpperCase()),
+    __reverse: (value: unknown): unknown[] | string => Array.isArray(value) ? [...(value as unknown[])].reverse() : safeString(value).split("").reverse().join(""),
     __flat: (value: unknown) => toList(value).flat(),
     __sort: (value: unknown) => [...toList(value)].sort((left, right) => compareBaseValues(left, right)),
     __unique: uniqueBaseListValues,
@@ -1161,7 +1163,7 @@ function createBaseFileValue(context: BaseExpressionContext, sourceFile: TFile, 
     return resolved ? createBaseFileValue(context, resolved) : createBaseLinkValue(context, path);
   }) as unknown as BaseFileValue;
   const cache = context.app.metadataCache.getFileCache(sourceFile);
-  const fm = frontmatter || (cache?.frontmatter as Record<string, unknown> | undefined) || {};
+  const fm = frontmatter || (cache?.frontmatter) || {};
   const properties = normalizeBasePropertyRecord(context, fm);
   const tags = getFileTags(cache, fm);
   Object.defineProperty(fileFn, "name", {
@@ -1194,8 +1196,8 @@ function createBaseFileValue(context: BaseExpressionContext, sourceFile: TFile, 
     hasLink: (target: unknown) => hasLink(context.app, sourceFile, cache, target),
   });
   return new Proxy(fileFn, {
-    get(target, key, receiver) {
-      if (typeof key !== "string" || key in target) return Reflect.get(target, key, receiver);
+    get(target, key, receiver): unknown {
+      if (typeof key !== "string" || key in target) return Reflect.get(target, key, receiver) as unknown;
       return properties[key];
     },
     has(target, key) {
@@ -1231,9 +1233,9 @@ function createBaseLinkValue(context: BaseExpressionContext, path: unknown, disp
       if (!resolved) return false;
       return hasLink(context.app, resolved, context.app.metadataCache.getFileCache(resolved), target);
     },
-    toString: () => String(displayText),
+    toString: () => safeString(displayText),
     valueOf: () => rawPath,
-    [Symbol.toPrimitive]: (hint: string) => hint === "string" ? String(displayText) : rawPath,
+    [Symbol.toPrimitive]: (hint: string) => hint === "string" ? safeString(displayText) : rawPath,
   };
 }
 
@@ -1309,7 +1311,7 @@ function parseLinkTarget(target: unknown): { target: string; display?: string } 
     if (typeof source.path === "string") return parseLinkTargetText(source.path);
     if (typeof source.name === "string") return parseLinkTargetText(source.name);
   }
-  return parseLinkTargetText(String(target ?? ""));
+  return parseLinkTargetText(safeString(target));
 }
 
 function parseLinkTargetText(value: string): { target: string; display?: string } {
@@ -1355,14 +1357,14 @@ function isInFolder(file: TFile, folder: string): boolean {
 
 function containsValue(value: unknown, needle: unknown): boolean {
   if (Array.isArray(value)) return value.some((item) => baseValuesEqual(item, needle));
-  return String(value ?? "").includes(String(needle ?? ""));
+  return safeString(value).includes(safeString(needle));
 }
 
 function replaceBaseString(value: unknown, pattern: unknown, replacement: unknown): string {
-  const source = String(value ?? "");
-  const next = String(replacement ?? "");
+  const source = safeString(value);
+  const next = safeString(replacement);
   if (pattern instanceof RegExp) return source.replace(pattern, next);
-  const search = String(pattern ?? "");
+  const search = safeString(pattern);
   if (search === "") return `${next}${source.split("").join(next)}${next}`;
   return source.split(search).join(next);
 }
@@ -1389,7 +1391,7 @@ function baseValuesLooseEqual(left: unknown, right: unknown): boolean {
     const rightNumber = Number(right);
     return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
   }
-  return String(left ?? "") === String(right ?? "");
+  return safeString(left) === safeString(right);
 }
 
 function isDurationComparable(value: unknown): boolean {
@@ -1439,7 +1441,7 @@ function linkTargetsEqual(left: ComparableLinkTarget, right: ComparableLinkTarge
 }
 
 function expandNeedles(needles: unknown[]): unknown[] {
-  return needles.flatMap((needle) => Array.isArray(needle) ? needle : [needle]);
+  return needles.flatMap((needle) => Array.isArray(needle) ? (needle as unknown[]) : [needle]);
 }
 
 function toList(value: unknown): unknown[] {
@@ -1456,7 +1458,7 @@ function uniqueBaseListValues(value: unknown): unknown[] {
 
 function compareBaseValues(left: unknown, right: unknown): number {
   if (typeof left === "number" && typeof right === "number") return left - right;
-  return String(left ?? "").localeCompare(String(right ?? ""), undefined, { numeric: true });
+  return safeString(left).localeCompare(safeString(right), undefined, { numeric: true });
 }
 
 function isEmptyValue(value: unknown): boolean {
@@ -1464,7 +1466,7 @@ function isEmptyValue(value: unknown): boolean {
   if (typeof value === "number") return !Number.isFinite(value);
   if (Array.isArray(value)) return value.length === 0;
   if (value instanceof Date || value instanceof BaseDateValue) return false;
-  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
   return false;
 }
 
@@ -1527,9 +1529,9 @@ function toBaseDate(value: unknown): BaseDateValue {
   return new BaseDateValue(toDate(value));
 }
 
-function toBaseDateIfValid(value: unknown): unknown {
+function toBaseDateIfValid(value: unknown): BaseDateValue | null {
   const date = toDate(value);
-  return Number.isFinite(date.getTime()) ? new BaseDateValue(date) : value;
+  return Number.isFinite(date.getTime()) ? new BaseDateValue(date) : null;
 }
 
 function toDuration(value: unknown): BaseDurationValue {
@@ -1547,11 +1549,11 @@ function toDuration(value: unknown): BaseDurationValue {
   };
 }
 
-function toMomentDuration(value: unknown): any {
+function toMomentDuration(value: unknown): MomentDurationLike {
   if (isBaseDurationValue(value)) return moment.duration(value.milliseconds);
   if (moment.isDuration(value)) return value;
   if (typeof value === "number") return moment.duration(value);
-  return parseBaseDuration(String(value ?? ""));
+  return parseBaseDuration(safeString(value));
 }
 
 function isBaseDurationValue(value: unknown): value is BaseDurationValue {
@@ -1561,7 +1563,7 @@ function isBaseDurationValue(value: unknown): value is BaseDurationValue {
     typeof (value as BaseDurationValue).valueOf === "function";
 }
 
-function parseBaseDuration(value: string): any {
+function parseBaseDuration(value: string): MomentDurationLike {
   const match = value.trim().match(/^(-?\d+(?:\.\d+)?)\s*(y|year|years|M|month|months|d|day|days|w|week|weeks|h|hour|hours|m|minute|minutes|s|second|seconds)$/);
   if (!match) return moment.duration(value);
   const amount = Number(match[1]);
@@ -1578,9 +1580,9 @@ function parseBaseDuration(value: string): any {
 function toDate(value: unknown): Date {
   if (value instanceof BaseDateValue) return new Date(value.valueOf());
   if (value instanceof Date) return value;
-  if (moment.isMoment(value as any)) return (value as { toDate(): Date }).toDate();
+  if (moment.isMoment(value)) return value.toDate();
   const parsed = moment(value);
-  return parsed.isValid() ? parsed.toDate() : new Date(String(value ?? ""));
+  return parsed.isValid() ? parsed.toDate() : new Date(safeString(value));
 }
 
 function isIdentifierSafe(name: string): boolean {

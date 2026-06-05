@@ -2,6 +2,7 @@
  * Pure logic tests for ColumnTypes — these don't depend on Obsidian APIs.
  */
 import { describe, it, expect } from "vitest";
+import { safeString } from "../data/SafeString";
 
 // We test the pure functions by copying their logic here.
 // In a real setup, we'd import from the module after adding proper mocks.
@@ -9,10 +10,10 @@ import { describe, it, expect } from "vitest";
 // ---- toMultiSelectValues ----
 function toMultiSelectValues(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
+    return value.map((item) => safeString(item).trim()).filter(Boolean);
   }
   if (value == null || value === "") return [];
-  return String(value)
+  return safeString(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
@@ -22,7 +23,7 @@ function toMultiSelectValues(value: unknown): string[] {
 function toBooleanValue(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = safeString(value).trim().toLowerCase();
   return ["true", "yes", "y", "1", "on", "checked", "是", "已勾选"].includes(normalized);
 }
 

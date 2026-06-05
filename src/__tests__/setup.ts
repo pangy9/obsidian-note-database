@@ -2,10 +2,13 @@
 // Source code uses window.activeDocument instead of document for
 // Obsidian popout-window compatibility.
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 const mockDocument = {
 	documentElement: { lang: "en" },
 };
 
-(globalThis as any).document = mockDocument;
-if (!(globalThis as any).window) (globalThis as any).window = {};
-(globalThis.window as any).activeDocument = mockDocument;
+_g.document = mockDocument;
+if (!_g.window) _g.window = {};
+(_g.window as Record<string, unknown>).activeDocument = mockDocument;

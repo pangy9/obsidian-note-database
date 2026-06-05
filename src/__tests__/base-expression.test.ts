@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { evaluateBaseFilterExpression } from "../data/BaseExpression";
+import { BaseExpressionContext, evaluateBaseFilterExpression } from "../data/BaseExpression";
+
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
 
 vi.mock("obsidian", () => ({
   getAllTags: () => [],
   normalizePath: (path: string) => path.replace(/\/+/g, "/").replace(/\/+$/, ""),
 }));
 
-(globalThis as any).moment = Object.assign(
+_g.moment = Object.assign(
   (value: unknown) => {
-    const date = new Date(value as any);
+    const date = new Date(value as string | number | Date);
     return {
       isValid: () => !Number.isNaN(date.getTime()),
       toDate: () => date,
@@ -17,7 +20,25 @@ vi.mock("obsidian", () => ({
   { isMoment: () => false }
 );
 
-function context(frontmatter: Record<string, unknown>) {
+interface EvalContext {
+  app: {
+    metadataCache: {
+      getFileCache: () => null;
+      getFirstLinkpathDest: () => null;
+    };
+  };
+  file: {
+    name: string;
+    basename: string;
+    path: string;
+    extension: string;
+    parent: { path: string };
+    stat: { size: number; ctime: number; mtime: number };
+  };
+  frontmatter: Record<string, unknown>;
+}
+
+function context(frontmatter: Record<string, unknown>): BaseExpressionContext {
   return {
     app: {
       metadataCache: {
@@ -34,7 +55,7 @@ function context(frontmatter: Record<string, unknown>) {
       stat: { size: 10, ctime: 0, mtime: 0 },
     },
     frontmatter,
-  } as any;
+  } as unknown as BaseExpressionContext;
 }
 
 describe("BaseExpression", () => {

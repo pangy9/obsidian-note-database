@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import NoteDatabasePlugin from "../main";
 import { combineSourceRuleTrees } from "../data/SourceRules";
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 const { MockChainSetting, MockMenu, MockPlugin, MockTFile, parseYamlMock } = vi.hoisted(() => ({
   MockPlugin: class MockPlugin {},
   MockTFile: class MockTFile {},
@@ -44,9 +47,9 @@ vi.mock("obsidian", () => ({
   stringifyYaml: (value: unknown) => JSON.stringify(value),
 }));
 
-(globalThis as any).moment = Object.assign(
+_g.moment = Object.assign(
   (value: unknown) => {
-    const date = value == null ? new Date() : new Date(value as any);
+    const date = value == null ? new Date() : new Date(value as string | number | Date);
     return {
       add: () => ({ toDate: () => date }),
       duration: () => ({ asMilliseconds: () => 0 }),
@@ -70,13 +73,25 @@ vi.mock("obsidian", () => ({
     ISO_8601: "ISO_8601",
   }
 );
-(globalThis as any).document = { documentElement: { lang: "en" } };
+_g.document = { documentElement: { lang: "en" } };
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
   value: { language: "en-US" },
 });
 
-function file(path: string, extension = path.split(".").pop() || "md") {
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- test helper casts are intentional */
+
+interface MockFile {
+  name: string;
+  basename: string;
+  path: string;
+  extension: string;
+  parent: { path: string };
+  stat: { size: number; ctime: number; mtime: number };
+}
+
+function file(path: string, extension = path.split(".").pop() || "md"): MockFile {
   const name = path.split("/").pop() || path;
   return Object.assign(new MockTFile(), {
     name,
@@ -85,11 +100,28 @@ function file(path: string, extension = path.split(".").pop() || "md") {
     extension,
     parent: { path: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "" },
     stat: { size: 1, ctime: 0, mtime: 0 },
-  }) as any;
+  }) as unknown as MockFile;
 }
 
-function createPlugin(frontmatterByPath: Record<string, Record<string, unknown>> = {}) {
-  const plugin = Object.create(NoteDatabasePlugin.prototype) as any;
+/* eslint-enable @typescript-eslint/no-unnecessary-type-assertion */
+
+interface MockPluginInstance {
+  app: {
+    vault: {
+      getMarkdownFiles: () => MockFile[];
+      getAbstractFileByPath: (path: string) => MockFile | null;
+    };
+    metadataCache: {
+      getFileCache: (target: { path: string }) => { frontmatter: Record<string, unknown> };
+      getFirstLinkpathDest: () => null;
+    };
+  };
+  settings: { databaseFolder: string };
+  createConfigFromBase: (baseFile: MockFile, ignored: string) => { config: Record<string, unknown> };
+}
+
+function createPlugin(frontmatterByPath: Record<string, Record<string, unknown>> = {}): MockPluginInstance {
+  const plugin = Object.create(NoteDatabasePlugin.prototype) as unknown as MockPluginInstance;
   const markdownFiles = Object.keys(frontmatterByPath).map((path) => file(path));
   plugin.app = {
     vault: {
@@ -103,6 +135,19 @@ function createPlugin(frontmatterByPath: Record<string, Record<string, unknown>>
   };
   plugin.settings = { databaseFolder: "Databases" };
   return plugin;
+}
+
+interface ConfigResult {
+  baseThisFilePath: string;
+  schema: {
+    computedFields: Array<{ key: string; type?: string }>;
+    columns: Array<{ key: string; width?: number }>;
+  };
+  views: Array<{
+    columnWidths: Record<string, number>;
+    sourceRuleTree?: unknown;
+  }>;
+  sourceRuleTree: unknown;
 }
 
 describe(".base import", () => {
@@ -138,11 +183,11 @@ describe(".base import", () => {
     });
     const baseFile = file("Projects/source.base", "base");
 
-    const { config } = plugin.createConfigFromBase(baseFile, "ignored");
+    const { config } = plugin.createConfigFromBase(baseFile, "ignored") as unknown as { config: ConfigResult };
 
     expect(config.baseThisFilePath).toBe("Projects/source.base");
-    expect(config.schema.computedFields.find((field: any) => field.key === "active")?.type).toBe("checkbox");
-    expect(config.schema.columns.find((col: any) => col.key === "status")?.width).toBeUndefined();
+    expect(config.schema.computedFields.find((field) => field.key === "active")?.type).toBe("checkbox");
+    expect(config.schema.columns.find((col) => col.key === "status")?.width).toBeUndefined();
     expect(config.views[0].columnWidths).toEqual({ status: 420, "formula.active": 96 });
     expect(config.views[1].columnWidths).toEqual({ status: 180 });
     expect(config.sourceRuleTree).toEqual({
@@ -201,11 +246,14 @@ describe(".base import", () => {
     });
     const plugin = createPlugin();
 
-    const { config } = plugin.createConfigFromBase(file("Projects/source.base", "base"), "ignored");
+    const { config } = plugin.createConfigFromBase(file("Projects/source.base", "base"), "ignored") as unknown as { config: ConfigResult };
 
     expect(config.sourceRuleTree).toEqual({ field: "status", op: "eq", value: "active", valueType: "string" });
     expect(config.views[0].sourceRuleTree).toEqual({ field: "owner", op: "eq", value: "me", valueType: "string" });
-    expect(combineSourceRuleTrees(config.sourceRuleTree, config.views[0].sourceRuleTree)).toEqual({
+    expect(combineSourceRuleTrees(
+      config.sourceRuleTree as Parameters<typeof combineSourceRuleTrees>[0],
+      config.views[0].sourceRuleTree as Parameters<typeof combineSourceRuleTrees>[1]
+    )).toEqual({
       type: "group",
       logic: "and",
       rules: [

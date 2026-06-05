@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ColumnOperations } from "../views/ColumnOperations";
 import { ColumnDef, DatabaseConfig, ViewConfig } from "../data/types";
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 vi.mock("obsidian", () => ({
   Modal: class Modal {
     app: unknown;
@@ -23,7 +26,8 @@ vi.mock("../views/modals/ConfirmModal", () => ({
   confirmWithModal: vi.fn().mockResolvedValue(true),
 }));
 
-(globalThis as any).document = { documentElement: { lang: "en" } };
+_g.document = { documentElement: { lang: "en" } };
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
   value: { language: "en-US" },
@@ -39,9 +43,41 @@ function makeState() {
   };
 }
 
+interface PropertyServiceMock {
+  renameKey: ReturnType<typeof vi.fn>;
+  deleteKey: ReturnType<typeof vi.fn>;
+  ensureKey: ReturnType<typeof vi.fn>;
+  copyKey: ReturnType<typeof vi.fn>;
+  convertKeyType: ReturnType<typeof vi.fn>;
+  getDefaultValue: ReturnType<typeof vi.fn>;
+  setObsidianPropertyType: ReturnType<typeof vi.fn>;
+}
+
+interface OpsDeps {
+  app: unknown;
+  dataSource: { getRecordsForConfig: ReturnType<typeof vi.fn> };
+  propertyService: PropertyServiceMock;
+  viewStateStore: { persist: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.fn> };
+  getConfig: () => ViewConfig;
+  getActiveDb: () => DatabaseConfig;
+  getState: () => ReturnType<typeof makeState>;
+  getFilesForConfig: () => unknown[];
+  saveConfigImmediately: ReturnType<typeof vi.fn>;
+  saveCurrentViewConfig: ReturnType<typeof vi.fn>;
+  scheduleConfigSave: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
+  refreshSchemaChanged: ReturnType<typeof vi.fn>;
+  refreshAfterSave: ReturnType<typeof vi.fn>;
+  markPendingColumn: ReturnType<typeof vi.fn>;
+  refreshColumnManager: ReturnType<typeof vi.fn>;
+  setPendingUndoLabel: ReturnType<typeof vi.fn>;
+  setPendingConfigCellChanges: ReturnType<typeof vi.fn>;
+  getDefaultStatusOptions: ReturnType<typeof vi.fn>;
+}
+
 function makeOps(db: DatabaseConfig, view: ViewConfig) {
   const state = makeState();
-  const propertyService = {
+  const propertyService: PropertyServiceMock = {
     renameKey: vi.fn().mockResolvedValue({ moved: 0, skippedConflicts: 0, deletedStale: 0 }),
     deleteKey: vi.fn().mockResolvedValue({ changed: 0, skipped: 0 }),
     ensureKey: vi.fn().mockResolvedValue({ changed: 0, skipped: 0 }),
@@ -50,14 +86,14 @@ function makeOps(db: DatabaseConfig, view: ViewConfig) {
     getDefaultValue: vi.fn().mockReturnValue(""),
     setObsidianPropertyType: vi.fn().mockResolvedValue(undefined),
   };
-  const ops = new ColumnOperations({
-    app: {} as any,
-    dataSource: { getRecordsForConfig: vi.fn().mockReturnValue([]) } as any,
-    propertyService: propertyService as any,
-    viewStateStore: { persist: vi.fn(), clear: vi.fn() } as any,
+  const deps: OpsDeps = {
+    app: {},
+    dataSource: { getRecordsForConfig: vi.fn().mockReturnValue([]) },
+    propertyService,
+    viewStateStore: { persist: vi.fn(), clear: vi.fn() },
     getConfig: () => view,
     getActiveDb: () => db,
-    getState: () => state as any,
+    getState: () => state,
     getFilesForConfig: () => [],
     saveConfigImmediately: vi.fn().mockResolvedValue(undefined),
     saveCurrentViewConfig: vi.fn().mockResolvedValue(undefined),
@@ -70,14 +106,15 @@ function makeOps(db: DatabaseConfig, view: ViewConfig) {
     setPendingUndoLabel: vi.fn(),
     setPendingConfigCellChanges: vi.fn(),
     getDefaultStatusOptions: vi.fn().mockReturnValue([]),
-  });
+  };
+  const ops = new ColumnOperations(deps as unknown as ConstructorParameters<typeof ColumnOperations>[0]);
   return { ops, propertyService, state };
 }
 
 describe("ColumnOperations", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    (globalThis as any).window = {
+    _g.window = {
       activeDocument: { documentElement: { lang: "en" } },
       confirm: vi.fn().mockReturnValue(true),
     };
@@ -101,7 +138,7 @@ describe("ColumnOperations", () => {
       id: "board",
       name: "Board",
       sourceFolder: "",
-      schema: JSON.parse(JSON.stringify(schema)),
+      schema: JSON.parse(JSON.stringify(schema)) as ViewConfig["schema"],
       columnOrder: ["new_field", "file.name"],
       hiddenColumns: ["new_field"],
     };

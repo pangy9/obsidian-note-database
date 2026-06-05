@@ -1,8 +1,9 @@
 import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef, getAllTags } from "obsidian";
-import { ColumnDef, DatabaseConfig, SourceRule, ViewConfig } from "./types";
+import { ColumnDef, DatabaseConfig, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
+import { safeString } from "./SafeString";
 import { hasObsidianTagValue, normalizeStatusPresets, toObsidianTagValues } from "./ColumnTypes";
 import { normalizeComputedSyncMode } from "./ComputedSync";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
@@ -110,9 +111,10 @@ export class DataSource {
     this.writeQueues.clear();
   }
 
-  private trackEvent(ref: any): void {
-    if (ref && typeof ref.offref === "function") {
-      this.eventRefs.push(ref);
+  private trackEvent(ref: unknown): void {
+    const eventRef = ref as { offref?: unknown } | null;
+    if (typeof eventRef?.offref === "function") {
+      this.eventRefs.push(eventRef as { offref: () => void });
     }
   }
 
@@ -131,7 +133,7 @@ export class DataSource {
         const cache = this.metadataCache.getFileCache(f);
         const frontmatter = this.withFrontmatterOverride(
           f.path,
-          cache?.frontmatter ? (cache.frontmatter as Record<string, unknown>) : {}
+          cache?.frontmatter ? (cache.frontmatter) : {}
         );
         return { file: f, frontmatter };
       })
@@ -265,7 +267,7 @@ export class DataSource {
         continue;
       }
       const cache = this.metadataCache.getFileCache(f);
-      const fm = cache?.frontmatter as Record<string, unknown> | undefined;
+      const fm = cache?.frontmatter;
       if (!fm || fm["db_view"] !== true) continue;
 
       const config = this.parseDatabaseConfig(fm);
@@ -284,9 +286,9 @@ export class DataSource {
         : {};
       const source = { ...fm, ...database };
       const sharedSchema = {
-        columns: Array.isArray(source["columns"]) ? source["columns"] as any : [],
-        computedFields: Array.isArray(source["computedFields"]) ? source["computedFields"] as any : [],
-      };
+        columns: Array.isArray(source["columns"]) ? source["columns"] as ColumnDef[] : [],
+        computedFields: Array.isArray(source["computedFields"]) ? source["computedFields"] as RecordSchema["computedFields"] : [],
+      } satisfies RecordSchema;
 
       // Parse views: new format has database.views array, old format has flat view props
       const viewsArray = database["views"];
@@ -294,7 +296,9 @@ export class DataSource {
 
       if (Array.isArray(viewsArray) && viewsArray.length > 0) {
         // New format: views array
-        views = viewsArray.map((v: any) => this.parseViewConfig(v, sharedSchema));
+        views = viewsArray
+          .filter((v): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v))
+          .map((v) => this.parseViewConfig(v, sharedSchema));
       } else {
         // Old format: flat view properties at top level
         const viewType = this.parseViewType(source["viewType"]);
@@ -302,22 +306,22 @@ export class DataSource {
           id: generateId(),
           name: this.getDefaultViewName(viewType),
           viewType,
-          sourceFolder: String(source["sourceFolder"] || ""),
-          sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as any : undefined,
+          sourceFolder: safeString(source["sourceFolder"]),
+          sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
           sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
           sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
-          newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
-          typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
+          newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
+          typeFilter: safeString(source["typeFilter"]) || undefined,
           schema: sharedSchema,
           statusPresets: normalizeStatusPresets(source["viewStatusPresets"] || [], []),
-          defaultStatusPresetId: source["viewDefaultStatusPresetId"] != null ? String(source["viewDefaultStatusPresetId"]) : undefined,
+          defaultStatusPresetId: safeString(source["viewDefaultStatusPresetId"]) || undefined,
           displayWidth: source["displayWidth"] === "wide" ? "wide" : "default",
-          boardGroupField: source["boardGroupField"] != null ? String(source["boardGroupField"]) : undefined,
-          boardSubgroupField: source["boardSubgroupField"] != null ? String(source["boardSubgroupField"]) : undefined,
+          boardGroupField: safeString(source["boardGroupField"]) || undefined,
+          boardSubgroupField: safeString(source["boardSubgroupField"]) || undefined,
           boardColumnWidth: typeof source["boardColumnWidth"] === "number" ? source["boardColumnWidth"] : undefined,
           defaultColumnWidth: typeof source["defaultColumnWidth"] === "number" ? source["defaultColumnWidth"] : undefined,
-          titleField: source["titleField"] != null ? String(source["titleField"]) : undefined,
-          galleryImageField: source["galleryImageField"] != null ? String(source["galleryImageField"]) : undefined,
+          titleField: safeString(source["titleField"]) || undefined,
+          galleryImageField: safeString(source["galleryImageField"]) || undefined,
           galleryImageAspectRatio: typeof source["galleryImageAspectRatio"] === "number" ? source["galleryImageAspectRatio"] : undefined,
           galleryCardSize: typeof source["galleryCardSize"] === "number" ? source["galleryCardSize"] : undefined,
           galleryImageFit: source["galleryImageFit"] === "contain" ? "contain" : source["galleryImageFit"] === "cover" ? "cover" : undefined,
@@ -325,10 +329,10 @@ export class DataSource {
           columnOrder: Array.isArray(source["columnOrder"]) ? source["columnOrder"] as string[] : undefined,
           columnWidths: this.parseNumberMap(source["columnWidths"]),
           hiddenColumns: Array.isArray(source["hiddenColumns"]) ? source["hiddenColumns"] as string[] : undefined,
-          sortColumnOrder: source["sortColumnOrder"] != null ? String(source["sortColumnOrder"]) : undefined,
-          statusFilter: source["statusFilter"] != null ? String(source["statusFilter"]) : undefined,
-          searchText: source["searchText"] != null ? String(source["searchText"]) : undefined,
-          groupByField: source["groupByField"] != null ? String(source["groupByField"]) : undefined,
+          sortColumnOrder: safeString(source["sortColumnOrder"]) || undefined,
+          statusFilter: safeString(source["statusFilter"]) || undefined,
+          searchText: safeString(source["searchText"]) || undefined,
+          groupByField: safeString(source["groupByField"]) || undefined,
           groupOrders: source["groupOrders"] && typeof source["groupOrders"] === "object"
             ? source["groupOrders"] as Record<string, string[]>
             : undefined,
@@ -339,36 +343,36 @@ export class DataSource {
             ? source["boardCardOrders"] as Record<string, Record<string, string[]>>
             : undefined,
           manualOrder: source["manualOrder"] && typeof source["manualOrder"] === "object"
-            ? source["manualOrder"] as { ranks?: Record<string, string> }
+            ? source["manualOrder"]
             : undefined,
           filterLogic: source["filterLogic"] === "or" ? "or" : "and",
-          filters: Array.isArray(source["filters"]) ? source["filters"] as any : undefined,
+          filters: Array.isArray(source["filters"]) ? source["filters"] as FilterRule[] : undefined,
           resultLimit: this.parseResultLimit(source["resultLimit"]),
           summaryRules: this.parseStringMap(source["summaryRules"]),
-          sortColumn: source["sortColumn"] != null ? String(source["sortColumn"]) : undefined,
+          sortColumn: safeString(source["sortColumn"]) || undefined,
           sortDirection: source["sortDirection"] === "desc" ? "desc" : "asc" as const,
-          sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as any : undefined,
+          sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as SortRule[] : undefined,
           viewStates: source["viewStates"] && typeof source["viewStates"] === "object"
-            ? source["viewStates"] as any
+            ? source["viewStates"]
             : undefined,
         }];
       }
 
       return {
-        id: database["id"] != null ? String(database["id"]) : generateId(),
-        name: String(source["name"] || fm["name"] || ""),
-        description: source["description"] != null ? String(source["description"]) : undefined,
-        sourceFolder: String(source["sourceFolder"] || ""),
-        sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as any : undefined,
+        id: database["id"] != null ? safeString(database["id"]) : generateId(),
+        name: safeString(source["name"] || fm["name"]),
+        description: safeString(source["description"]) || undefined,
+        sourceFolder: safeString(source["sourceFolder"]),
+        sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
         sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
         sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
-        newRecordFolder: source["newRecordFolder"] != null ? String(source["newRecordFolder"]) : undefined,
-        typeFilter: source["typeFilter"] != null ? String(source["typeFilter"]) : undefined,
+        newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
+        typeFilter: safeString(source["typeFilter"]) || undefined,
         computedSyncMode: normalizeComputedSyncMode(source["computedSyncMode"]),
         summaryFormulas: this.parseStringMap(source["summaryFormulas"]),
         schema: sharedSchema,
         statusPresets: normalizeStatusPresets(source["statusPresets"] || [], []),
-        defaultStatusPresetId: source["defaultStatusPresetId"] != null ? String(source["defaultStatusPresetId"]) : undefined,
+        defaultStatusPresetId: safeString(source["defaultStatusPresetId"]) || undefined,
         views,
       };
     } catch (e) {
@@ -377,27 +381,27 @@ export class DataSource {
     }
   }
 
-  private parseViewConfig(v: Record<string, unknown>, sharedSchema: any): ViewConfig {
+  private parseViewConfig(v: Record<string, unknown>, sharedSchema: RecordSchema): ViewConfig {
     return {
       id: (v["id"] as string) || generateId(),
-      name: String(v["name"] || this.getDefaultViewName(this.parseViewType(v["viewType"]))),
+      name: safeString(v["name"]) || this.getDefaultViewName(this.parseViewType(v["viewType"])),
       viewType: this.parseViewType(v["viewType"]),
-      sourceFolder: String(v["sourceFolder"] || ""),
-      sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as any : undefined,
+      sourceFolder: safeString(v["sourceFolder"]),
+      sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as SourceRule[] : undefined,
       sourceLogic: v["sourceLogic"] === "or" ? "or" : "and",
       sourceRuleTree: parseSourceRuleTree(v["sourceRuleTree"]),
-      newRecordFolder: v["newRecordFolder"] != null ? String(v["newRecordFolder"]) : undefined,
-      typeFilter: v["typeFilter"] != null ? String(v["typeFilter"]) : undefined,
+      newRecordFolder: safeString(v["newRecordFolder"]) || undefined,
+      typeFilter: safeString(v["typeFilter"]) || undefined,
       schema: sharedSchema,
       statusPresets: normalizeStatusPresets(v["statusPresets"] || [], []),
-      defaultStatusPresetId: v["defaultStatusPresetId"] != null ? String(v["defaultStatusPresetId"]) : undefined,
+      defaultStatusPresetId: safeString(v["defaultStatusPresetId"]) || undefined,
       displayWidth: v["displayWidth"] === "wide" ? "wide" : "default",
-      boardGroupField: v["boardGroupField"] != null ? String(v["boardGroupField"]) : undefined,
-      boardSubgroupField: v["boardSubgroupField"] != null ? String(v["boardSubgroupField"]) : undefined,
+      boardGroupField: safeString(v["boardGroupField"]) || undefined,
+      boardSubgroupField: safeString(v["boardSubgroupField"]) || undefined,
       boardColumnWidth: typeof v["boardColumnWidth"] === "number" ? v["boardColumnWidth"] : undefined,
       defaultColumnWidth: typeof v["defaultColumnWidth"] === "number" ? v["defaultColumnWidth"] : undefined,
-      titleField: v["titleField"] != null ? String(v["titleField"]) : undefined,
-      galleryImageField: v["galleryImageField"] != null ? String(v["galleryImageField"]) : undefined,
+      titleField: safeString(v["titleField"]) || undefined,
+      galleryImageField: safeString(v["galleryImageField"]) || undefined,
       galleryImageAspectRatio: typeof v["galleryImageAspectRatio"] === "number" ? v["galleryImageAspectRatio"] : undefined,
       galleryCardSize: typeof v["galleryCardSize"] === "number" ? v["galleryCardSize"] : undefined,
       galleryImageFit: v["galleryImageFit"] === "contain" ? "contain" : v["galleryImageFit"] === "cover" ? "cover" : undefined,
@@ -405,10 +409,10 @@ export class DataSource {
       columnOrder: Array.isArray(v["columnOrder"]) ? v["columnOrder"] as string[] : undefined,
       columnWidths: this.parseNumberMap(v["columnWidths"]),
       hiddenColumns: Array.isArray(v["hiddenColumns"]) ? v["hiddenColumns"] as string[] : undefined,
-      sortColumnOrder: v["sortColumnOrder"] != null ? String(v["sortColumnOrder"]) : undefined,
-      statusFilter: v["statusFilter"] != null ? String(v["statusFilter"]) : undefined,
-      searchText: v["searchText"] != null ? String(v["searchText"]) : undefined,
-      groupByField: v["groupByField"] != null ? String(v["groupByField"]) : undefined,
+      sortColumnOrder: safeString(v["sortColumnOrder"]) || undefined,
+      statusFilter: safeString(v["statusFilter"]) || undefined,
+      searchText: safeString(v["searchText"]) || undefined,
+      groupByField: safeString(v["groupByField"]) || undefined,
       groupOrders: v["groupOrders"] && typeof v["groupOrders"] === "object"
         ? v["groupOrders"] as Record<string, string[]>
         : undefined,
@@ -419,17 +423,17 @@ export class DataSource {
         ? v["boardCardOrders"] as Record<string, Record<string, string[]>>
         : undefined,
       manualOrder: v["manualOrder"] && typeof v["manualOrder"] === "object"
-        ? v["manualOrder"] as { ranks?: Record<string, string> }
+        ? v["manualOrder"]
         : undefined,
       filterLogic: v["filterLogic"] === "or" ? "or" : "and",
-      filters: Array.isArray(v["filters"]) ? v["filters"] as any : undefined,
+      filters: Array.isArray(v["filters"]) ? v["filters"] as FilterRule[] : undefined,
       resultLimit: this.parseResultLimit(v["resultLimit"]),
       summaryRules: this.parseStringMap(v["summaryRules"]),
-      sortColumn: v["sortColumn"] != null ? String(v["sortColumn"]) : undefined,
+      sortColumn: safeString(v["sortColumn"]) || undefined,
       sortDirection: v["sortDirection"] === "desc" ? "desc" : "asc" as const,
-      sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as any : undefined,
+      sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as SortRule[] : undefined,
       viewStates: v["viewStates"] && typeof v["viewStates"] === "object"
-        ? v["viewStates"] as any
+        ? v["viewStates"]
         : undefined,
     };
   }
@@ -444,7 +448,7 @@ export class DataSource {
           const f = fm as Record<string, unknown>;
           f["db_view"] = true;
           f["name"] = dbConfig.name;
-          f["database"] = this.toDatabasePayload(dbConfig) as any;
+          f["database"] = this.toDatabasePayload(dbConfig);
           for (const key of this.legacyViewKeys()) delete f[key];
         });
       } catch (err) {
@@ -645,7 +649,7 @@ export class DataSource {
     const cache = this.metadataCache.getFileCache(file);
     const frontmatter = this.withFrontmatterOverride(
       file.path,
-      cache?.frontmatter ? (cache.frontmatter as Record<string, unknown>) : {}
+      cache?.frontmatter ? (cache.frontmatter) : {}
     );
     return { file, frontmatter };
   }
@@ -815,7 +819,7 @@ export class DataSource {
     try {
       const thisFile = this.getBaseThisFile(db);
       const thisFrontmatter = thisFile
-        ? this.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        ? this.metadataCache.getFileCache(thisFile)?.frontmatter
         : undefined;
       return evaluateBaseFilterExpression(expression, {
         app: this.app,
@@ -844,7 +848,7 @@ export class DataSource {
       if (!db?.schema.computedFields?.some((computed) => computed.key === key)) return undefined;
       const thisFile = this.getBaseThisFile(db);
       const thisFrontmatter = thisFile
-        ? this.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        ? this.metadataCache.getFileCache(thisFile)?.frontmatter
         : undefined;
       return evaluateComputedFields(db.schema.computedFields, db.schema.columns, record.frontmatter, {
         app: this.app,
@@ -917,7 +921,7 @@ function isBaseSourceEmptyValue(value: unknown): boolean {
   if (typeof value === "number") return !Number.isFinite(value);
   if (Array.isArray(value)) return value.length === 0;
   if (value instanceof Date) return !Number.isFinite(value.getTime());
-  if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+  if (value && typeof value === "object") return Object.keys(value).length === 0;
   return false;
 }
 
@@ -929,12 +933,12 @@ function baseSourceValuesEqual(value: unknown, rule: SourceRule, columns?: Colum
 function baseSourceScalarValuesEqual(value: unknown, rule: SourceRule, columns?: ColumnDef[]): boolean {
   const expected = String(rule.value ?? "");
   if (shouldCompareSourceRuleAsDate(rule, columns)) {
-    const leftDate = typeof value === "number" ? value : value instanceof Date ? value.getTime() : Date.parse(String(value));
+    const leftDate = typeof value === "number" ? value : value instanceof Date ? value.getTime() : Date.parse(safeString(value));
     const rightDate = Date.parse(expected);
     if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate === rightDate;
   }
   if (rule.valueType) return sourceRuleValuesLooseEqual(value, rule);
-  return String(value ?? "") === expected;
+  return safeString(value) === expected;
 }
 
 function shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {
@@ -971,7 +975,7 @@ function compareSourceRuleValue(value: unknown, rule: SourceRule, columns: Colum
 
 function compareScalarSourceRuleValue(value: unknown, expected: string, preferDate: boolean): number {
   if (preferDate) {
-    const leftDate = value instanceof Date ? value.getTime() : Date.parse(String(value));
+    const leftDate = value instanceof Date ? value.getTime() : Date.parse(safeString(value));
     const rightDate = Date.parse(expected);
     if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
   }
@@ -983,7 +987,7 @@ function compareScalarSourceRuleValue(value: unknown, expected: string, preferDa
     ? value.getTime()
     : typeof value === "number" && Number.isFinite(rightDate)
       ? value
-      : Date.parse(String(value));
+      : Date.parse(safeString(value));
   if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
-  return String(value ?? "").localeCompare(expected);
+  return safeString(value).localeCompare(expected);
 }

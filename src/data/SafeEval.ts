@@ -9,6 +9,8 @@
  * objects, arrow functions, `typeof`, `if … else`, and `return`.
  */
 
+import { safeString } from "./SafeString";
+
 // ─── Token ─────────────────────────────────────────────────────
 
 enum TT {
@@ -185,7 +187,7 @@ function tokenize(source: string): Token[] {
 			const tpl = scanTemplateLiteral(source, pos);
 			if (tpl.parts.length === 1 && "cooked" in tpl.parts[0]) {
 				// No interpolation — plain string
-				tokens.push({ type: TT.String, value: (tpl.parts[0] as { cooked: string }).cooked });
+				tokens.push({ type: TT.String, value: (tpl.parts[0]).cooked });
 			} else {
 				tokens.push({ type: TT.Template, value: source.slice(pos, tpl.end), parts: tpl.parts });
 			}
@@ -1040,7 +1042,7 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 
 		case "Arrow":
 			return (...args: unknown[]) => {
-				const childScope: Record<string, unknown> = Object.create(scope);
+				const childScope: Record<string, unknown> = Object.create(scope) as Record<string, unknown>;
 				for (let i = 0; i < node.params.length; i++) {
 					childScope[node.params[i]] = args[i];
 				}
@@ -1060,7 +1062,7 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 					result += part;
 				} else {
 					const val = evalNode(part, scope);
-					result += val == null ? "" : String(val);
+					result += val == null ? "" : safeString(val);
 				}
 			}
 			return result;
@@ -1107,7 +1109,7 @@ function toNumber(val: unknown): number {
 
 function addValues(left: unknown, right: unknown): unknown {
 	if (typeof left === "string" || typeof right === "string") {
-		return String(left ?? "") + String(right ?? "");
+		return safeString(left) + safeString(right);
 	}
 	return toNumber(left) + toNumber(right);
 }

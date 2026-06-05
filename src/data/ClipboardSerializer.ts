@@ -1,6 +1,7 @@
 import { ColumnDef, RowData } from "./types";
 import { isObsidianTagsKey, toMultiSelectValuesForKey } from "./ColumnTypes";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
+import { stringifyValue } from "./Stringify";
 
 export interface CellAddress {
   rowPath: string;
@@ -61,13 +62,13 @@ export function getCellDisplayText(row: RowData, col: ColumnDef): string {
       : row.frontmatter[col.key];
   if (value == null) return "";
   if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
-  if (Array.isArray(value)) return value.map((entry) => String(entry)).join(", ");
+  if (Array.isArray(value)) return value.map((entry) => stringifyValue(entry)).join(", ");
   if (typeof value === "object") {
     try {
       return JSON.stringify(value);
     } catch {
-      return String(value);
+      return stringifyValue(value);
     }
   }
-  return String(value);
+  return stringifyValue(value);
 }

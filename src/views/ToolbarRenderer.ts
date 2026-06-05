@@ -230,7 +230,7 @@ export class ToolbarRenderer {
     currentDbIndex: number,
     actions: ToolbarActions
   ): void {
-    const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
+    const root = anchorEl.closest(".note-database-container");
     if (!root) return;
     if (this.databasePopover?.isConnected) {
       this.closeDatabasePopover();
@@ -405,7 +405,7 @@ export class ToolbarRenderer {
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
+    const root = anchorEl.closest(".note-database-container");
     if (!root) return;
     if (this.titleActionsPopover?.isConnected) {
       this.closeTitleActionsPopover();
@@ -511,7 +511,7 @@ export class ToolbarRenderer {
     }
 
     // Set up resize observer on the toolbar for dynamic overflow detection
-    const toolbar = tabs.closest(".db-toolbar") as HTMLElement | null;
+    const toolbar = tabs.closest(".db-toolbar");
     this.resizeObserver?.disconnect();
     if (toolbar) {
       let collapsing = false;
@@ -573,7 +573,7 @@ export class ToolbarRenderer {
     currentViewIndex: number,
     actions: ToolbarActions
   ): void {
-    const toolbar = tabs.closest(".db-toolbar") as HTMLElement | null;
+    const toolbar = tabs.closest(".db-toolbar");
     const right = toolbar?.querySelector(".db-toolbar-right") as HTMLElement | null;
     const phoneSearch = toolbar?.querySelector(".db-toolbar-left .db-search-control") as HTMLElement | null;
     const boundary = this.isPhoneLayout()
@@ -582,7 +582,7 @@ export class ToolbarRenderer {
     const containerWidth = boundary - tabs.getBoundingClientRect().left;
     const gap = parseFloat(getComputedStyle(tabs).columnGap || getComputedStyle(tabs).gap || "3") || 3;
 
-    const addBtn = tabs.querySelector(".db-view-tab-add") as HTMLElement | null;
+    const addBtn: HTMLElement | null = tabs.querySelector(".db-view-tab-add");
     const addBtnWidth = addBtn ? addBtn.offsetWidth + gap : 0;
     const moreBtnWidth = 24 + gap;
 
@@ -644,7 +644,7 @@ export class ToolbarRenderer {
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    const root = tab.closest(".note-database-container") as HTMLElement | null;
+    const root = tab.closest(".note-database-container");
     if (!root) return;
     this.closeViewTabPopover();
     this.closeDatabasePopover();
@@ -720,7 +720,7 @@ export class ToolbarRenderer {
   private showAddViewMenu(event: MouseEvent, actions: ToolbarActions, anchorEl: HTMLElement): void {
     event.preventDefault();
     event.stopPropagation();
-    const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
+    const root = anchorEl.closest(".note-database-container");
     if (!root) return;
     if (this.viewTabPopover?.isConnected && this.viewTabPopover.hasClass("db-add-view-popover")) {
       this.closeViewTabPopover();
@@ -910,7 +910,7 @@ export class ToolbarRenderer {
     actions: ToolbarActions,
     state: DatabaseViewState
   ): void {
-    const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
+    const root = anchorEl.closest(".note-database-container");
     if (!root) return;
     if (this.groupPopover?.isConnected) {
       this.closeGroupPopover();
@@ -1171,7 +1171,7 @@ export class ToolbarRenderer {
   }
 
   private renderExportPopover(anchorEl: HTMLElement, actions: ToolbarActions): void {
-    const root = anchorEl.closest(".note-database-container") as HTMLElement | null;
+    const root = anchorEl.closest(".note-database-container");
     if (!root) return;
     if (this.exportPopover?.isConnected) {
       this.closeExportPopover();
@@ -1267,12 +1267,12 @@ export class ToolbarRenderer {
 
   private markLatestMenu(className: string, icons?: string[]): void {
     window.requestAnimationFrame(() => {
-      const menus = Array.from(window.activeDocument.querySelectorAll(".menu")) as HTMLElement[];
+      const menus = Array.from(window.activeDocument.querySelectorAll(".menu"));
       const menu = menus[menus.length - 1];
       if (!menu) return;
       menu.addClass(className);
       if (!icons?.length) return;
-      const iconEls = Array.from(menu.querySelectorAll(".menu-item-icon")) as HTMLElement[];
+      const iconEls = Array.from(menu.querySelectorAll<HTMLElement>(".menu-item-icon"));
       iconEls.forEach((el, index) => {
         if (icons[index]) appendSvg(el, icons[index]);
       });

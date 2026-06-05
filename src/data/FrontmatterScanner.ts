@@ -5,6 +5,7 @@ import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleNode } from "./types
 import { hasObsidianTagValue, isObsidianTagsKey, toObsidianTagValues } from "./ColumnTypes";
 import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
+import { stringifyValue } from "./Stringify";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 
@@ -34,7 +35,7 @@ function getEffectiveRules(sourceFolder: string, rules: SourceRule[] | undefined
 	if (!folder) return rules || [];
 	return (rules || []).filter((rule) => (
 		rule.op !== "inFolder" ||
-		normalizeVaultFolder(String(rule.value ?? "")) !== folder
+		normalizeVaultFolder(stringifyValue(rule.value)) !== folder
 	));
 }
 
@@ -57,7 +58,7 @@ function getBaseComputedEvaluationContext(app: App, file: TFile, baseThisFile?: 
 		file,
 		thisFile: baseThisFile,
 		thisFrontmatter: baseThisFile
-			? app.metadataCache.getFileCache(baseThisFile)?.frontmatter as Record<string, unknown> | undefined
+			? app.metadataCache.getFileCache(baseThisFile)?.frontmatter
 			: undefined,
 	};
 }
@@ -96,7 +97,7 @@ function matchesRule(
 	baseThisFile?: TFile
 ): boolean {
 	const value = getSourceFieldValue(file, fm, rule.field, cache, app, computedFields, columns, baseThisFile);
-	const expected = String(rule.value ?? "");
+	const expected = stringifyValue(rule.value);
 	if (rule.op === "inFolder") return isInFolder(file, expected);
 	if (rule.op === "hasTag") return hasObsidianTagValue(getTags(fm, cache), expected);
 	if (rule.op === "hasProperty") return Object.prototype.hasOwnProperty.call(fm, rule.field);
@@ -131,7 +132,7 @@ function isBaseSourceEmptyValue(value: unknown): boolean {
 	if (typeof value === "number") return !Number.isFinite(value);
 	if (Array.isArray(value)) return value.length === 0;
 	if (value instanceof Date) return !Number.isFinite(value.getTime());
-	if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+	if (value && typeof value === "object") return Object.keys(value).length === 0;
 	return false;
 }
 
@@ -143,12 +144,12 @@ function baseSourceValuesEqual(value: unknown, rule: SourceRule, columns?: Colum
 function baseSourceScalarValuesEqual(value: unknown, rule: SourceRule, columns?: ColumnDef[]): boolean {
 	const expected = String(rule.value ?? "");
 	if (shouldCompareSourceRuleAsDate(rule, columns)) {
-		const leftDate = typeof value === "number" ? value : value instanceof Date ? value.getTime() : Date.parse(String(value));
+		const leftDate = typeof value === "number" ? value : value instanceof Date ? value.getTime() : Date.parse(stringifyValue(value));
 		const rightDate = Date.parse(expected);
 		if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate === rightDate;
 	}
 	if (rule.valueType) return sourceRuleValuesLooseEqual(value, rule);
-	return String(value ?? "") === expected;
+	return stringifyValue(value) === expected;
 }
 
 function shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {
@@ -160,7 +161,7 @@ function matchesStringSourceRuleValue(value: unknown, predicate: (text: string) 
 	const values = Array.isArray(value) ? value : [value];
 	return values.some((item) => {
 		if (item == null) return false;
-		const text = String(item);
+		const text = stringifyValue(item);
 		return text.length <= MAX_SOURCE_RULE_MATCH_TEXT_LENGTH && predicate(text);
 	});
 }
@@ -175,7 +176,7 @@ function parseSourceRuleRegex(expected: string): RegExp | undefined {
 }
 
 function compareSourceRuleValue(value: unknown, rule: SourceRule, columns: ColumnDef[] | undefined, predicate: (result: number) => boolean): boolean {
-	const expected = String(rule.value ?? "");
+	const expected = stringifyValue(rule.value);
 	const values = Array.isArray(value) ? value : [value];
 	return values.some((item) => {
 		if (item == null || item === "") return false;
@@ -185,7 +186,7 @@ function compareSourceRuleValue(value: unknown, rule: SourceRule, columns: Colum
 
 function compareScalarSourceRuleValue(value: unknown, expected: string, preferDate: boolean): number {
 	if (preferDate) {
-		const leftDate = value instanceof Date ? value.getTime() : Date.parse(String(value));
+		const leftDate = value instanceof Date ? value.getTime() : Date.parse(stringifyValue(value));
 		const rightDate = Date.parse(expected);
 		if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
 	}
@@ -197,9 +198,9 @@ function compareScalarSourceRuleValue(value: unknown, expected: string, preferDa
 		? value.getTime()
 		: typeof value === "number" && Number.isFinite(rightDate)
 			? value
-			: Date.parse(String(value));
+			: Date.parse(stringifyValue(value));
 	if (Number.isFinite(leftDate) && Number.isFinite(rightDate)) return leftDate - rightDate;
-	return String(value ?? "").localeCompare(expected);
+	return stringifyValue(value).localeCompare(expected);
 }
 
 /** Check if a file and its frontmatter match the configured source rules. */
@@ -225,7 +226,7 @@ function matchesRules(
 			if (!app) return false;
 			try {
 				const thisFrontmatter = baseThisFile
-					? app.metadataCache.getFileCache(baseThisFile)?.frontmatter as Record<string, unknown> | undefined
+					? app.metadataCache.getFileCache(baseThisFile)?.frontmatter
 					: undefined;
 				return evaluateBaseFilterExpression(rule.expression, { app, file, frontmatter: fm, thisFile: baseThisFile, thisFrontmatter, computedFields, columns });
 			} catch {
@@ -256,7 +257,7 @@ export function collectFileFrontmatterKeys(
 	const files = filterByFolder(app.vault.getMarkdownFiles(), sourceFolder);
 	for (const f of files) {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = cache?.frontmatter as Record<string, unknown> | undefined;
+		const fm = cache?.frontmatter;
 		if (!fm || fm["db_view"] === true) continue;
 		if (!matchesRules(f, fm, sourceFolder, sourceRules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		for (const key of Object.keys(fm)) {
@@ -290,7 +291,7 @@ export function collectComputedFieldSamples(
 	const files = filterByFolder(app.vault.getMarkdownFiles(), sourceFolder);
 	for (const f of files) {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = (cache?.frontmatter as Record<string, unknown> | undefined) || {};
+		const fm = (cache?.frontmatter) || {};
 		if (fm["db_view"] === true) continue;
 		if (!matchesRules(f, fm, sourceFolder, sourceRules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		const computed = evaluateComputedFields(computedFields, columns, fm, getBaseComputedEvaluationContext(app, f, baseThisFile));
@@ -310,7 +311,7 @@ export function collectComputedFieldSamples(
 function normalizeComputedSampleValue(value: unknown): unknown {
 	if (value instanceof Date) return value;
 	if (value && typeof value === "object" && typeof (value as { toString?: unknown }).toString === "function") {
-		const text = String(value);
+		const text = stringifyValue(value);
 		if (/^\d{4}-\d{2}-\d{2}/.test(text) && !Number.isNaN(Date.parse(text))) return text;
 	}
 	return value;
@@ -352,7 +353,7 @@ export function getVaultTags(
 	const files = filterByFolder(app.vault.getMarkdownFiles(), sourceFolder);
 	for (const f of files) {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = cache?.frontmatter as Record<string, unknown> | undefined;
+		const fm = cache?.frontmatter;
 		if (!fm || fm["db_view"] === true) continue;
 		if (!matchesRules(f, fm, sourceFolder, sourceRules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		for (const tag of getTags(fm, cache)) tagSet.add(tag);
@@ -377,7 +378,7 @@ export function collectUniqueStringValues(
 	const files = filterByFolder(app.vault.getMarkdownFiles(), sourceFolder);
 	for (const f of files) {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = (cache?.frontmatter as Record<string, unknown> | undefined) || {};
+		const fm = (cache?.frontmatter) || {};
 		if (fm["db_view"] === true) continue;
 		if (!matchesRules(f, fm, sourceFolder, rules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		const val = getSourceFieldValue(f, fm, fieldKey, cache, app, computedFields, columns, baseThisFile);
@@ -411,7 +412,7 @@ export function collectUniqueListValues(
 	const files = filterByFolder(app.vault.getMarkdownFiles(), sourceFolder);
 	for (const f of files) {
 		const cache = app.metadataCache.getFileCache(f);
-		const fm = (cache?.frontmatter as Record<string, unknown> | undefined) || {};
+		const fm = (cache?.frontmatter) || {};
 		if (fm["db_view"] === true) continue;
 		if (!matchesRules(f, fm, sourceFolder, sourceRules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		const val = getSourceFieldValue(f, fm, fieldKey, cache, app, computedFields, columns, baseThisFile);

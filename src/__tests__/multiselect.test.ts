@@ -3,14 +3,15 @@
  * Covers BF-014: merge multi-select defaults for new records.
  */
 import { describe, it, expect } from "vitest";
+import { safeString } from "../data/SafeString";
 
 // ---- Helper from ColumnTypes ----
 function toMultiSelectValues(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
+    return value.map((item) => safeString(item).trim()).filter(Boolean);
   }
   if (value == null || value === "") return [];
-  return String(value)
+  return safeString(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
@@ -21,7 +22,7 @@ const EMPTY_GROUP_ID = "EMPTY_GROUP";
 const LEGACY_EMPTY_GROUP_KEYS = new Set(["未分类", "未分類", "Uncategorized"]);
 
 function isEmptyGroupId(value: unknown): boolean {
-  const key = String(value ?? "").trim();
+  const key = safeString(value).trim();
   return key.length === 0 || key === EMPTY_GROUP_ID || LEGACY_EMPTY_GROUP_KEYS.has(key);
 }
 
@@ -65,7 +66,7 @@ function createOptionRanks(options: readonly (string | { value?: unknown; label?
 function getOptionValue(option: string | { value?: unknown; label?: unknown; name?: unknown }): string {
   if (typeof option === "string") return option.trim();
   const raw = option.value ?? option.label ?? option.name;
-  return String(raw ?? "").trim();
+  return safeString(raw).trim();
 }
 
 // ---- compareMultiSelect ----

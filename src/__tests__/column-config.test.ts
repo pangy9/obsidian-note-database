@@ -231,7 +231,7 @@ function makeViewConfig(overrides: Partial<ViewConfig> = {}): ViewConfig {
   return {
     schema: { columns: [], computedFields: [] },
     ...overrides,
-  } as ViewConfig;
+  };
 }
 
 // =============================================================================

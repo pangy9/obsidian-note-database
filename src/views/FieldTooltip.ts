@@ -1,3 +1,5 @@
+import { stringifyValue } from "../data/Stringify";
+
 export function formatFieldTooltipValue(value: unknown): string {
   if (value == null) return "";
   if (Array.isArray(value)) {
@@ -8,10 +10,10 @@ export function formatFieldTooltipValue(value: unknown): string {
     try {
       return JSON.stringify(value);
     } catch {
-      return String(value);
+      return stringifyValue(value);
     }
   }
-  return String(value);
+  return stringifyValue(value);
 }
 
 export function setFieldTooltip(el: HTMLElement, value: unknown, prefix?: string): void {

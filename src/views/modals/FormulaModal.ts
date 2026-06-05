@@ -7,6 +7,7 @@ import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef
 import { getEffectiveLocale, t } from "../../i18n";
 import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
 import { confirmWithModal } from "./ConfirmModal";
+import { safeString } from "../../data/SafeString";
 
 export interface FormulaSaveResult {
   expression: string;
@@ -404,7 +405,7 @@ export class FormulaModal extends Modal {
     }
 
     const items = this.getHelpItems();
-    if (!this.selectedHelpItem || !items.some((item) => this.isSameHelpItem(item, this.selectedHelpItem!))) {
+    if (!this.selectedHelpItem || !items.some((item) => this.isSameHelpItem(item, this.selectedHelpItem))) {
       this.selectedHelpItem = items[0] || null;
     }
 
@@ -531,7 +532,7 @@ export class FormulaModal extends Modal {
           if (value) values.add(value);
         }
       } else if (raw != null && raw !== "") {
-        values.add(String(raw));
+        values.add(safeString(raw));
       }
     }
     return [...values]
@@ -991,10 +992,10 @@ export class FormulaModal extends Modal {
       try {
         return JSON.stringify(value);
       } catch {
-        return JSON.stringify(String(value));
+        return JSON.stringify(safeString(value));
       }
     }
-    return JSON.stringify(String(value));
+    return JSON.stringify(safeString(value));
   }
 
   private updateEditorChrome(): void {
@@ -1320,10 +1321,10 @@ export class FormulaModal extends Modal {
       try {
         return JSON.stringify(value);
       } catch {
-        return String(value);
+        return safeString(value);
       }
     }
-    return String(value);
+    return safeString(value);
   }
 
   private copyAiPrompt(): void {

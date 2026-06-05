@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { isHTMLElement } from "./DomGuards";
+import { safeString } from "../data/SafeString";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -409,7 +410,7 @@ export class ListRenderer {
     if (!col) return "";
     const value = this.getCellValue(row, col);
     if (value == null) return "";
-    return Array.isArray(value) ? value.join(", ") : String(value);
+    return Array.isArray(value) ? value.join(", ") : safeString(value);
   }
 
   private renderValue(field: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {

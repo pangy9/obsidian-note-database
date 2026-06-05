@@ -7,13 +7,17 @@ import {
   getSourceRuleOperatorGroupsForField,
 } from "../views/ViewConfigPanelRenderer";
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 vi.mock("obsidian", () => ({
   Modal: class {},
   Notice: class {},
   setIcon: () => undefined,
 }));
 
-(globalThis as any).document = { documentElement: { lang: "en" } };
+_g.document = { documentElement: { lang: "en" } };
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
   value: { language: "en-US" },

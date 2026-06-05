@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { DataSource } from "../data/DataSource";
 import { DatabaseConfig } from "../data/types";
 
+// eslint-disable-next-line obsidianmd/no-global-this -- test setup needs globalThis to mock globals
+const _g = globalThis as unknown as Record<string, unknown>;
+
 const { MockTFile } = vi.hoisted(() => ({
   MockTFile: class MockTFile {},
 }));
@@ -13,9 +16,9 @@ vi.mock("obsidian", () => ({
   stringifyYaml: (value: unknown) => JSON.stringify(value),
 }));
 
-(globalThis as any).moment = Object.assign(
+_g.moment = Object.assign(
   (value: unknown) => {
-    const date = value == null ? new Date() : new Date(value as any);
+    const date = value == null ? new Date() : new Date(value as string | number | Date);
     return {
       isValid: () => !Number.isNaN(date.getTime()),
       toDate: () => date,
@@ -25,7 +28,16 @@ vi.mock("obsidian", () => ({
   { isMoment: () => false, ISO_8601: "ISO_8601" }
 );
 
-function file(path: string) {
+interface MockFile {
+  name: string;
+  basename: string;
+  path: string;
+  extension: string;
+  parent: { path: string };
+  stat: { size: number; ctime: number; mtime: number };
+}
+
+function file(path: string): MockFile {
   const name = path.split("/").pop() || path;
   return Object.assign(new MockTFile(), {
     name,
@@ -34,7 +46,18 @@ function file(path: string) {
     extension: "md",
     parent: { path: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "" },
     stat: { size: 1, ctime: 0, mtime: 0 },
-  }) as any;
+  });
+}
+
+interface MockApp {
+  vault: {
+    getMarkdownFiles: () => MockFile[];
+    getAbstractFileByPath: () => null;
+  };
+  metadataCache: {
+    getFileCache: (target: { path: string }) => { frontmatter: Record<string, unknown> };
+    getFirstLinkpathDest: () => null;
+  };
 }
 
 describe("DataSource Bases source rules", () => {
@@ -45,7 +68,7 @@ describe("DataSource Bases source rules", () => {
       [high.path]: { score: 4 },
       [low.path]: { score: 2 },
     };
-    const app = {
+    const app: MockApp = {
       vault: {
         getMarkdownFiles: () => [high, low],
         getAbstractFileByPath: () => null,
@@ -54,7 +77,7 @@ describe("DataSource Bases source rules", () => {
         getFileCache: (target: { path: string }) => ({ frontmatter: frontmatterByPath[target.path] || {} }),
         getFirstLinkpathDest: () => null,
       },
-    } as any;
+    };
     const db: DatabaseConfig = {
       id: "db",
       name: "DB",
@@ -72,7 +95,7 @@ describe("DataSource Bases source rules", () => {
       views: [],
     };
 
-    expect(new DataSource(app).getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/high.md"]);
+    expect(new DataSource(app as unknown as ConstructorParameters<typeof DataSource>[0]).getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/high.md"]);
   });
 
   it("compares typed date range rules as dates", () => {
@@ -82,7 +105,7 @@ describe("DataSource Bases source rules", () => {
       [early.path]: { due: "2024-01-09" },
       [late.path]: { due: "2024-01-10T12:00:00" },
     };
-    const app = {
+    const app: MockApp = {
       vault: {
         getMarkdownFiles: () => [early, late],
         getAbstractFileByPath: () => null,
@@ -91,7 +114,7 @@ describe("DataSource Bases source rules", () => {
         getFileCache: (target: { path: string }) => ({ frontmatter: frontmatterByPath[target.path] || {} }),
         getFirstLinkpathDest: () => null,
       },
-    } as any;
+    };
     const db: DatabaseConfig = {
       id: "db",
       name: "DB",
@@ -104,6 +127,6 @@ describe("DataSource Bases source rules", () => {
       views: [],
     };
 
-    expect(new DataSource(app).getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/late.md"]);
+    expect(new DataSource(app as unknown as ConstructorParameters<typeof DataSource>[0]).getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/late.md"]);
   });
 });

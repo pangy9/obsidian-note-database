@@ -715,7 +715,7 @@ export class ColumnOperations {
   }
 
   private cloneValue(value: unknown): unknown {
-    if (Array.isArray(value)) return [...value];
+    if (Array.isArray(value)) return [...(value as unknown[])];
     if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
     return value;
   }

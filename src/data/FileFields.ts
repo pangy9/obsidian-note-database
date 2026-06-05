@@ -1,5 +1,6 @@
 import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian";
 import { toObsidianTagValues } from "./ColumnTypes";
+import { stringifyValue } from "./Stringify";
 import { ColumnDef, RowData } from "./types";
 
 export const BASE_FILE_FIELD_KEYS = new Set([
@@ -107,7 +108,7 @@ function getLinkTargetText(target: unknown): string {
     if (typeof source.path === "string") return parseLinkTargetText(source.path);
     if (typeof source.name === "string") return parseLinkTargetText(source.name);
   }
-  return parseLinkTargetText(String(target ?? ""));
+  return parseLinkTargetText(stringifyValue(target));
 }
 
 function parseLinkTargetText(value: string): string {

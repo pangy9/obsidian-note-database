@@ -149,8 +149,9 @@ export class SettingsTab extends PluginSettingTab {
   /** 关闭 Obsidian 设置面板 */
   private closeSettings(): void {
     // Obsidian 内部 API：app.setting.close() 可关闭设置面板
-    const setting = (this.app as any).setting;
-    if (setting && typeof setting.close === "function") {
+    const appInternal = this.app as App & { setting?: { close(): void } };
+    const setting = appInternal.setting;
+    if (setting) {
       setting.close();
     }
   }
@@ -215,8 +216,9 @@ export class SettingsTab extends PluginSettingTab {
   }
 
   private getUniqueDatabaseName(baseName: string): string {
+    const legacyDatabases = (this.plugin.settings as unknown as { databases?: unknown }).databases;
     const existing = new Set([
-      ...this.plugin.settings.databases.map((db) => db.name),
+      ...(Array.isArray(legacyDatabases) ? legacyDatabases.map((db) => (db as DatabaseConfig).name) : []),
       ...this.plugin.dataSource.getViewDefFiles().map((entry) => entry.config.name),
     ]);
     if (!existing.has(baseName)) return baseName;

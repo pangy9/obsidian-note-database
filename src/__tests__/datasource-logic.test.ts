@@ -5,15 +5,9 @@
  * - Source rule matching operators
  */
 import { describe, it, expect } from "vitest";
+import { safeString } from "../data/SafeString";
 
-// ---- normalizeVaultFolder (duplicated in 3 files, identical logic) ----
-function normalizeVaultFolder(folderPath: string): string {
-  const normalized = (folderPath || "").replace(/^\/+/, "").replace(/\/+$/, "").replace(/\/+/g, "/");
-  if (normalized === "/") return "";
-  return normalized;
-}
-
-// More accurate version matching Obsidian's normalizePath + strip logic
+// ---- normalizeVaultFolder (matching Obsidian's normalizePath + strip logic) ----
 function normalizeVaultFolderObsidian(folderPath: string): string {
   // Simulates: normalizePath(folderPath || "") then strip leading /
   // normalizePath removes trailing slashes, collapses double slashes
@@ -40,20 +34,14 @@ function getTags(fm: Record<string, unknown>): string[] {
 // ---- Source rule operator matching (pure logic, no Obsidian deps) ----
 type SourceRuleOp = "inFolder" | "hasTag" | "eq" | "neq" | "contains" | "empty" | "notempty";
 
-interface SourceRule {
-  field: string;
-  op: SourceRuleOp;
-  value?: string;
-}
-
 function matchOperator(value: unknown, op: SourceRuleOp, expected: string): boolean {
   switch (op) {
     case "eq":
-      return String(value ?? "") === expected;
+      return safeString(value) === expected;
     case "neq":
-      return String(value ?? "") !== expected;
+      return safeString(value) !== expected;
     case "contains":
-      return String(value ?? "").toLowerCase().includes(expected.toLowerCase());
+      return safeString(value).toLowerCase().includes(expected.toLowerCase());
     case "empty":
       return value == null || value === "";
     case "notempty":

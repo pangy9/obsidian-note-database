@@ -50,7 +50,7 @@ export class RowPipeline {
       ? app.vault.getAbstractFileByPath(config.baseThisFilePath)
       : null;
     const thisFrontmatter = thisFile instanceof TFile
-      ? app?.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+      ? app?.metadataCache.getFileCache(thisFile)?.frontmatter
       : undefined;
     return records.map((record) => ({
       app,

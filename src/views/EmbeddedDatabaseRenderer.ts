@@ -19,6 +19,7 @@ import { getEffectiveFilterRules } from "../data/FilterRules";
 import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
 import { createCsvMarkdownZip } from "../data/CsvMarkdownZipExport";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
+import { safeString } from "../data/SafeString";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { CellRenderer } from "./CellRenderer";
@@ -510,7 +511,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       sourceFolder: config.sourceFolder,
       schema: config.schema,
       views: [config],
-    } as DatabaseConfig;
+    };
     this.toolbarRenderer.render(this.containerEl, [{ config: dbConfig, sourcePath: this.currentSourcePath }], 0, this.currentViewIndex, this.vs(config), {
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
@@ -614,7 +615,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private updateStickyOffsets(): void {
     const update = () => {
-      const header = this.containerEl.querySelector(":scope > .db-header") as HTMLElement | null;
+      const header = this.containerEl.querySelector(":scope > .db-header");
       const height = header ? Math.ceil(header.getBoundingClientRect().height) : 88;
       this.containerEl.style.setProperty("--db-table-header-top", `${height}px`);
     };
@@ -1091,10 +1092,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       try {
         return JSON.stringify(value);
       } catch {
-        return String(value);
+        return safeString(value);
       }
     }
-    return String(value);
+    return safeString(value);
   }
 
   private sortByColumn(col: ColumnDef): void {
@@ -1695,7 +1696,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       const key = getComputedStorageKey(col);
       const value = computed[key];
       const nextValue = value == null ? "" : value;
-      if (String(frontmatter[key] ?? "") !== String(nextValue ?? "")) {
+      if (safeString(frontmatter[key]) !== safeString(nextValue)) {
         updates[key] = nextValue;
       }
     }
@@ -1721,7 +1722,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           const key = getComputedStorageKey(col);
           const value = row.computed[key];
           const next = value == null ? "" : value;
-          if (String(row.frontmatter[key] ?? "") !== String(next ?? "")) updates[key] = next;
+          if (safeString(row.frontmatter[key]) !== safeString(next)) updates[key] = next;
         }
         if (Object.keys(updates).length > 0) {
           await this.dataSource.updateFrontmatter(row.file, updates);
@@ -1763,7 +1764,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       file,
       thisFile: thisFile instanceof TFile ? thisFile : undefined,
       thisFrontmatter: thisFile instanceof TFile
-        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter as Record<string, unknown> | undefined
+        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter
         : undefined,
     };
   }
@@ -1945,7 +1946,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
       if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
       if (typeof value === "boolean") return value ? "✓" : "";
-      return String(value);
+      return safeString(value);
     };
 
     let content: string;
@@ -1991,7 +1992,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (value == null || value === "") return "";
       if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
       if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
-      return String(value);
+      return safeString(value);
     };
     await createCsvMarkdownZip(
       this.app,

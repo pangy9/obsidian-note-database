@@ -1,5 +1,6 @@
 import { normalizePath } from "obsidian";
 import { getBaseFileFieldType, isBaseFileField } from "./FileFields";
+import { stringifyValue } from "./Stringify";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleExpression, SourceRuleGroup, SourceRuleNode, SourceRuleNot, SourceRuleOperator, SourceRuleValueType } from "./types";
 
 const SOURCE_RULE_OPERATORS = new Set<SourceRuleOperator>([
@@ -167,7 +168,7 @@ export function parseSourceRuleTree(value: unknown): SourceRuleNode | undefined 
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
   if (source["type"] === "expression") {
-    const expression = String(source["expression"] || "").trim();
+    const expression = stringifyValue(source["expression"]).trim();
     return expression ? { type: "expression", expression } : undefined;
   }
   if (source["type"] === "group") {
@@ -181,14 +182,14 @@ export function parseSourceRuleTree(value: unknown): SourceRuleNode | undefined 
     const rule = parseSourceRuleTree(source["rule"]);
     return rule ? { type: "not", rule } : undefined;
   }
-  const field = String(source["field"] || "").trim();
+  const field = stringifyValue(source["field"]).trim();
   const op = source["op"];
   if (!field || typeof op !== "string" || !SOURCE_RULE_OPERATORS.has(op as SourceRuleOperator)) return undefined;
   const valueType = source["valueType"];
   return {
     field,
     op: op as SourceRuleOperator,
-    value: source["value"] == null ? undefined : String(source["value"]),
+    value: source["value"] == null ? undefined : stringifyValue(source["value"]),
     valueType: typeof valueType === "string" && SOURCE_RULE_VALUE_TYPES.has(valueType as SourceRuleValueType)
       ? valueType as SourceRuleValueType
       : undefined,
@@ -196,7 +197,7 @@ export function parseSourceRuleTree(value: unknown): SourceRuleNode | undefined 
 }
 
 export function getSourceRuleTypedValue(rule: SourceRule): unknown {
-  const raw = String(rule.value ?? "");
+  const raw = stringifyValue(rule.value);
   if (rule.valueType === "null") return null;
   if (rule.valueType === "number") return Number(raw);
   if (rule.valueType === "boolean") return raw === "true";
@@ -216,11 +217,11 @@ export function sourceRuleValuesLooseEqual(value: unknown, rule: SourceRule): bo
 
 export function sourceRuleContainsValue(value: unknown, rule: SourceRule): boolean {
   if (!rule.valueType) {
-    return String(value ?? "").toLowerCase().includes(String(rule.value ?? "").toLowerCase());
+    return stringifyValue(value).toLowerCase().includes(stringifyValue(rule.value).toLowerCase());
   }
   const typedValue = getSourceRuleTypedValue(rule);
   if (Array.isArray(value)) return value.some((item) => sourceRuleValuesEqual(item, typedValue));
-  return String(value ?? "").includes(String(typedValue ?? ""));
+  return stringifyValue(value).includes(stringifyValue(typedValue));
 }
 
 export function matchesBaseSourceType(
@@ -267,7 +268,7 @@ function getDeclaredSourceFieldType(
 function hasFiniteDateValue(value: unknown): boolean {
   if (value == null || value === "") return false;
   if (value instanceof Date) return Number.isFinite(value.getTime());
-  return Number.isFinite(new Date(value as any).getTime());
+  return Number.isFinite(new Date(stringifyValue(value)).getTime());
 }
 
 function sourceRuleValuesEqual(left: unknown, right: unknown): boolean {
@@ -275,13 +276,13 @@ function sourceRuleValuesEqual(left: unknown, right: unknown): boolean {
   const leftTarget = getComparableLinkTarget(left);
   const rightTarget = getComparableLinkTarget(right);
   if (!leftTarget && !rightTarget) return false;
-  return linkTargetsEqual(leftTarget || String(left ?? ""), rightTarget || String(right ?? ""));
+  return linkTargetsEqual(leftTarget || stringifyValue(left), rightTarget || stringifyValue(right));
 }
 
 function sourceRuleValuesLooseEqualValue(left: unknown, right: unknown): boolean {
   if (sourceRuleValuesEqual(left, right)) return true;
   if (getComparableLinkTarget(left) || getComparableLinkTarget(right)) return false;
-  return String(left ?? "") === String(right ?? "");
+  return stringifyValue(left) === stringifyValue(right);
 }
 
 function getComparableLinkTarget(value: unknown): string | undefined {

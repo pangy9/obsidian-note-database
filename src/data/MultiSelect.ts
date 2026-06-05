@@ -1,4 +1,5 @@
 import { toMultiSelectValues } from "./ColumnTypes";
+import { stringifyValue } from "./Stringify";
 
 export const EMPTY_GROUP_ID = "EMPTY_GROUP";
 
@@ -7,7 +8,7 @@ export type MultiSelectGlobalOption = string | { value?: unknown; label?: unknow
 const LEGACY_EMPTY_GROUP_KEYS = new Set(["未分类", "未分類", "Uncategorized"]);
 
 export function isEmptyGroupId(value: unknown): boolean {
-  const key = String(value ?? "").trim();
+  const key = stringifyValue(value).trim();
   return key.length === 0 || key === EMPTY_GROUP_ID || LEGACY_EMPTY_GROUP_KEYS.has(key);
 }
 
@@ -46,7 +47,7 @@ export function moveMultiSelectGroupValue(
   // Empty target means the card moved into the no-tag group, so all tags are cleared.
   if (isEmptyGroupId(toGroupId)) return [];
 
-  const target = String(toGroupId ?? "").trim();
+  const target = stringifyValue(toGroupId).trim();
   if (!target) return [];
 
   if (isEmptyGroupId(fromGroupId)) {
@@ -54,7 +55,7 @@ export function moveMultiSelectGroupValue(
     return sortMultiSelectValues([target], globalOptions);
   }
 
-  const source = String(fromGroupId ?? "").trim();
+  const source = stringifyValue(fromGroupId).trim();
   const next = toMultiSelectValues(currentValue).filter((tag) => tag !== source);
   if (!next.includes(target)) next.push(target);
   return sortMultiSelectValues(next, globalOptions);
@@ -91,5 +92,5 @@ function createOptionRanks(options: readonly MultiSelectGlobalOption[]): Map<str
 function getOptionValue(option: MultiSelectGlobalOption): string {
   if (typeof option === "string") return option.trim();
   const raw = option.value ?? option.label ?? option.name;
-  return String(raw ?? "").trim();
+  return stringifyValue(raw).trim();
 }

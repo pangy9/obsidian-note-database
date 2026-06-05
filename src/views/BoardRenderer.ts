@@ -5,6 +5,7 @@ import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
+import { safeString } from "../data/SafeString";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
@@ -707,7 +708,7 @@ export class BoardRenderer {
     if (!col) return "";
     const value = this.getCellValue(row, col);
     if (value == null) return "";
-    return Array.isArray(value) ? value.join(", ") : String(value);
+    return Array.isArray(value) ? value.join(", ") : safeString(value);
   }
 
   private renderPreviewValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {

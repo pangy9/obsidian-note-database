@@ -7,7 +7,7 @@ export interface SavedZipResult {
   external: boolean;
 }
 
-type RequireFn = (id: string) => any;
+type RequireFn = (id: string) => unknown;
 interface FileSystemModule {
   promises: {
     writeFile(path: string, data: Uint8Array): Promise<void>;
@@ -17,6 +17,21 @@ interface FileSystemModule {
 interface SaveDialogResult {
   canceled?: boolean;
   filePath?: string;
+}
+
+/** Shape of the Electron remote / main process module exposed by require('electron') */
+interface ElectronModule {
+  remote?: { dialog?: ElectronDialogApi };
+  dialog?: ElectronDialogApi;
+}
+
+interface ElectronDialogApi {
+  showSaveDialog?(options: { title: string; defaultPath: string; filters: { name: string; extensions: string[] }[] }): Promise<SaveDialogResult>;
+}
+
+/** Minimal shape of Node.js path module */
+interface PathModule {
+  join(...paths: string[]): string;
 }
 
 /**
@@ -47,15 +62,16 @@ async function chooseExternalSavePath(app: App, defaultFilename: string): Promis
   const requireFn = getRequire();
   if (!requireFn) return undefined;
   try {
-    const electron = requireFn("electron");
-    const dialog = electron?.remote?.dialog || electron?.dialog;
+    const electron = requireFn("electron") as ElectronModule | undefined;
+    if (!electron) return undefined;
+    const dialog = electron.remote?.dialog || electron.dialog;
     if (!dialog?.showSaveDialog) return undefined;
     const defaultPath = getDesktopDefaultPath(app, defaultFilename, requireFn);
     const result = await dialog.showSaveDialog({
       title: t("csvMarkdownExport.chooseLocation"),
       defaultPath,
       filters: [{ name: "ZIP", extensions: ["zip"] }],
-    }) as SaveDialogResult;
+    });
     if (result?.canceled || !result?.filePath) return null;
     return result.filePath;
   } catch (err) {
@@ -89,8 +105,8 @@ function getDesktopDefaultPath(app: App, filename: string, requireFn: RequireFn)
   const basePath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
   if (!basePath) return filename;
   try {
-    const path = requireFn("path");
-    return path.join(basePath, filename);
+    const path = requireFn("path") as PathModule | undefined;
+    return path?.join(basePath, filename) ?? `${basePath}/${filename}`;
   } catch {
     return `${basePath}/${filename}`;
   }

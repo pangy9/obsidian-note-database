@@ -3,15 +3,15 @@ import { ComputedFrontmatterCleanupOption } from "../../data/ComputedCleanup";
 import { t } from "../../i18n";
 
 export class ComputedFrontmatterCleanupModal extends Modal {
-  private selectedKey: string;
+  private selectedKeys: Set<string>;
 
   constructor(
     app: App,
     private options: ComputedFrontmatterCleanupOption[],
-    private onConfirm: (key: string) => Promise<void>
+    private onConfirm: (keys: string[]) => Promise<void>
   ) {
     super(app);
-    this.selectedKey = options[0]?.key || "";
+    this.selectedKeys = new Set(options.map((option) => option.key));
   }
 
   onOpen(): void {
@@ -22,14 +22,20 @@ export class ComputedFrontmatterCleanupModal extends Modal {
     contentEl.createDiv({ cls: "db-modal-help", text: t("viewConfig.computedCleanup.desc") });
 
     const list = contentEl.createDiv({ cls: "db-computed-cleanup-list" });
+    let confirm: HTMLButtonElement;
+    const updateConfirmState = () => {
+      if (confirm) confirm.disabled = this.selectedKeys.size === 0;
+    };
     for (const option of this.options) {
       const row = list.createEl("label", { cls: "db-computed-cleanup-option" });
-      const radio = row.createEl("input", {
-        attr: { type: "radio", name: "computed-cleanup-field", value: option.key },
+      const checkbox = row.createEl("input", {
+        attr: { type: "checkbox", value: option.key },
       });
-      radio.checked = option.key === this.selectedKey;
-      radio.onchange = () => {
-        if (radio.checked) this.selectedKey = option.key;
+      checkbox.checked = this.selectedKeys.has(option.key);
+      checkbox.onchange = () => {
+        if (checkbox.checked) this.selectedKeys.add(option.key);
+        else this.selectedKeys.delete(option.key);
+        updateConfirmState();
       };
       const text = row.createDiv({ cls: "db-computed-cleanup-option-text" });
       text.createDiv({
@@ -38,7 +44,7 @@ export class ComputedFrontmatterCleanupModal extends Modal {
       });
       text.createDiv({
         cls: "db-computed-cleanup-option-key",
-        text: t("viewConfig.computedCleanup.optionKey", { key: option.key }),
+        text: t("viewConfig.computedCleanup.optionKey", { key: option.key, count: option.recordCount }),
       });
     }
 
@@ -47,15 +53,16 @@ export class ComputedFrontmatterCleanupModal extends Modal {
       text: t("common.cancel"),
       attr: { type: "button" },
     }).onclick = () => this.close();
-    const confirm = actions.createEl("button", {
+    confirm = actions.createEl("button", {
       cls: "mod-warning",
       text: t("viewConfig.computedCleanup.confirm"),
       attr: { type: "button" },
     });
-    confirm.disabled = !this.selectedKey;
+    updateConfirmState();
     confirm.onclick = async () => {
-      if (!this.selectedKey) return;
-      await this.onConfirm(this.selectedKey);
+      const keys = Array.from(this.selectedKeys);
+      if (keys.length === 0) return;
+      await this.onConfirm(keys);
       this.close();
     };
   }

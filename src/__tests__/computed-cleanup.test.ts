@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
 import { ColumnDef } from "../data/types";
 
+function row(frontmatter: Record<string, unknown>): { frontmatter: Record<string, unknown> } {
+  return { frontmatter };
+}
+
 describe("computed frontmatter cleanup", () => {
   it("uses the computed storage key that was written to note frontmatter", () => {
     const columns: ColumnDef[] = [
@@ -18,11 +22,34 @@ describe("computed frontmatter cleanup", () => {
         key: "score_formula",
         label: "Score",
         columnKey: "formula.score",
+        recordCount: 0,
       },
       {
         key: "plain_formula",
         label: "Plain",
         columnKey: "plain_formula",
+        recordCount: 0,
+      },
+    ]);
+  });
+
+  it("filters to computed storage keys that exist in database-scoped frontmatter", () => {
+    const columns: ColumnDef[] = [
+      { key: "formula.saved", label: "Saved", type: "computed", computedKey: "saved_formula" },
+      { key: "formula.empty", label: "Empty", type: "computed", computedKey: "empty_formula" },
+      { key: "status", label: "Status", type: "status" },
+    ];
+
+    expect(getComputedFrontmatterCleanupOptions(columns, [
+      row({ saved_formula: 1 }),
+      row({ saved_formula: 2, status: "Done" }),
+      row({ status: "Todo" }),
+    ])).toEqual([
+      {
+        key: "saved_formula",
+        label: "Saved",
+        columnKey: "formula.saved",
+        recordCount: 2,
       },
     ]);
   });
@@ -38,6 +65,7 @@ describe("computed frontmatter cleanup", () => {
         key: "shared",
         label: "A",
         columnKey: "formula.a",
+        recordCount: 0,
       },
     ]);
   });
@@ -50,13 +78,15 @@ describe("computed frontmatter cleanup", () => {
     expect(panel).toContain("onComputedFrontmatterCleanup");
     expect(panel).toContain("viewConfig.computedCleanup.button");
     expect(dashboard).toContain("showComputedFrontmatterCleanupModal");
-    expect(dashboard).toContain("clearComputedFrontmatterProperty");
-    expect(dashboard).toContain("getComputedFrontmatterCleanupOptions(config.schema.columns)");
+    expect(dashboard).toContain("clearComputedFrontmatterProperties");
+    expect(dashboard).toContain("getComputedFrontmatterCleanupOptions(config.schema.columns, records)");
     expect(dashboard).toContain("db.computedSyncMode = \"display-only\"");
     expect(dashboard).toContain("window.clearTimeout(this.computedSyncTimer)");
     expect(dashboard).toContain("this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config))");
-    expect(dashboard).toContain("this.dataSource.updateFrontmatter(record.file, { [key]: null })");
+    expect(dashboard).toContain("this.dataSource.updateFrontmatter(record.file, updates)");
     expect(modal).toContain("db-computed-cleanup-option");
+    expect(modal).toContain("type: \"checkbox\"");
+    expect(modal).toContain("selectedKeys");
     expect(modal).toContain("viewConfig.computedCleanup.optionField");
     expect(modal).toContain("viewConfig.computedCleanup.optionKey");
     expect(modal).toContain("viewConfig.computedCleanup.confirm");

@@ -3048,21 +3048,24 @@ export class DatabaseView extends ItemView {
 
   private showComputedFrontmatterCleanupModal(): void {
     const config = this.getConfig();
-    if (!config) return;
-    const options = getComputedFrontmatterCleanupOptions(config.schema.columns);
+    const db = this.getCurrentEntry()?.config;
+    if (!config || !db) return;
+    const records = this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config));
+    const options = getComputedFrontmatterCleanupOptions(config.schema.columns, records);
     if (options.length === 0) {
       new Notice(t("viewConfig.computedCleanup.noFields"));
       return;
     }
-    new ComputedFrontmatterCleanupModal(this.app, options, async (key) => {
-      await this.clearComputedFrontmatterProperty(key);
+    new ComputedFrontmatterCleanupModal(this.app, options, async (keys) => {
+      await this.clearComputedFrontmatterProperties(keys);
     }).open();
   }
 
-  private async clearComputedFrontmatterProperty(key: string): Promise<void> {
+  private async clearComputedFrontmatterProperties(keys: string[]): Promise<void> {
     const config = this.getConfig();
     const db = this.getCurrentEntry()?.config;
-    if (!config || !db || !key) return;
+    const uniqueKeys = Array.from(new Set(keys.map((key) => key.trim()).filter(Boolean)));
+    if (!config || !db || uniqueKeys.length === 0) return;
     try {
       if (normalizeComputedSyncMode(db.computedSyncMode) === "automatic") {
         // Cancel any already queued automatic sync so the cleanup cannot be immediately recreated.
@@ -3077,11 +3080,16 @@ export class DatabaseView extends ItemView {
       const records = this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config));
       let changed = 0;
       for (const record of records) {
-        if (!Object.prototype.hasOwnProperty.call(record.frontmatter, key)) continue;
-        await this.dataSource.updateFrontmatter(record.file, { [key]: null });
+        const updates: Record<string, null> = {};
+        for (const key of uniqueKeys) {
+          if (!Object.prototype.hasOwnProperty.call(record.frontmatter, key)) continue;
+          updates[key] = null;
+        }
+        if (Object.keys(updates).length === 0) continue;
+        await this.dataSource.updateFrontmatter(record.file, updates);
         changed += 1;
       }
-      new Notice(t("notice.clearedComputedFrontmatter", { key, count: changed }));
+      new Notice(t("notice.clearedComputedFrontmatter", { key: uniqueKeys.join(", "), count: changed }));
       await this.refreshAfterSave();
     } catch (err) {
       console.error("Note Database: failed to clear computed frontmatter", err);

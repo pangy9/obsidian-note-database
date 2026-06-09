@@ -4,16 +4,18 @@
 
 Local database views for Markdown notes in Obsidian.
 
-Note Database turns Markdown files and frontmatter properties into editable table, board, gallery, and list views. It stays local-first, works with plain Markdown files, and keeps database configuration inside your vault.
+Note Database turns Markdown files and frontmatter properties into editable table, board, gallery, list, and chart views. It stays local-first, works with plain Markdown files, and keeps database configuration inside your vault.
 
 ## Highlights
 
-- **Four database views**: switch the same notes between table, board, gallery, and list layouts.
+- **Five database views**: switch the same notes between table, board, gallery, list, and chart layouts.
 - **Markdown-first storage**: every database is saved as a normal `db_view: true` Markdown file in your vault.
 - **Inline property editing**: edit text, numbers, dates, currency, checkboxes, selects, multi-selects, statuses, and file names directly from the view.
 - **Flexible filtering and grouping**: combine filters, sorting, grouping, hidden fields, title fields, manual order, and per-view layout settings.
+- **Chart view**: visualize the current filtered records with bar, line, area, donut, number, stacked, grouped, and mixed charts.
 - **Computed fields**: build formulas with field references, helper functions, live previews, and optional frontmatter sync.
 - **Embedded views**: embed read-only database views inside any note while keeping view switching, filters, sorting, grouping, visible fields, and export tools available.
+- **Database-file tab controls**: choose whether database files always open in new tabs and whether duplicate database-file tabs are prevented.
 - **Import, export, and Bases conversion**: move data with CSV + Markdown ZIP files or convert Obsidian `.base` files.
 - **Local and private**: vault content, metadata, formulas, and settings stay on your device.
 
@@ -29,7 +31,26 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 | ![Gallery view](assets/screenshots/en-gallery-view.png) | ![List view](assets/screenshots/en-list-view.png) |
 | Visual browsing for reading plans, references, portfolios, and card-style content libraries. | Compact indexes for tasks, directories, research notes, and long lists that need fast scanning. |
 
+| Chart |
+| --- |
+| ![Chart view](assets/screenshots/en-chart-view.png) |
+| Aggregate the current search and filter result into configurable charts with summaries, drilldown, palettes, and export. |
+
 Each view can keep its own filters, sorting, grouping, visible fields, title field, and layout settings.
+
+## Chart Views
+
+Chart views use the same records as the current database after search, filters, and result limits. They support count and numeric aggregations, date and number buckets, visible group controls, cumulative series, reference lines, data labels, legends, and PNG export.
+
+![Chart options](assets/screenshots/en-chart-options.png)
+
+Click a chart mark to inspect the matching records before applying it as a filter.
+
+![Chart drilldown](assets/screenshots/en-chart-drilldown.png)
+
+Summary rules can combine count-style, numeric, date, checkbox, and unique-value calculations.
+
+![Summary bar](assets/screenshots/en-summary-bar.png)
 
 ## Getting Started
 
@@ -47,6 +68,8 @@ The plugin settings page manages global options such as language, the default da
 
 ![Plugin settings](assets/screenshots/en-settings.png)
 
+Database-file opening can also be tuned from plugin settings. You can always open database files in a new tab, prevent duplicate tabs for the same database file, or combine both settings depending on how you use Obsidian panes. The same behavior is applied when opening from the dashboard, the file explorer, and database-file drag/open fallbacks.
+
 ## Embedded Views
 
 Right-click a view tab in the full dashboard, or use the export menu to copy the current view's embed code.
@@ -56,6 +79,10 @@ Right-click a view tab in the full dashboard, or use the export menu to copy the
 Paste the code into any Obsidian note to get a read-only embedded database view. Embedded views still include view switching, filters, sorting, grouping, visible properties, computed fields, and copy/export tools.
 
 ![Embedded view](assets/screenshots/en-embed-view.png)
+
+Use the floating header toggle in an embedded block, or add `hideHeader: true`, when you want the block to omit the database header and use the whole area for view content.
+
+![Headerless embedded view](assets/screenshots/en-embed-headerless.png)
 
 Embed code example:
 
@@ -95,6 +122,16 @@ The formula editor shows available fields, function lists, examples, live previe
 Computed values refresh for display whenever a database view is opened. In the database settings, choose whether those values remain display-only virtual properties, are written back to frontmatter automatically, or are written back only when you click the manual sync button.
 
 ![Formula editor](assets/screenshots/en-formula-editor.png)
+
+If you previously saved a computed result into note frontmatter and later decide to keep it display-only, use the cleanup action to remove that saved property from notes in the current database scope.
+
+![Computed cleanup](assets/screenshots/en-computed-cleanup.png)
+
+## File Metadata Fields
+
+Built-in file fields such as `file.name`, `file.tags`, `file.links`, `file.folder`, and file timestamps are treated as file metadata instead of ordinary frontmatter properties. `file.name` can rename the note, `file.tags` can update frontmatter tags, and read-only metadata fields are protected from accidental writes.
+
+![File metadata fields](assets/screenshots/en-file-fields.png)
 
 ## Import, Export, And Bases
 
@@ -142,6 +179,16 @@ If Note Database helps you, a star or donation helps support continued developme
 <img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## Changelog
+
+### 1.1.0
+
+- Added chart views with bar, horizontal bar, line, area, donut, number, stacked, grouped, percent-stacked, and mixed chart layouts.
+- Added chart options, chart summaries, visible groups, palettes, reference lines, drilldown records, and PNG export/copy.
+- Expanded summary rules with numeric, date, checkbox, unique, empty, and filled calculations.
+- Added protected file metadata fields, including editable `file.name` and `file.tags`, clickable file links, and read-only file metadata guards.
+- Added computed frontmatter cleanup for users who want to remove previously saved computed values from note frontmatter.
+- Added database-file tab controls for always opening database files in new tabs and preventing duplicate database-file tabs.
+- Improved embedded views, shared dropdowns, source rules, drag feedback, option editing, and release-readiness UI polish.
 
 ### 1.0.9
 

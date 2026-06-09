@@ -8,6 +8,7 @@ import { getSourceRuleTree, isSourceRuleExpression, isSourceRuleGroup, isSourceR
 import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { confirmWithModal } from "./modals/ConfirmModal";
+import { createDropdownField, DropdownOption } from "./DropdownField";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
 
@@ -82,6 +83,11 @@ export function getSourceRuleIsTypeValueOptions(currentValue: string | undefined
   return normalized && !values.includes(normalized as typeof BASE_IS_TYPE_VALUES[number])
     ? [normalized, ...values]
     : values;
+}
+
+export function createEditableSourceRuleRoot(tree: SourceRuleNode | undefined): SourceRuleNode | undefined {
+  if (!tree || isSourceRuleGroup(tree)) return tree;
+  return { type: "group", logic: "and", rules: [tree] };
 }
 
 function normalizeSourceRuleIsTypeValue(value: string): string {
@@ -198,6 +204,7 @@ export interface ViewConfigPanelActions {
   onViewTypeChange?(viewType: DatabaseViewType): void;
   onDatabaseChange?(): void;
   onComputedSyncModeChange?(): void;
+  onComputedFrontmatterCleanup?(): void;
   database?: DatabaseConfig;
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
@@ -243,10 +250,12 @@ export class ViewConfigPanelRenderer {
       onDefaultPresetChange: (presetId) => actions.onDefaultViewStatusPresetChange?.(presetId),
       onManagePresets: () => actions.onManageViewStatusPresets?.(),
     });
-    this.renderDefaultColumnWidth(panel, config, actions);
-    if (config.viewType !== "table") {
+    if (config.viewType !== "chart") {
+      this.renderDefaultColumnWidth(panel, config, actions);
+    }
+    if (config.viewType !== "table" && config.viewType !== "chart") {
       this.renderTitleField(panel, config, actions);
-      this.renderCheckbox(panel, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
+      this.renderSwitch(panel, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
         config.showEmptyFields = value || undefined;
         actions.onChange();
       });
@@ -276,10 +285,11 @@ export class ViewConfigPanelRenderer {
       panel,
       t("viewConfig.viewType"),
       [
-        { value: "table", text: t("common.tableView") },
-        { value: "board", text: t("common.boardView") },
-        { value: "gallery", text: t("common.galleryView") },
-        { value: "list", text: t("common.listView") },
+        { value: "table", text: t("common.tableView"), icon: "table" },
+        { value: "board", text: t("common.boardView"), icon: "layout-grid" },
+        { value: "gallery", text: t("common.galleryView"), icon: "image" },
+        { value: "list", text: t("common.listView"), icon: "list" },
+        { value: "chart", text: t("common.chartView"), icon: "bar-chart" },
       ],
       config.viewType || "table",
       (value) => {
@@ -345,8 +355,8 @@ export class ViewConfigPanelRenderer {
     const field = row.createDiv({ cls: "db-view-config-field" });
     field.createDiv({ cls: "db-view-config-help db-source-rules-help", text: t("viewConfig.sourceRules.help") });
     const editor = field.createDiv({ cls: "db-source-rules-editor" });
-    const tree = getSourceRuleTree(database.sourceRuleTree, database.sourceRules, database.sourceLogic);
-    if (tree && !database.sourceRuleTree && !readOnly) {
+    const tree = createEditableSourceRuleRoot(getSourceRuleTree(database.sourceRuleTree, database.sourceRules, database.sourceLogic));
+    if (tree && (!database.sourceRuleTree || database.sourceRuleTree !== tree) && !readOnly) {
       database.sourceRuleTree = tree;
       database.sourceRules = undefined;
       database.sourceLogic = undefined;
@@ -416,12 +426,19 @@ export class ViewConfigPanelRenderer {
   ): void {
     const wrap = parent.createDiv({ cls: "db-source-rule-node db-source-rule-group" });
     const header = wrap.createDiv({ cls: "db-source-rule-header" });
-    const logic = header.createEl("select", { cls: "db-control-select db-source-rule-logic" });
-    logic.createEl("option", { value: "and", text: t("viewConfig.sourceRules.and") });
-    logic.createEl("option", { value: "or", text: t("viewConfig.sourceRules.or") });
-    logic.value = group.logic;
-    logic.disabled = readOnly;
-    logic.onchange = () => onReplace({ ...group, logic: logic.value === "or" ? "or" : "and" });
+    createDropdownField({
+      parent: header,
+      label: t("viewConfig.sourceRules.logic"),
+      options: [
+        { value: "and", text: t("viewConfig.sourceRules.and") },
+        { value: "or", text: t("viewConfig.sourceRules.or") },
+      ],
+      value: group.logic,
+      className: "db-source-rule-dropdown db-source-rule-logic",
+      hideLabel: true,
+      disabled: readOnly,
+      onChange: (value) => onReplace({ ...group, logic: value === "or" ? "or" : "and" }),
+    });
     if (!readOnly) {
       const actions = header.createDiv({ cls: "db-source-rule-actions" });
       this.createSourceRuleIconButton(actions, "plus", t("viewConfig.sourceRules.addRule"), () => {
@@ -463,12 +480,34 @@ export class ViewConfigPanelRenderer {
     const controls = wrap.createDiv({ cls: "db-source-rule-leaf-controls" });
     const fieldGroups = this.getSourceRuleFieldGroups(database);
     const knownFields = new Set(fieldGroups.flatMap((group) => group.options.map((option) => option.value)));
-    const field = controls.createEl("select", { cls: "db-control-select db-source-rule-field" });
-    this.populateSourceRuleFieldSelect(field, fieldGroups);
-    field.createEl("option", { value: CUSTOM_SOURCE_RULE_FIELD, text: t("viewConfig.sourceRules.customField") });
     const isKnownField = knownFields.has(rule.field);
-    field.value = isKnownField ? rule.field : CUSTOM_SOURCE_RULE_FIELD;
-    field.disabled = readOnly;
+    let selectedFieldValue = isKnownField ? rule.field : CUSTOM_SOURCE_RULE_FIELD;
+    createDropdownField({
+      parent: controls,
+      label: t("panel.field"),
+      options: [
+        ...this.getSourceRuleFieldOptions(fieldGroups),
+        { value: CUSTOM_SOURCE_RULE_FIELD, text: t("viewConfig.sourceRules.customField"), section: t("viewConfig.sourceRules.fieldGroup.custom") },
+      ],
+      value: selectedFieldValue,
+      className: "db-source-rule-dropdown db-source-rule-field",
+      hideLabel: true,
+      disabled: readOnly,
+      onChange: (nextValue) => {
+        selectedFieldValue = nextValue;
+        const custom = nextValue === CUSTOM_SOURCE_RULE_FIELD;
+        customField.style.display = custom ? "" : "none";
+        if (custom) {
+          customField.focus();
+        } else {
+          rule.field = nextValue;
+          refreshOperators(rule.op, false);
+          refreshTypeValues();
+          updateValueDisabled();
+          commit();
+        }
+      },
+    });
     const customField = controls.createEl("input", {
       cls: "db-view-config-text db-source-rule-custom-field",
       attr: { type: "text", placeholder: t("viewConfig.sourceRules.fieldPlaceholder") },
@@ -476,58 +515,113 @@ export class ViewConfigPanelRenderer {
     customField.value = isKnownField ? "" : rule.field;
     customField.disabled = readOnly;
     customField.style.display = isKnownField ? "none" : "";
-    const operator = controls.createEl("select", { cls: "db-control-select db-source-rule-operator" });
-    operator.disabled = readOnly;
     const value = controls.createEl("input", {
       cls: "db-view-config-text db-source-rule-value",
       attr: { type: "text", placeholder: t("viewConfig.sourceRules.valuePlaceholder") },
     });
     value.value = rule.value || "";
-    const typeValue = controls.createEl("select", { cls: "db-control-select db-source-rule-value db-source-rule-type-value" });
+    let selectedOperator: SourceRuleOperator = rule.op;
+    let selectedTypeValue = normalizeSourceRuleIsTypeValue(rule.value || "") || getDefaultSourceRuleIsTypeValue(database, rule.field);
+    let typeValueButton: HTMLElement | undefined;
     const updateValueDisabled = () => {
-      const noValue = operator.value === "empty" || operator.value === "notempty" || operator.value === "truthy" || operator.value === "hasProperty";
-      const isType = operator.value === "isType";
+      const noValue = selectedOperator === "empty" || selectedOperator === "notempty" || selectedOperator === "truthy" || selectedOperator === "hasProperty";
+      const isType = selectedOperator === "isType";
       value.style.display = isType ? "none" : "";
-      typeValue.style.display = isType ? "" : "none";
+      if (typeValueButton) typeValueButton.style.display = isType ? "" : "none";
       value.disabled = readOnly || isType || noValue;
-      typeValue.disabled = readOnly || !isType;
     };
     const getFieldValue = () => (
-      field.value === CUSTOM_SOURCE_RULE_FIELD ? customField.value.trim() : field.value
+      selectedFieldValue === CUSTOM_SOURCE_RULE_FIELD && customField.style.display !== "none" ? customField.value.trim() : rule.field
     );
-    const populateOperators = (selectedOp: SourceRuleOperator, preserveUnsupported = true) => {
-      operator.empty();
+    const getOperatorOptions = (selectedOp: SourceRuleOperator, preserveUnsupported = true): DropdownOption[] => {
       const groups = getSourceRuleOperatorGroupsForField(database, getFieldValue(), preserveUnsupported ? selectedOp : undefined);
-      for (const group of groups) {
-        const optgroup = operator.createEl("optgroup", { attr: { label: group.label } });
-        for (const op of group.operators) {
-          optgroup.createEl("option", { value: op, text: t(`viewConfig.sourceRules.op.${op}`) });
-        }
-      }
+      return groups.flatMap((group) => group.operators.map((op) => ({
+        value: op,
+        text: t(`viewConfig.sourceRules.op.${op}`),
+        section: group.label,
+      })));
+    };
+    const getRecommendedOperator = (selectedOp: SourceRuleOperator, preserveUnsupported = true): SourceRuleOperator => {
+      const groups = getSourceRuleOperatorGroupsForField(database, getFieldValue(), preserveUnsupported ? selectedOp : undefined);
       const recommended = groups.flatMap((group) => group.operators);
-      operator.value = recommended.includes(selectedOp) ? selectedOp : getDefaultSourceRuleOperatorForField(database, getFieldValue());
+      return recommended.includes(selectedOp) ? selectedOp : getDefaultSourceRuleOperatorForField(database, getFieldValue());
     };
-    const populateTypeValues = () => {
-      const current = normalizeSourceRuleIsTypeValue(typeValue.value || value.value || rule.value || "");
+    const operatorDropdown = createDropdownField({
+      parent: controls,
+      label: t("panel.operator"),
+      options: getOperatorOptions(rule.op),
+      value: getRecommendedOperator(rule.op),
+      className: "db-source-rule-dropdown db-source-rule-operator",
+      hideLabel: true,
+      disabled: readOnly,
+      onChange: (nextValue) => {
+        selectedOperator = nextValue as SourceRuleOperator;
+        refreshTypeValues();
+        updateValueDisabled();
+        commit();
+      },
+    });
+    controls.insertBefore(operatorDropdown.button, value);
+    selectedOperator = getRecommendedOperator(rule.op);
+    const refreshOperators = (selectedOp: SourceRuleOperator, preserveUnsupported = true) => {
+      selectedOperator = getRecommendedOperator(selectedOp, preserveUnsupported);
+      operatorDropdown.button.remove();
+      const replacement = createDropdownField({
+        parent: controls,
+        label: t("panel.operator"),
+        options: getOperatorOptions(selectedOperator, preserveUnsupported),
+        value: selectedOperator,
+        className: "db-source-rule-dropdown db-source-rule-operator",
+        hideLabel: true,
+        disabled: readOnly,
+        onChange: (nextValue) => {
+          selectedOperator = nextValue as SourceRuleOperator;
+          refreshTypeValues();
+          updateValueDisabled();
+          commit();
+        },
+      });
+      controls.insertBefore(replacement.button, value);
+      operatorDropdown.button = replacement.button;
+      operatorDropdown.valueEl = replacement.valueEl;
+    };
+    const createTypeValueDropdown = () => {
+      const existing = typeValueButton;
+      const dropdown = createDropdownField({
+        parent: controls,
+        label: t("panel.value"),
+        options: getSourceRuleIsTypeValueOptions(selectedTypeValue).map((option) => ({ value: option, text: option })),
+        value: selectedTypeValue,
+        className: "db-source-rule-dropdown db-source-rule-value db-source-rule-type-value",
+        hideLabel: true,
+        disabled: readOnly,
+        onChange: (nextValue) => {
+          selectedTypeValue = nextValue;
+          value.value = selectedTypeValue;
+          rule.value = selectedTypeValue;
+          commit();
+        },
+      });
+      typeValueButton = dropdown.button;
+      if (existing) existing.replaceWith(dropdown.button);
+      else controls.insertBefore(dropdown.button, value.nextSibling);
+    };
+    const refreshTypeValues = () => {
+      const current = normalizeSourceRuleIsTypeValue(selectedTypeValue || value.value || rule.value || "");
       const fallback = getDefaultSourceRuleIsTypeValue(database, getFieldValue());
-      const selected = current || fallback;
-      typeValue.empty();
-      for (const option of getSourceRuleIsTypeValueOptions(selected)) {
-        typeValue.createEl("option", { value: option, text: option });
-      }
-      typeValue.value = selected;
-      if (operator.value === "isType") {
-        value.value = selected;
-        rule.value = selected;
+      selectedTypeValue = current || fallback;
+      createTypeValueDropdown();
+      if (selectedOperator === "isType") {
+        value.value = selectedTypeValue;
+        rule.value = selectedTypeValue;
       }
     };
-    populateOperators(rule.op);
-    populateTypeValues();
+    refreshTypeValues();
     updateValueDisabled();
     const commit = () => {
-      const op = operator.value as SourceRule["op"];
+      const op = selectedOperator;
       const keepsValueType = op === "eq" || op === "neq" || op === "strictEq" || op === "strictNeq" || op === "contains";
-      const nextValue = op === "isType" ? typeValue.value : value.value;
+      const nextValue = op === "isType" ? selectedTypeValue : value.value;
       onReplace({
         field: getFieldValue(),
         op,
@@ -535,43 +629,20 @@ export class ViewConfigPanelRenderer {
         valueType: keepsValueType ? rule.valueType : undefined,
       });
     };
-    field.onchange = () => {
-      const custom = field.value === CUSTOM_SOURCE_RULE_FIELD;
-      customField.style.display = custom ? "" : "none";
-      if (custom) {
-        customField.focus();
-      } else {
-        rule.field = field.value;
-        populateOperators(rule.op, false);
-        populateTypeValues();
-        updateValueDisabled();
-        commit();
-      }
-    };
     customField.oninput = () => {
       rule.field = customField.value.trim();
-      populateOperators(rule.op, false);
-      populateTypeValues();
+      refreshOperators(rule.op, false);
+      refreshTypeValues();
       updateValueDisabled();
     };
     customField.onchange = () => {
-      populateOperators(rule.op, false);
-      populateTypeValues();
-      updateValueDisabled();
-      commit();
-    };
-    operator.onchange = () => {
-      populateTypeValues();
+      refreshOperators(rule.op, false);
+      refreshTypeValues();
       updateValueDisabled();
       commit();
     };
     value.oninput = () => { rule.value = value.value; };
     value.onchange = commit;
-    typeValue.onchange = () => {
-      value.value = typeValue.value;
-      rule.value = typeValue.value;
-      commit();
-    };
     if (!readOnly) {
       const actions = controls.createDiv({ cls: "db-source-rule-actions" });
       this.createSourceRuleIconButton(actions, "circle-slash-2", t("viewConfig.sourceRules.addNot"), () => {
@@ -616,13 +687,12 @@ export class ViewConfigPanelRenderer {
     ].filter((group) => group.options.length > 0);
   }
 
-  private populateSourceRuleFieldSelect(select: HTMLSelectElement, groups: SourceRuleFieldGroup[]): void {
-    for (const group of groups) {
-      const optgroup = select.createEl("optgroup", { attr: { label: group.label } });
-      for (const option of group.options) {
-        optgroup.createEl("option", { value: option.value, text: option.label });
-      }
-    }
+  private getSourceRuleFieldOptions(groups: SourceRuleFieldGroup[]): DropdownOption[] {
+    return groups.flatMap((group) => group.options.map((option) => ({
+      value: option.value,
+      text: option.label,
+      section: group.label,
+    })));
   }
 
   private renderSourceRuleExpression(
@@ -742,6 +812,15 @@ export class ViewConfigPanelRenderer {
       body.createDiv({ cls: "db-computed-sync-card-desc", text: option.desc });
     }
     field.createDiv({ cls: "db-view-config-help", text: t("viewConfig.computedSync.help") });
+    if ((database.schema?.columns || []).some((col) => col.type === "computed")) {
+      const cleanup = field.createEl("button", {
+        cls: "db-computed-cleanup-button",
+        text: t("viewConfig.computedCleanup.button"),
+        attr: { type: "button" },
+      });
+      cleanup.onclick = () => actions.onComputedFrontmatterCleanup?.();
+      field.createDiv({ cls: "db-view-config-help", text: t("viewConfig.computedCleanup.help") });
+    }
   }
 
   private renderStatusPresetSettings(
@@ -764,10 +843,15 @@ export class ViewConfigPanelRenderer {
       field.createDiv({ cls: "db-view-config-readonly-value", text: current?.name || t("common.notSet") });
       return;
     }
-    const select = field.createEl("select", { cls: "db-control-select" });
-    for (const preset of presets) select.createEl("option", { value: preset.id, text: preset.name });
-    select.value = options.defaultPresetId || presets[0]?.id || "";
-    select.onchange = () => options.onDefaultPresetChange?.(select.value);
+    createDropdownField({
+      parent: field,
+      label: t("viewConfig.statusPreset"),
+      options: presets.map((preset) => ({ value: preset.id, text: preset.name })),
+      value: options.defaultPresetId || presets[0]?.id || "",
+      className: "db-view-config-dropdown db-status-preset-setting-dropdown",
+      hideLabel: true,
+      onChange: (value) => options.onDefaultPresetChange?.(value),
+    });
     const button = field.createEl("button", { text: t("statusPresets.manage"), attr: { type: "button" } });
     button.onclick = () => options.onManagePresets?.();
   }
@@ -906,6 +990,15 @@ export class ViewConfigPanelRenderer {
     }, setBoardColumnWidth);
   }
 
+  private renderReadonlyField(panel: HTMLElement, label: string, value: string): void {
+    const row = panel.createDiv({ cls: "db-view-config-row" });
+    row.createDiv({ cls: "db-view-config-label", text: label });
+    row.createDiv({ cls: "db-view-config-field" }).createDiv({
+      cls: "db-view-config-readonly-value",
+      text: value,
+    });
+  }
+
   private renderDefaultColumnWidth(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
     const setDefaultColumnWidth = (value: number) => {
       const next = Math.max(80, Math.min(800, Math.round(value)));
@@ -934,18 +1027,24 @@ export class ViewConfigPanelRenderer {
   private renderSelect(
     panel: HTMLElement,
     label: string,
-    options: Array<{ value: string; text: string }>,
+    options: DropdownOption[],
     value: string,
     onChange: (value: string) => void
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
-    const select = row.createEl("select", { cls: "db-control-select" });
-    for (const option of options) {
-      select.createEl("option", { value: option.value, text: option.text });
-    }
-    select.value = value;
-    select.onchange = () => onChange(select.value);
+    const field = row.createDiv({ cls: "db-view-config-field" });
+    createDropdownField({
+      parent: field,
+      label,
+      options,
+      value,
+      onChange,
+      className: "db-view-config-dropdown",
+      popoverClassName: "db-view-config-dropdown-popover",
+      placeholder: t("common.notSet"),
+      hideLabel: true,
+    });
   }
 
   private renderText(
@@ -1017,6 +1116,28 @@ export class ViewConfigPanelRenderer {
       return;
     }
     const input = field.createEl("input", { attr: { type: "checkbox" } });
+    input.checked = value;
+    input.onchange = () => onChange(input.checked);
+    if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });
+  }
+
+  private renderSwitch(
+    panel: HTMLElement,
+    label: string,
+    value: boolean,
+    onChange: (value: boolean) => void,
+    disabled = false,
+    helpText?: string
+  ): void {
+    const row = panel.createDiv({ cls: "db-view-config-row" });
+    row.createDiv({ cls: "db-view-config-label", text: label });
+    const field = row.createDiv({ cls: "db-view-config-field" });
+    if (disabled) {
+      field.createDiv({ cls: "db-view-config-readonly-value", text: value ? t("common.true") : t("common.false") });
+      if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });
+      return;
+    }
+    const input = field.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });
     input.checked = value;
     input.onchange = () => onChange(input.checked);
     if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });

@@ -1,4 +1,4 @@
-import { getColumnOptionValues, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
+import { getColumnOptionValues, hasObsidianTagValue, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 import { compareMultiSelect } from "./MultiSelect";
 import { stringifyValue } from "./Stringify";
@@ -99,6 +99,8 @@ export class QueryEngine {
         return values.every((value) => this.compareFilterValue(value, ruleValue, column) !== 0);
       case "contains":
         return values.some((value) => value.toLowerCase().includes(ruleValue.toLowerCase()));
+      case "hasTag":
+        return hasObsidianTagValue(values, ruleValue);
       case "gt":
         return values.some((value) => this.compareFilterValue(value, ruleValue, column) > 0);
       case "lt":

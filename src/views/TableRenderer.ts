@@ -1,5 +1,5 @@
 import { Menu } from "obsidian";
-import { ColumnDef, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, RowData, ViewConfig } from "../data/types";
 import { toBooleanValue } from "../data/ColumnTypes";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
@@ -36,7 +36,7 @@ export interface TableRendererActions {
     beforePath?: string,
     afterPath?: string
   ): void | Promise<void>;
-  createEntry(defaults?: Record<string, unknown>): void;
+  createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   /** When true, the "+ 新建" row is not rendered */
@@ -65,7 +65,7 @@ export class TableRenderer {
     const tbody = table.createEl("tbody");
     this.renderRows(tbody, config, rows, visibleColumns);
     if (!this.actions.hideCreateEntry) {
-      this.renderNewRow(tbody, visibleColumns.length + 1);
+      this.renderNewRow(tbody, visibleColumns.length + 1, undefined, rows);
     }
   }
 
@@ -133,7 +133,7 @@ export class TableRenderer {
       this.renderRows(tbody, config, group.rows, visibleColumns, groupField, group.key, groups);
       if (!this.actions.hideCreateEntry) {
         const defaults = groupField ? this.getGroupDefaults(config, groupField, group.key) : undefined;
-        this.renderNewRow(tbody, visibleColumns.length + 1, defaults);
+        this.renderNewRow(tbody, visibleColumns.length + 1, defaults, group.rows);
       }
     }
   }
@@ -342,11 +342,20 @@ export class TableRenderer {
     menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
   }
 
-  private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>): void {
+  private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
     const tr = tbody.createEl("tr", { cls: "db-new-row" });
     const td = tr.createEl("td", { attr: { colspan: String(Math.max(colspan, 1)) } });
     const btn = td.createEl("button", { cls: "db-new-row-button", text: `+ ${t("toolbar.new")}` });
-    btn.onclick = () => this.actions.createEntry(defaults);
+    btn.onclick = () => this.createEntryNearEnd(defaults, rows);
+  }
+
+  private createEntryNearEnd(defaults: Record<string, unknown> | undefined, rows: RowData[]): void {
+    this.actions.createEntry(defaults, this.getCreatePosition(rows));
+  }
+
+  private getCreatePosition(rows: RowData[]): CreateEntryPosition | undefined {
+    const last = rows[rows.length - 1];
+    return last ? { afterPath: last.file.path } : undefined;
   }
 
   private setupRowDrag(

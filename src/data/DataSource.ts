@@ -1,5 +1,5 @@
 import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef, getAllTags } from "obsidian";
-import { ColumnDef, DatabaseConfig, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
+import { ChartReferenceLine, ColumnDef, DatabaseConfig, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
@@ -259,6 +259,7 @@ export class DataSource {
   getViewDefFiles(): { file: TFile; config: DatabaseConfig }[] {
     const results: { file: TFile; config: DatabaseConfig }[] = [];
     const allFiles = this.vault.getMarkdownFiles();
+    const cleanupTargets: TFile[] = [];
 
     for (const f of allFiles) {
       const override = this.getViewDefOverride(f.path);
@@ -273,9 +274,37 @@ export class DataSource {
       const config = this.parseDatabaseConfig(fm);
       if (config) {
         results.push({ file: f, config });
+        // Migration: detect legacy top-level "name" field that duplicates database.name
+        if (Object.prototype.hasOwnProperty.call(fm, "name")) {
+          cleanupTargets.push(f);
+        }
       }
     }
+
+    // Asynchronously remove redundant top-level "name" from legacy database files
+    if (cleanupTargets.length > 0) {
+      void this.migrateRemoveTopLevelName(cleanupTargets);
+    }
+
     return results;
+  }
+
+  /** Remove the redundant top-level "name" frontmatter field from legacy database files.
+   *  The authoritative name is stored inside the "database" object. */
+  private async migrateRemoveTopLevelName(files: TFile[]): Promise<void> {
+    for (const file of files) {
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          const frontmatter = fm as Record<string, unknown>;
+          if (frontmatter["db_view"] === true && Object.prototype.hasOwnProperty.call(frontmatter, "name")) {
+            delete frontmatter["name"];
+          }
+        });
+      } catch (err) {
+        // Non-critical migration; log and continue
+        console.warn("Note Database: failed to migrate top-level name in", file.path, err);
+      }
+    }
   }
 
   /** Parse DatabaseConfig from a view definition file's frontmatter */
@@ -349,6 +378,40 @@ export class DataSource {
           filters: Array.isArray(source["filters"]) ? source["filters"] as FilterRule[] : undefined,
           resultLimit: this.parseResultLimit(source["resultLimit"]),
           summaryRules: this.parseStringMap(source["summaryRules"]),
+          chartType: this.parseChartType(source["chartType"]),
+          chartGroupField: safeString(source["chartGroupField"]) || undefined,
+          chartDateBucket: this.parseChartDateBucket(source["chartDateBucket"]),
+          chartNumberBucket: this.parseChartNumberBucket(source["chartNumberBucket"]),
+          chartNumberBucketSize: this.parsePositiveNumber(source["chartNumberBucketSize"]),
+          chartStackField: safeString(source["chartStackField"]) || undefined,
+          chartSeriesField: safeString(source["chartSeriesField"] || source["chartStackField"]) || undefined,
+          chartAggregation: this.parseChartAggregation(source["chartAggregation"]),
+          chartValueField: safeString(source["chartValueField"]) || undefined,
+          chartSecondaryAggregation: this.parseChartAggregation(source["chartSecondaryAggregation"]),
+          chartSecondaryValueField: safeString(source["chartSecondaryValueField"]) || undefined,
+          chartSortBy: this.parseChartSortBy(source["chartSortBy"]),
+          chartHiddenGroups: this.parseTrueMap(source["chartHiddenGroups"]),
+          chartOmitZeroValues: source["chartOmitZeroValues"] === true,
+          chartCumulative: source["chartCumulative"] === true,
+          chartHeight: this.parseChartHeight(source["chartHeight"]),
+          chartGridLines: this.parseChartGridLines(source["chartGridLines"]),
+          chartAxisNames: this.parseChartAxisNames(source["chartAxisNames"]),
+          chartShowTitle: source["chartShowTitle"] === false ? false : undefined,
+          chartTitle: safeString(source["chartTitle"]) || undefined,
+          chartShowDataLabels: source["chartShowDataLabels"] === true,
+          chartDataLabelMode: this.parseChartDataLabelMode(source["chartDataLabelMode"]),
+          chartDataLabelColor: this.parseChartDataLabelColor(source["chartDataLabelColor"]),
+          chartSmoothLine: source["chartSmoothLine"] === true,
+          chartGradientArea: source["chartGradientArea"] === true,
+          chartShowLegend: source["chartShowLegend"] === false ? false : source["chartShowLegend"] === true ? true : undefined,
+          chartColorPalette: this.parseChartColorPalette(source["chartColorPalette"]),
+          chartColorByValue: source["chartColorByValue"] === true,
+          chartShowDonutCenter: source["chartShowDonutCenter"] === true,
+          chartDonutCenterMode: this.parseChartDonutCenterMode(source["chartDonutCenterMode"], source["chartShowDonutCenter"]),
+          chartValueAxisRange: this.parseChartValueAxisRange(source["chartValueAxisRange"]),
+          chartValueAxisMin: this.parseFiniteNumber(source["chartValueAxisMin"]),
+          chartValueAxisMax: this.parseFiniteNumber(source["chartValueAxisMax"]),
+          chartReferenceLines: this.parseChartReferenceLines(source["chartReferenceLines"]),
           sortColumn: safeString(source["sortColumn"]) || undefined,
           sortDirection: source["sortDirection"] === "desc" ? "desc" : "asc" as const,
           sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as SortRule[] : undefined,
@@ -429,6 +492,40 @@ export class DataSource {
       filters: Array.isArray(v["filters"]) ? v["filters"] as FilterRule[] : undefined,
       resultLimit: this.parseResultLimit(v["resultLimit"]),
       summaryRules: this.parseStringMap(v["summaryRules"]),
+      chartType: this.parseChartType(v["chartType"]),
+      chartGroupField: safeString(v["chartGroupField"]) || undefined,
+      chartDateBucket: this.parseChartDateBucket(v["chartDateBucket"]),
+      chartNumberBucket: this.parseChartNumberBucket(v["chartNumberBucket"]),
+      chartNumberBucketSize: this.parsePositiveNumber(v["chartNumberBucketSize"]),
+      chartStackField: safeString(v["chartStackField"]) || undefined,
+      chartSeriesField: safeString(v["chartSeriesField"] || v["chartStackField"]) || undefined,
+      chartAggregation: this.parseChartAggregation(v["chartAggregation"]),
+      chartValueField: safeString(v["chartValueField"]) || undefined,
+      chartSecondaryAggregation: this.parseChartAggregation(v["chartSecondaryAggregation"]),
+      chartSecondaryValueField: safeString(v["chartSecondaryValueField"]) || undefined,
+      chartSortBy: this.parseChartSortBy(v["chartSortBy"]),
+      chartHiddenGroups: this.parseTrueMap(v["chartHiddenGroups"]),
+      chartOmitZeroValues: v["chartOmitZeroValues"] === true,
+      chartCumulative: v["chartCumulative"] === true,
+      chartHeight: this.parseChartHeight(v["chartHeight"]),
+      chartGridLines: this.parseChartGridLines(v["chartGridLines"]),
+      chartAxisNames: this.parseChartAxisNames(v["chartAxisNames"]),
+      chartShowTitle: v["chartShowTitle"] === false ? false : undefined,
+      chartTitle: safeString(v["chartTitle"]) || undefined,
+      chartShowDataLabels: v["chartShowDataLabels"] === true,
+      chartDataLabelMode: this.parseChartDataLabelMode(v["chartDataLabelMode"]),
+      chartDataLabelColor: this.parseChartDataLabelColor(v["chartDataLabelColor"]),
+      chartSmoothLine: v["chartSmoothLine"] === true,
+      chartGradientArea: v["chartGradientArea"] === true,
+      chartShowLegend: v["chartShowLegend"] === false ? false : v["chartShowLegend"] === true ? true : undefined,
+      chartColorPalette: this.parseChartColorPalette(v["chartColorPalette"]),
+      chartColorByValue: v["chartColorByValue"] === true,
+      chartShowDonutCenter: v["chartShowDonutCenter"] === true,
+      chartDonutCenterMode: this.parseChartDonutCenterMode(v["chartDonutCenterMode"], v["chartShowDonutCenter"]),
+      chartValueAxisRange: this.parseChartValueAxisRange(v["chartValueAxisRange"]),
+      chartValueAxisMin: this.parseFiniteNumber(v["chartValueAxisMin"]),
+      chartValueAxisMax: this.parseFiniteNumber(v["chartValueAxisMax"]),
+      chartReferenceLines: this.parseChartReferenceLines(v["chartReferenceLines"]),
       sortColumn: safeString(v["sortColumn"]) || undefined,
       sortDirection: v["sortDirection"] === "desc" ? "desc" : "asc" as const,
       sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as SortRule[] : undefined,
@@ -447,7 +544,9 @@ export class DataSource {
         await this.app.fileManager.processFrontMatter(file, (fm) => {
           const f = fm as Record<string, unknown>;
           f["db_view"] = true;
-          f["name"] = dbConfig.name;
+          // name is stored inside the database object; avoid a redundant top-level name
+          // that would show up in Obsidian's property panel.
+          delete f["name"];
           f["database"] = this.toDatabasePayload(dbConfig);
           for (const key of this.legacyViewKeys()) delete f[key];
         });
@@ -462,7 +561,8 @@ export class DataSource {
   async createViewDefFile(folderPath: string, filename: string, dbConfig: DatabaseConfig): Promise<TFile> {
     const frontmatter = {
       db_view: true,
-      name: dbConfig.name,
+      // name is stored inside the database object; avoid a redundant top-level name
+      // that would show up in Obsidian's property panel.
       database: this.toDatabasePayload(dbConfig),
     };
     const yaml = stringifyYaml(frontmatter).trim();
@@ -542,6 +642,40 @@ export class DataSource {
       filters: view.filters || [],
       resultLimit: view.resultLimit,
       summaryRules: view.summaryRules || {},
+      chartType: view.chartType || "bar",
+      chartGroupField: view.chartGroupField || "",
+      chartDateBucket: view.chartDateBucket || "",
+      chartNumberBucket: view.chartNumberBucket || "",
+      chartNumberBucketSize: view.chartNumberBucketSize,
+      chartStackField: view.chartStackField || "",
+      chartSeriesField: view.chartSeriesField || view.chartStackField || "",
+      chartAggregation: view.chartAggregation || "count",
+      chartValueField: view.chartValueField || "",
+      chartSecondaryAggregation: view.chartSecondaryAggregation || "count",
+      chartSecondaryValueField: view.chartSecondaryValueField || "",
+      chartSortBy: view.chartSortBy || "",
+      chartHiddenGroups: view.chartHiddenGroups || {},
+      chartOmitZeroValues: view.chartOmitZeroValues === true,
+      chartCumulative: view.chartCumulative === true,
+      chartHeight: view.chartHeight || "",
+      chartGridLines: view.chartGridLines || "",
+      chartAxisNames: view.chartAxisNames || "",
+      chartShowTitle: view.chartShowTitle === false ? false : true,
+      chartTitle: view.chartTitle || "",
+      chartShowDataLabels: view.chartShowDataLabels === true,
+      chartDataLabelMode: view.chartDataLabelMode || "",
+      chartDataLabelColor: view.chartDataLabelColor || "",
+      chartSmoothLine: view.chartSmoothLine === true,
+      chartGradientArea: view.chartGradientArea === true,
+      chartShowLegend: view.chartShowLegend === false ? false : view.chartShowLegend === true ? true : undefined,
+      chartColorPalette: view.chartColorPalette || "",
+      chartColorByValue: view.chartColorByValue === true,
+      chartShowDonutCenter: view.chartShowDonutCenter === true,
+      chartDonutCenterMode: view.chartDonutCenterMode || "",
+      chartValueAxisRange: view.chartValueAxisRange || "",
+      chartValueAxisMin: view.chartValueAxisMin,
+      chartValueAxisMax: view.chartValueAxisMax,
+      chartReferenceLines: view.chartReferenceLines || [],
       viewStates: view.viewStates || {},
     };
   }
@@ -590,6 +724,39 @@ export class DataSource {
       "filters",
       "resultLimit",
       "summaryRules",
+      "chartType",
+      "chartGroupField",
+      "chartDateBucket",
+      "chartNumberBucket",
+      "chartNumberBucketSize",
+      "chartStackField",
+      "chartSeriesField",
+      "chartAggregation",
+      "chartValueField",
+      "chartSecondaryAggregation",
+      "chartSecondaryValueField",
+      "chartSortBy",
+      "chartHiddenGroups",
+      "chartOmitZeroValues",
+      "chartCumulative",
+      "chartHeight",
+      "chartGridLines",
+      "chartAxisNames",
+      "chartShowTitle",
+      "chartTitle",
+      "chartShowDataLabels",
+      "chartDataLabelMode",
+      "chartSmoothLine",
+      "chartGradientArea",
+      "chartShowLegend",
+      "chartColorPalette",
+      "chartColorByValue",
+      "chartShowDonutCenter",
+      "chartDonutCenterMode",
+      "chartValueAxisRange",
+      "chartValueAxisMin",
+      "chartValueAxisMax",
+      "chartReferenceLines",
       "viewStates",
     ];
   }
@@ -597,6 +764,16 @@ export class DataSource {
   private parseResultLimit(value: unknown): number | undefined {
     const limit = typeof value === "number" ? value : Number(value);
     return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+  }
+
+  private parsePositiveNumber(value: unknown): number | undefined {
+    const n = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }
+
+  private parseFiniteNumber(value: unknown): number | undefined {
+    const n = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(n) ? n : undefined;
   }
 
   private parseStringMap(value: unknown): Record<string, string> | undefined {
@@ -615,15 +792,155 @@ export class DataSource {
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
 
+  private parseTrueMap(value: unknown): Record<string, true> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key, item]) => key.trim() && item === true)
+      .map(([key]) => [key, true] as const);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
   private parseViewType(value: unknown): ViewConfig["viewType"] {
-    if (value === "board" || value === "gallery" || value === "list") return value;
+    if (value === "board" || value === "gallery" || value === "list" || value === "chart") return value;
     return "table";
+  }
+
+  private parseChartAggregation(value: unknown): ViewConfig["chartAggregation"] {
+    if (
+      value === "sum" ||
+      value === "avg" ||
+      value === "median" ||
+      value === "min" ||
+      value === "max" ||
+      value === "range" ||
+      value === "unique" ||
+      value === "empty" ||
+      value === "not-empty" ||
+      value === "percent-empty" ||
+      value === "percent-not-empty" ||
+      value === "checked" ||
+      value === "unchecked" ||
+      value === "percent-checked"
+    ) return value;
+    if (value === "count") return "count";
+    return undefined;
+  }
+
+  private parseChartType(value: unknown): ViewConfig["chartType"] {
+    if (
+      value === "bar" ||
+      value === "horizontal-bar" ||
+      value === "line" ||
+      value === "area" ||
+      value === "pie" ||
+      value === "donut" ||
+      value === "number" ||
+      value === "stacked-bar" ||
+      value === "grouped-bar" ||
+      value === "percent-stacked-bar" ||
+      value === "mixed"
+    ) {
+      return value;
+    }
+    return undefined;
+  }
+
+  private parseChartDateBucket(value: unknown): ViewConfig["chartDateBucket"] {
+    if (value === "day" || value === "week" || value === "month" || value === "quarter" || value === "year") return value;
+    return undefined;
+  }
+
+  private parseChartNumberBucket(value: unknown): ViewConfig["chartNumberBucket"] {
+    if (value === "auto" || value === "fixed") return value;
+    return undefined;
+  }
+
+  private parseChartSortBy(value: unknown): ViewConfig["chartSortBy"] {
+    if (value === "value-desc" || value === "value-asc" || value === "label-asc" || value === "label-desc" || value === "option-order") return value;
+    return undefined;
+  }
+
+  private parseChartHeight(value: unknown): ViewConfig["chartHeight"] {
+    if (value === "small" || value === "medium" || value === "large" || value === "xlarge") return value;
+    return undefined;
+  }
+
+  private parseChartGridLines(value: unknown): ViewConfig["chartGridLines"] {
+    if (value === "none" || value === "value" || value === "both") return value;
+    return undefined;
+  }
+
+  private parseChartAxisNames(value: unknown): ViewConfig["chartAxisNames"] {
+    if (value === "none" || value === "x" || value === "y" || value === "both") return value;
+    return undefined;
+  }
+
+  private parseChartDataLabelMode(value: unknown): ViewConfig["chartDataLabelMode"] {
+    if (value === "value" || value === "percent" || value === "label-value") return value;
+    return undefined;
+  }
+
+  private parseChartDataLabelColor(value: unknown): ViewConfig["chartDataLabelColor"] {
+    if (value === "auto" || value === "dark" || value === "light" || value === "accent") return value;
+    return undefined;
+  }
+
+  private parseChartColorPalette(value: unknown): ViewConfig["chartColorPalette"] {
+    if (
+      value === "auto" ||
+      value === "accent" ||
+      value === "colorful" ||
+      value === "pastel" ||
+      value === "vivid" ||
+      value === "warm" ||
+      value === "cool" ||
+      value === "mono" ||
+      value === "option"
+    ) return value;
+    return undefined;
+  }
+
+  private parseChartDonutCenterMode(value: unknown, legacyVisible: unknown): ViewConfig["chartDonutCenterMode"] {
+    if (value === "hidden" || value === "total" || value === "aggregation") return value;
+    return legacyVisible === true ? "total" : undefined;
+  }
+
+  private parseChartValueAxisRange(value: unknown): ViewConfig["chartValueAxisRange"] {
+    if (value === "auto" || value === "zero-based" || value === "custom") return value;
+    return undefined;
+  }
+
+  private parseChartReferenceLines(value: unknown): ChartReferenceLine[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const lines = value
+      .map((item, index) => this.parseChartReferenceLine(item, index))
+      .filter((line): line is ChartReferenceLine => Boolean(line));
+    return lines.length > 0 ? lines : undefined;
+  }
+
+  private parseChartReferenceLine(value: unknown, index: number): ChartReferenceLine | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const source = value as Record<string, unknown>;
+    const type = source["type"];
+    if (type !== "constant" && type !== "average" && type !== "median" && type !== "min" && type !== "max") return undefined;
+    const numericValue = this.parseFiniteNumber(source["value"]);
+    if (type === "constant" && numericValue == null) return undefined;
+    const style = source["style"] === "dashed" || source["style"] === "dotted" ? source["style"] : "solid";
+    return {
+      id: safeString(source["id"]) || `line-${index + 1}`,
+      type,
+      value: numericValue,
+      label: safeString(source["label"]) || undefined,
+      color: safeString(source["color"]) || undefined,
+      style,
+    };
   }
 
   private getDefaultViewName(viewType: ViewConfig["viewType"]): string {
     if (viewType === "board") return t("common.boardView");
     if (viewType === "gallery") return t("common.galleryView");
     if (viewType === "list") return t("common.listView");
+    if (viewType === "chart") return t("common.chartView");
     return t("common.tableView");
   }
 

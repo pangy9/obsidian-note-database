@@ -3,11 +3,24 @@ import { COLUMN_TYPE_LABELS, DEFAULT_STATUS_OPTIONS, getBuiltinStatusPresets } f
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../data/types";
 import { t } from "../../i18n";
 import { confirmWithModal } from "./ConfirmModal";
+import { isHTMLElement } from "../DomGuards";
+
+export interface StatusOptionsSaveResult {
+  options: StatusOptionDef[];
+  presetId?: string;
+}
+
+interface StatusPresetSelectionState {
+  activePresetId?: string;
+  options: StatusOptionDef[];
+  customOptions: StatusOptionDef[];
+}
 
 const COLORS: StatusColor[] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
   "red", "slate", "cyan", "teal", "lime", "indigo", "violet", "rose",
 ];
+
 const COLOR_KEYS: Record<StatusColor, string> = {
   gray: "common.colorGray",
   brown: "common.colorBrown",
@@ -27,26 +40,62 @@ const COLOR_KEYS: Record<StatusColor, string> = {
   rose: "common.colorRose",
 };
 
+export function getValidStatusPresetId(presetId: string | undefined, presets: StatusPresetDef[]): string | undefined {
+  return presetId && presets.some((preset) => preset.id === presetId) ? presetId : undefined;
+}
+
+export function getManualStatusOptionsPresetId(): undefined {
+  return undefined;
+}
+
+export function cloneStatusOptionDraft(options: StatusOptionDef[]): StatusOptionDef[] {
+  return options.map((option) => ({ ...option }));
+}
+
+export function selectStatusOptionsPreset(
+  state: StatusPresetSelectionState,
+  presetId: string | undefined,
+  presets: StatusPresetDef[]
+): StatusPresetSelectionState {
+  const customOptions = state.activePresetId === undefined
+    ? cloneStatusOptionDraft(state.options)
+    : cloneStatusOptionDraft(state.customOptions);
+  const preset = presetId ? presets.find((candidate) => candidate.id === presetId) : undefined;
+  if (!preset) {
+    return {
+      activePresetId: undefined,
+      options: cloneStatusOptionDraft(customOptions),
+      customOptions,
+    };
+  }
+  return {
+    activePresetId: preset.id,
+    options: cloneStatusOptionDraft(preset.options),
+    customOptions,
+  };
+}
+
 export class StatusOptionsModal extends Modal {
   private options: StatusOptionDef[];
+  private customOptions: StatusOptionDef[];
   private listEl?: HTMLElement;
   private draggedIndex: number | null = null;
-  private activePresetId: string;
+  private activePresetId?: string;
   private presetButtonsEl?: HTMLElement;
 
   constructor(
     app: App,
     private col: ColumnDef,
-    private onSave: (options: StatusOptionDef[]) => Promise<void>,
+    private onSave: (result: StatusOptionsSaveResult) => Promise<void>,
     private presets: StatusPresetDef[] = getBuiltinStatusPresets(),
     private showPresets = true,
     private defaultOptions: StatusOptionDef[] = DEFAULT_STATUS_OPTIONS
   ) {
     super(app);
     const defaults = col.type === "status" ? this.defaultOptions : [];
-    this.options = (col.statusOptions?.length ? col.statusOptions : defaults)
-    .map((option) => ({ ...option }));
-    this.activePresetId = this.presets[0]?.id ?? "";
+    this.options = cloneStatusOptionDraft(col.statusOptions?.length ? col.statusOptions : defaults);
+    this.customOptions = cloneStatusOptionDraft(this.options);
+    this.activePresetId = getValidStatusPresetId(col.statusPresetId, this.presets);
   }
 
   onOpen(): void {
@@ -59,7 +108,9 @@ export class StatusOptionsModal extends Modal {
 
     const addBtn = this.contentEl.createEl("button", { text: t("modal.addOption") });
     addBtn.onclick = () => {
+      this.markCustomOptions();
       this.options.push({ value: t("modal.newOption"), color: "gray" });
+      this.syncCustomOptions();
       this.renderList();
     };
 
@@ -74,13 +125,36 @@ export class StatusOptionsModal extends Modal {
         new Notice(t("modal.optionNameDuplicate"));
         return;
       }
-      await this.onSave(normalized);
+      await this.onSave({ options: normalized, presetId: this.activePresetId });
       this.close();
     };
   }
 
+  private markCustomOptions(): void {
+    if (this.activePresetId === undefined) return;
+    this.activePresetId = getManualStatusOptionsPresetId();
+    if (this.presetButtonsEl) this.renderPresets();
+  }
+
+  private syncCustomOptions(): void {
+    if (this.activePresetId !== undefined) return;
+    this.customOptions = cloneStatusOptionDraft(this.options);
+  }
+
+  private selectPreset(presetId: string | undefined): void {
+    const next = selectStatusOptionsPreset({
+      activePresetId: this.activePresetId,
+      options: this.options,
+      customOptions: this.customOptions,
+    }, presetId, this.presets);
+    this.activePresetId = next.activePresetId;
+    this.options = next.options;
+    this.customOptions = next.customOptions;
+    this.renderPresets();
+    this.renderList();
+  }
+
   private renderPresets(): void {
-    // 首次：创建标题 + 按钮容器；之后：直接清空按钮容器
     if (!this.presetButtonsEl) {
       const wrap = this.contentEl.createDiv({ cls: "db-status-preset-list" });
       wrap.createDiv({ cls: "db-status-preset-title", text: t("modal.preset") });
@@ -88,6 +162,16 @@ export class StatusOptionsModal extends Modal {
     } else {
       this.presetButtonsEl.empty();
     }
+
+    const noneBtn = this.presetButtonsEl.createEl("button", {
+      cls: "db-status-preset-button",
+      text: t("statusPresets.none"),
+      attr: { type: "button" },
+    });
+    if (this.activePresetId === undefined) {
+      noneBtn.addClass("is-active");
+    }
+    noneBtn.onclick = () => this.selectPreset(undefined);
 
     for (const preset of this.presets) {
       const btn = this.presetButtonsEl.createEl("button", {
@@ -98,12 +182,7 @@ export class StatusOptionsModal extends Modal {
       if (preset.id === this.activePresetId) {
         btn.addClass("is-active");
       }
-      btn.onclick = () => {
-        this.activePresetId = preset.id;
-        this.options = preset.options.map((option) => ({ ...option }));
-        this.renderPresets(); // ← 关键：重新渲染按钮区，刷新 is-active
-        this.renderList();
-      };
+      btn.onclick = () => this.selectPreset(preset.id);
     }
   }
 
@@ -112,6 +191,14 @@ export class StatusOptionsModal extends Modal {
     this.listEl.empty();
     this.options.forEach((option, index) => {
       const row = this.listEl!.createDiv({ cls: "db-status-option-row" });
+      row.draggable = true;
+      row.ondragstart = (event) => {
+        if (this.shouldIgnoreOptionDrag(event)) {
+          event.preventDefault();
+          return;
+        }
+        this.startDrag(event, index, row);
+      };
       row.ondragover = (event) => {
         event.preventDefault();
         row.addClass("is-drop-target");
@@ -121,9 +208,7 @@ export class StatusOptionsModal extends Modal {
       row.ondragend = () => this.finishDrag();
 
       const drag = row.createSpan({ cls: "db-status-option-drag", text: "⋮⋮" });
-      drag.draggable = true;
       drag.title = t("panel.dragToSort");
-      drag.ondragstart = (event) => this.startDrag(event, index, row);
       const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls db-status-option-mobile-controls" });
       const upBtn = moveControls.createEl("button", {
         attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
@@ -137,16 +222,26 @@ export class StatusOptionsModal extends Modal {
       setIcon(downBtn, "arrow-down");
       downBtn.disabled = index >= this.options.length - 1;
       downBtn.onclick = () => this.moveOption(index, index + 1);
-      row.createSpan({ cls: `db-status-option-preview status-badge status-color-${option.color}`, text: option.value || t("modal.untitled") });
+      row.createSpan({
+        cls: `db-status-option-preview status-badge status-color-${option.color}`,
+        text: option.value || t("modal.untitled"),
+        attr: { title: option.value || t("modal.untitled") },
+      });
       const input = row.createEl("input", {
         cls: "db-status-option-input",
         attr: { type: "text" },
       });
       input.value = option.value;
       input.oninput = () => {
+        this.markCustomOptions();
         option.value = input.value;
+        this.syncCustomOptions();
         const preview = row.querySelector(".status-badge");
-        if (preview) preview.textContent = option.value || t("modal.untitled");
+        if (preview) {
+          const previewText = option.value || t("modal.untitled");
+          preview.textContent = previewText;
+          preview.setAttribute("title", previewText);
+        }
       };
 
       const palette = row.createDiv({ cls: "db-status-color-palette" });
@@ -158,7 +253,9 @@ export class StatusOptionsModal extends Modal {
         });
         colorButton.createSpan({ cls: "db-status-color-dot" });
         colorButton.onclick = () => {
+          this.markCustomOptions();
           option.color = color;
+          this.syncCustomOptions();
           this.renderList();
         };
       }
@@ -176,12 +273,13 @@ export class StatusOptionsModal extends Modal {
           confirmText: t("common.delete"),
           danger: true,
         })) return;
+        this.markCustomOptions();
         this.options.splice(index, 1);
+        this.syncCustomOptions();
         this.renderList();
       };
     });
   }
-
 
   private startDrag(event: DragEvent, index: number, row: HTMLElement): void {
     this.draggedIndex = index;
@@ -194,8 +292,10 @@ export class StatusOptionsModal extends Modal {
 
   private moveOption(from: number, to: number): void {
     if (from < 0 || from >= this.options.length || to < 0 || to >= this.options.length) return;
+    this.markCustomOptions();
     const [item] = this.options.splice(from, 1);
     this.options.splice(to, 0, item);
+    this.syncCustomOptions();
     this.renderList();
   }
 
@@ -210,9 +310,11 @@ export class StatusOptionsModal extends Modal {
 
     const rect = row.getBoundingClientRect();
     let insertIndex = event.clientY > rect.top + rect.height / 2 ? targetIndex + 1 : targetIndex;
+    this.markCustomOptions();
     const [item] = this.options.splice(from, 1);
     if (from < insertIndex) insertIndex -= 1;
     this.options.splice(insertIndex, 0, item);
+    this.syncCustomOptions();
     this.finishDrag();
     this.renderList();
   }
@@ -222,6 +324,11 @@ export class StatusOptionsModal extends Modal {
     this.contentEl.querySelectorAll(".db-status-option-row").forEach((row) => {
       row.removeClass("is-dragging", "is-drop-target");
     });
+  }
+
+  private shouldIgnoreOptionDrag(event: DragEvent): boolean {
+    return isHTMLElement(event.target)
+      && event.target.closest("input, select, textarea, button, .db-mobile-reorder-controls") != null;
   }
 
   onClose(): void {

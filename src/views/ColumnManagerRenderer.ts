@@ -5,6 +5,7 @@ import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { DatabaseViewState } from "./ViewStateStore";
+import { isHTMLElement } from "./DomGuards";
 
 export interface ColumnManagerActions {
   close(): void;
@@ -91,6 +92,17 @@ export class ColumnManagerRenderer {
     total: number
   ): void {
     const row = panel.createDiv({ cls: "db-column-manager-row" });
+    row.draggable = true;
+    row.ondragstart = (event) => {
+      if (this.shouldIgnoreColumnDrag(event)) {
+        event.preventDefault();
+        return;
+      }
+      this.draggedKey = col.key;
+      event.dataTransfer?.setData("text/plain", col.key);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      row.addClass("is-dragging");
+    };
     row.ondragover = (event) => {
       if (!this.draggedKey || this.draggedKey === col.key) return;
       event.preventDefault();
@@ -106,21 +118,14 @@ export class ColumnManagerRenderer {
       actions.moveColumnTo(this.draggedKey, col.key, placement);
       this.draggedKey = null;
     };
-
-    const drag = row.createSpan({ cls: "db-column-drag", text: "⋮⋮" });
-    drag.draggable = true;
-    drag.title = t("panel.dragToSort");
-    drag.ondragstart = (event) => {
-      this.draggedKey = col.key;
-      event.dataTransfer?.setData("text/plain", col.key);
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      row.addClass("is-dragging");
-    };
-    drag.ondragend = () => {
+    row.ondragend = () => {
       this.draggedKey = null;
       row.removeClass("is-dragging");
       panel.querySelectorAll(".db-column-manager-row").forEach((el) => el.removeClass("is-drop-target"));
     };
+
+    const drag = row.createSpan({ cls: "db-column-drag", text: "⋮⋮" });
+    drag.title = t("panel.dragToSort");
 
     const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
     const upBtn = moveControls.createEl("button", {
@@ -213,5 +218,10 @@ export class ColumnManagerRenderer {
         if (visibleCount > 0) colBtn.createSpan({ cls: "db-toolbar-badge", text: String(visibleCount) });
       }
     }
+  }
+
+  private shouldIgnoreColumnDrag(event: DragEvent): boolean {
+    return isHTMLElement(event.target)
+      && event.target.closest("input, select, textarea, button, .db-dropdown-field, .db-mobile-reorder-controls") != null;
   }
 }

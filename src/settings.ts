@@ -8,6 +8,8 @@ import { StatusPresetManagerModal } from "./views/modals/StatusPresetManagerModa
 import { AddDatabaseModal } from "./views/modals/AddDatabaseModal";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { confirmWithModal } from "./views/modals/ConfirmModal";
+import { createDropdownField, DropdownOption } from "./views/DropdownField";
+import { isHTMLElement } from "./views/DomGuards";
 
 /** Default databases shipped with the plugin. Keep empty for a neutral marketplace first run. */
 export const DEFAULT_DATABASES: DatabaseConfig[] = [];
@@ -19,6 +21,8 @@ export const DEFAULT_SETTINGS = {
   databases: DEFAULT_DATABASES,
   databaseFolder: "database",
   databaseFileOrder: [] as string[],
+  databaseFilesAlwaysOpenInNewTab: false,
+  databaseFilesPreventDuplicateTabs: true,
   statusPresets: getBuiltinStatusPresets(),
   defaultStatusPresetId: DEFAULT_STATUS_PRESET_ID,
   language: "system" as LocaleCode,
@@ -29,6 +33,8 @@ export function createDefaultSettings(): PluginSettings {
     databases: [],
     databaseFolder: DEFAULT_SETTINGS.databaseFolder,
     databaseFileOrder: [],
+    databaseFilesAlwaysOpenInNewTab: DEFAULT_SETTINGS.databaseFilesAlwaysOpenInNewTab,
+    databaseFilesPreventDuplicateTabs: DEFAULT_SETTINGS.databaseFilesPreventDuplicateTabs,
     statusPresets: getBuiltinStatusPresets(),
     defaultStatusPresetId: DEFAULT_SETTINGS.defaultStatusPresetId,
     language: DEFAULT_SETTINGS.language,
@@ -54,24 +60,26 @@ export class SettingsTab extends PluginSettingTab {
 
     // 分组 1：通用设置
     const general = this.createSettingGroup(containerEl, "settings.groups.general");
-    new Setting(general)
+    const languageSetting = new Setting(general)
       .setName(t("settings.language.name"))
-      .setDesc(t("settings.language.desc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("system", t("settings.language.system"))
-          .addOption("en", t("settings.language.en"))
-          .addOption("zh-CN", t("settings.language.zhCN"))
-          .addOption("zh-TW", t("settings.language.zhTW"))
-          .setValue(this.plugin.settings.language || "system")
-          .onChange(async (value) => {
-            this.plugin.settings.language = value as LocaleCode;
-            setLocale(this.plugin.settings.language);
-            this.plugin.refreshCommandNames();
-            await this.plugin.saveSettings();
-            this.display();
-          })
-      );
+      .setDesc(t("settings.language.desc"));
+    this.renderSettingsDropdown(languageSetting.controlEl, {
+      label: t("settings.language.name"),
+      options: [
+        { value: "system", text: t("settings.language.system") },
+        { value: "en", text: t("settings.language.en") },
+        { value: "zh-CN", text: t("settings.language.zhCN") },
+        { value: "zh-TW", text: t("settings.language.zhTW") },
+      ],
+      value: this.plugin.settings.language || "system",
+      onChange: async (value) => {
+        this.plugin.settings.language = value as LocaleCode;
+        setLocale(this.plugin.settings.language);
+        this.plugin.refreshCommandNames();
+        await this.plugin.saveSettings();
+        this.display();
+      },
+    });
     new Setting(general)
       .setName(t("settings.databaseFolder.name"))
       .setDesc(t("settings.databaseFolder.desc"))
@@ -81,6 +89,28 @@ export class SettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.databaseFolder || "database")
           .onChange(async (value) => {
             this.plugin.settings.databaseFolder = value.trim() || "database";
+            await this.plugin.saveSettings();
+          })
+      );
+    new Setting(general)
+      .setName(t("settings.databaseFilesAlwaysOpenInNewTab.name"))
+      .setDesc(t("settings.databaseFilesAlwaysOpenInNewTab.desc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.databaseFilesAlwaysOpenInNewTab === true)
+          .onChange(async (value) => {
+            this.plugin.settings.databaseFilesAlwaysOpenInNewTab = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    new Setting(general)
+      .setName(t("settings.databaseFilesPreventDuplicateTabs.name"))
+      .setDesc(t("settings.databaseFilesPreventDuplicateTabs.desc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.databaseFilesPreventDuplicateTabs !== false)
+          .onChange(async (value) => {
+            this.plugin.settings.databaseFilesPreventDuplicateTabs = value;
             await this.plugin.saveSettings();
           })
       );
@@ -184,19 +214,21 @@ export class SettingsTab extends PluginSettingTab {
     const presets = normalizeStatusPresets(this.plugin.settings.statusPresets);
     this.plugin.settings.statusPresets = presets;
     this.plugin.settings.defaultStatusPresetId = resolveDefaultStatusPresetId(presets, this.plugin.settings.defaultStatusPresetId);
-    new Setting(containerEl)
+    const setting = new Setting(containerEl)
       .setName(t("settings.statusPresets.name"))
-      .setDesc(t("settings.statusPresets.desc"))
-      .addDropdown((dropdown) => {
-        for (const preset of presets) dropdown.addOption(preset.id, preset.name);
-        dropdown
-          .setValue(this.plugin.settings.defaultStatusPresetId || DEFAULT_STATUS_PRESET_ID)
-          .onChange(async (value) => {
-            this.plugin.settings.defaultStatusPresetId = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      })
+      .setDesc(t("settings.statusPresets.desc"));
+    setting.settingEl.addClass("db-status-preset-setting-item");
+    this.renderSettingsDropdown(setting.controlEl, {
+      label: t("settings.statusPresets.name"),
+      options: presets.map((preset) => ({ value: preset.id, text: preset.name })),
+      value: this.plugin.settings.defaultStatusPresetId || DEFAULT_STATUS_PRESET_ID,
+      onChange: async (value) => {
+        this.plugin.settings.defaultStatusPresetId = value;
+        await this.plugin.saveSettings();
+        this.display();
+      },
+    });
+    setting
       .addButton((btn) =>
         btn.setButtonText(t("statusPresets.manage")).onClick(() => {
           new StatusPresetManagerModal(
@@ -213,6 +245,28 @@ export class SettingsTab extends PluginSettingTab {
           ).open();
         })
       );
+  }
+
+  private renderSettingsDropdown(
+    parent: HTMLElement,
+    options: {
+      label: string;
+      options: DropdownOption[];
+      value: string;
+      onChange(value: string): void | Promise<void>;
+    }
+  ): void {
+    createDropdownField({
+      parent,
+      label: options.label,
+      options: options.options,
+      value: options.value,
+      className: "db-settings-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        void options.onChange(value);
+      },
+    });
   }
 
   private getUniqueDatabaseName(baseName: string): string {
@@ -265,11 +319,11 @@ export class SettingsTab extends PluginSettingTab {
     this.attachFileDragEvents(section, parent, files, index);
 
     const heading = section.createDiv({ cls: "db-settings-database-heading" });
-    this.renderFileDragHandle(heading, section, parent, files, index);
+    this.renderFileDragHandle(heading);
     this.renderMobileReorder(heading, index, files.length, (from, to) => this.moveFileDatabase(files, from, to));
 
     const title = heading.createDiv({ cls: "db-settings-database-title" });
-    new Setting(title).setName(config.name || entry.file.basename).setHeading();
+    title.createDiv({ cls: "db-settings-database-name", text: config.name || entry.file.basename });
 
     // 文件路径
     heading.createSpan({
@@ -350,6 +404,17 @@ export class SettingsTab extends PluginSettingTab {
 
   /** 给文件型数据库卡片添加拖拽事件 */
   private attachFileDragEvents(section: HTMLElement, parent: HTMLElement, files: DatabaseFileEntry[], index: number): void {
+    section.draggable = true;
+    section.ondragstart = (event) => {
+      if (this.shouldIgnoreFileDatabaseDrag(event)) {
+        event.preventDefault();
+        return;
+      }
+      this.draggedFileEntry = files[index];
+      event.dataTransfer?.setData("text/plain", files[index].file.path);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      section.addClass("is-dragging");
+    };
     section.ondragover = (event) => {
       if (this.draggedFileEntry == null || this.draggedFileEntry === files[index]) return;
       event.preventDefault();
@@ -362,27 +427,25 @@ export class SettingsTab extends PluginSettingTab {
       section.removeClass("is-drop-target");
       void this.moveFileDatabase(files, files.indexOf(this.draggedFileEntry), index);
     };
-  }
-
-  /** 渲染文件型数据库拖拽手柄 */
-  private renderFileDragHandle(heading: HTMLElement, section: HTMLElement, parent: HTMLElement, files: DatabaseFileEntry[], index: number): void {
-    const drag = heading.createSpan({
-      cls: "db-settings-database-drag",
-      text: "⋮⋮",
-      attr: { title: t("panel.dragToSort") },
-    });
-    drag.draggable = true;
-    drag.ondragstart = (event) => {
-      this.draggedFileEntry = files[index];
-      event.dataTransfer?.setData("text/plain", files[index].file.path);
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      section.addClass("is-dragging");
-    };
-    drag.ondragend = () => {
+    section.ondragend = () => {
       this.draggedFileEntry = null;
       section.removeClass("is-dragging");
       parent.querySelectorAll(".db-settings-database-card.is-drop-target").forEach((el) => el.removeClass("is-drop-target"));
     };
+  }
+
+  /** 渲染文件型数据库拖拽手柄 */
+  private renderFileDragHandle(heading: HTMLElement): void {
+    heading.createSpan({
+      cls: "db-settings-database-drag",
+      text: "⋮⋮",
+      attr: { title: t("panel.dragToSort") },
+    });
+  }
+
+  private shouldIgnoreFileDatabaseDrag(event: DragEvent): boolean {
+    return isHTMLElement(event.target)
+      && event.target.closest("input, select, textarea, button, .db-mobile-reorder-controls") != null;
   }
 
   /** 渲染移动端上/下移按钮 */

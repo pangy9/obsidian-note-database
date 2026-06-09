@@ -14,6 +14,8 @@ export interface ColumnDef {
   urgency?: { enabled: boolean; thresholdDays: number };
   dateFormat?: string;
   computedKey?: string;
+  /** Explicit status preset selected for this column. Undefined means custom/no preset. */
+  statusPresetId?: string;
   statusOptions?: StatusOptionDef[];
   wrap?: boolean;
 }
@@ -66,7 +68,14 @@ export interface RowData {
   computed: Record<string, unknown>;
 }
 
-export type FilterOperator = "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte" | "empty" | "notempty";
+export interface CreateEntryPosition {
+  /** Insert before this rendered record when manual order is active. */
+  beforePath?: string;
+  /** Insert after this rendered record when manual order is active. */
+  afterPath?: string;
+}
+
+export type FilterOperator = "eq" | "neq" | "contains" | "hasTag" | "gt" | "lt" | "gte" | "lte" | "empty" | "notempty";
 
 export interface FilterRule {
   field: string;
@@ -91,7 +100,37 @@ export interface ViewModeStateDef {
   sortRules?: SortRule[];
 }
 
-export type DatabaseViewType = "table" | "board" | "gallery" | "list";
+export type DatabaseViewType = "table" | "board" | "gallery" | "list" | "chart";
+export type ChartType = "bar" | "horizontal-bar" | "line" | "area" | "pie" | "donut" | "number" | "stacked-bar" | "grouped-bar" | "percent-stacked-bar" | "mixed";
+export type ChartAggregation =
+  | "count"
+  | "sum"
+  | "avg"
+  | "median"
+  | "min"
+  | "max"
+  | "range"
+  | "unique"
+  | "empty"
+  | "not-empty"
+  | "percent-empty"
+  | "percent-not-empty"
+  | "checked"
+  | "unchecked"
+  | "percent-checked";
+export type ChartDateBucket = "day" | "week" | "month" | "quarter" | "year";
+export type ChartNumberBucket = "auto" | "fixed";
+export type ChartSortBy = "value-desc" | "value-asc" | "label-asc" | "label-desc" | "option-order";
+export type ChartHeight = "small" | "medium" | "large" | "xlarge";
+export type ChartGridLines = "none" | "value" | "both";
+export type ChartAxisNames = "none" | "x" | "y" | "both";
+export type ChartDataLabelMode = "value" | "percent" | "label-value";
+export type ChartDataLabelColor = "auto" | "dark" | "light" | "accent";
+export type ChartColorPalette = "auto" | "accent" | "colorful" | "pastel" | "vivid" | "warm" | "cool" | "mono" | "option";
+export type ChartDonutCenterMode = "hidden" | "total" | "aggregation";
+export type ChartValueAxisRange = "auto" | "zero-based" | "custom";
+export type ChartReferenceLineType = "constant" | "average" | "median" | "min" | "max";
+export type ChartReferenceLineStyle = "solid" | "dashed" | "dotted";
 export type GroupOrderMode = "text-asc" | "text-desc" | "number-asc" | "number-desc" | "date-asc" | "date-desc" | "checkbox-false-first" | "checkbox-true-first" | "option-asc" | "option-desc" | "multi-select-priority";
 export const NO_TITLE_FIELD = "__none";
 
@@ -108,6 +147,15 @@ export interface SourceRule {
   op: SourceRuleOperator;
   value?: string;
   valueType?: SourceRuleValueType;
+}
+
+export interface ChartReferenceLine {
+  id: string;
+  type: ChartReferenceLineType;
+  value?: number;
+  label?: string;
+  color?: string;
+  style?: ChartReferenceLineStyle;
 }
 
 export interface SourceRuleGroup {
@@ -241,6 +289,74 @@ export interface ViewConfig {
   resultLimit?: number;
   /** Property -> summary name mapping imported from Obsidian Bases view summaries. */
   summaryRules?: Record<string, string>;
+  /** Chart type for chart views. */
+  chartType?: ChartType;
+  /** Field key used to group rows before chart aggregation. */
+  chartGroupField?: string;
+  /** Date grouping granularity used when chartGroupField points to a date property. */
+  chartDateBucket?: ChartDateBucket;
+  /** Numeric grouping mode used when chartGroupField points to a number/currency property. */
+  chartNumberBucket?: ChartNumberBucket;
+  /** Bucket size used when chartNumberBucket is fixed. */
+  chartNumberBucketSize?: number;
+  /** Secondary categorical field used to split stacked bar segments. */
+  chartStackField?: string;
+  /** Secondary categorical field used to split chart data into series. Falls back to chartStackField for legacy views. */
+  chartSeriesField?: string;
+  /** Aggregation method for chart views. Stored explicitly even when only "count" is available. */
+  chartAggregation?: ChartAggregation;
+  /** Numeric field used by SUM/AVG/MIN/MAX chart aggregations. */
+  chartValueField?: string;
+  /** Secondary aggregation used by mixed charts for the line series. */
+  chartSecondaryAggregation?: ChartAggregation;
+  /** Secondary numeric field used by mixed charts for the line series. */
+  chartSecondaryValueField?: string;
+  /** Sort mode used after chart aggregation. */
+  chartSortBy?: ChartSortBy;
+  /** Hidden chart group or series keys. */
+  chartHiddenGroups?: Record<string, true>;
+  /** Hide zero-value groups after aggregation. */
+  chartOmitZeroValues?: boolean;
+  /** Render cumulative values for supported chart types. */
+  chartCumulative?: boolean;
+  /** Chart viewport height preset. */
+  chartHeight?: ChartHeight;
+  /** Grid line display mode. */
+  chartGridLines?: ChartGridLines;
+  /** Axis title display mode. */
+  chartAxisNames?: ChartAxisNames;
+  /** Show generated chart title. Defaults to true. */
+  chartShowTitle?: boolean;
+  /** Optional custom chart title. When empty, the generated title is used. */
+  chartTitle?: string;
+  /** Show value labels on chart marks. */
+  chartShowDataLabels?: boolean;
+  /** Label display mode for donut charts. */
+  chartDataLabelMode?: ChartDataLabelMode;
+  /** Color strategy for chart data labels. */
+  chartDataLabelColor?: ChartDataLabelColor;
+  /** Smooth line interpolation. */
+  chartSmoothLine?: boolean;
+  /** Fill line/area series with a subtle gradient. */
+  chartGradientArea?: boolean;
+  /** Show chart legend. */
+  chartShowLegend?: boolean;
+  /** Palette used for chart marks. */
+  chartColorPalette?: ChartColorPalette;
+  /** Use value intensity when coloring single-series marks. */
+  chartColorByValue?: boolean;
+  /** Show aggregate value in donut center. */
+  chartShowDonutCenter?: boolean;
+  /** Donut center display mode. Legacy chartShowDonutCenter=true maps to total. */
+  chartDonutCenterMode?: ChartDonutCenterMode;
+  /** Value axis range behavior for charts with axes. */
+  chartValueAxisRange?: ChartValueAxisRange;
+  /** Custom value axis minimum when chartValueAxisRange is custom. */
+  chartValueAxisMin?: number;
+  /** Custom value axis maximum when chartValueAxisRange is custom. */
+  chartValueAxisMax?: number;
+  /** Optional reference lines drawn on the value axis. */
+  chartReferenceLines?: ChartReferenceLine[];
   /** Per-renderer state so table and board can keep independent visible columns, filters, and sorting. */
   viewStates?: Partial<Record<DatabaseViewType, ViewModeStateDef>>;
 }
@@ -250,6 +366,10 @@ export interface PluginSettings {
   databases: DatabaseConfig[];
   databaseFolder: string;
   databaseFileOrder?: string[];
+  /** Open db_view Markdown files in a fresh tab when launched from the file explorer. */
+  databaseFilesAlwaysOpenInNewTab?: boolean;
+  /** Reuse an existing database-file tab instead of opening another one. */
+  databaseFilesPreventDuplicateTabs?: boolean;
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
   language?: LocaleCode;

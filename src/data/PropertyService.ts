@@ -1,6 +1,7 @@
 import { App, TFile } from "obsidian";
 import { getDefaultCellValue, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "./ColumnTypes";
 import type { FrontmatterMutator } from "./DataSource";
+import { isFileFieldKey } from "./FileFields";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef } from "./types";
 
@@ -25,7 +26,7 @@ export class PropertyService {
   ) {}
 
   async setObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
-    if (!key || key === "file.name" || type === "computed") return;
+    if (!key || isFileFieldKey(key) || type === "computed") return;
     // Serialize writes to prevent read-modify-write races
     const task = this.typesJsonWriteQueue.then(() => this.doSetObsidianPropertyType(key, type));
     this.typesJsonWriteQueue = task.catch(() => {}); // keep queue alive on error
@@ -60,7 +61,7 @@ export class PropertyService {
     force = false
   ): Promise<RenameFrontmatterResult> {
     const result: RenameFrontmatterResult = { moved: 0, skippedConflicts: 0, deletedStale: 0 };
-    if (!oldKey || !newKey || oldKey === newKey) return result;
+    if (!oldKey || !newKey || oldKey === newKey || isFileFieldKey(oldKey) || isFileFieldKey(newKey)) return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {
@@ -112,7 +113,7 @@ export class PropertyService {
     value: unknown = ""
   ): Promise<FrontmatterBatchResult> {
     const result: FrontmatterBatchResult = { changed: 0, skipped: 0 };
-    if (!key || key === "file.name") return result;
+    if (!key || isFileFieldKey(key)) return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {
@@ -134,7 +135,7 @@ export class PropertyService {
     targetKey: string
   ): Promise<FrontmatterBatchResult> {
     const result: FrontmatterBatchResult = { changed: 0, skipped: 0 };
-    if (!sourceKey || !targetKey || sourceKey === targetKey) return result;
+    if (!sourceKey || !targetKey || sourceKey === targetKey || isFileFieldKey(sourceKey) || isFileFieldKey(targetKey)) return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {
@@ -164,7 +165,7 @@ export class PropertyService {
     type: ColumnDef["type"]
   ): Promise<FrontmatterBatchResult> {
     const result: FrontmatterBatchResult = { changed: 0, skipped: 0 };
-    if (!key || key === "file.name" || type === "computed") return result;
+    if (!key || isFileFieldKey(key) || type === "computed") return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {
@@ -191,7 +192,7 @@ export class PropertyService {
 
   async deleteKey(files: TFile[], key: string): Promise<FrontmatterBatchResult> {
     const result: FrontmatterBatchResult = { changed: 0, skipped: 0 };
-    if (!key || key === "file.name") return result;
+    if (!key || isFileFieldKey(key)) return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {

@@ -118,6 +118,13 @@ interface MockPluginInstance {
   };
   settings: { databaseFolder: string };
   createConfigFromBase: (baseFile: MockFile, ignored: string) => { config: Record<string, unknown> };
+  importFromCsvs: (result: unknown, metadata: unknown) => Promise<void>;
+  saveSettings: () => Promise<void>;
+  dataSource?: {
+    getViewDefFiles: () => unknown[];
+    createViewDefFile: (folder: string, name: string, config: Record<string, unknown>) => Promise<MockFile>;
+    openNote: () => void;
+  };
 }
 
 function createPlugin(frontmatterByPath: Record<string, Record<string, unknown>> = {}): MockPluginInstance {
@@ -137,15 +144,23 @@ function createPlugin(frontmatterByPath: Record<string, Record<string, unknown>>
   return plugin;
 }
 
+function uploadFile(name: string, content: string): { name: string; text: () => Promise<string> } {
+  return { name, text: async () => content };
+}
+
 interface ConfigResult {
   baseThisFilePath: string;
   schema: {
     computedFields: Array<{ key: string; type?: string }>;
-    columns: Array<{ key: string; width?: number }>;
+    columns: Array<{ key: string; type?: string; width?: number; statusOptions?: unknown[] }>;
   };
   views: Array<{
+    viewType?: string;
     columnWidths: Record<string, number>;
+    columnOrder?: string[];
     sourceRuleTree?: unknown;
+    chartGroupField?: string;
+    chartValueField?: string;
   }>;
   sourceRuleTree: unknown;
 }
@@ -214,6 +229,60 @@ describe(".base import", () => {
     });
   });
 
+  it("keeps file.* fields fixed and does not generate option lists for virtual file metadata", () => {
+    parseYamlMock.mockReturnValue({
+      sourceFolder: "Projects",
+      views: [
+        {
+          type: "table",
+          name: "Files",
+          order: ["file.name", "file.tags", "file.links", "file.backlinks", "file.embeds", "file.size"],
+        },
+      ],
+    });
+    const plugin = createPlugin({
+      "Projects/Active/task.md": { tags: ["alpha", "beta"] },
+    });
+    const baseFile = file("Projects/source.base", "base");
+
+    const { config } = plugin.createConfigFromBase(baseFile, "ignored") as unknown as { config: ConfigResult };
+    const byKey = new Map(config.schema.columns.map((col) => [col.key, col]));
+
+    expect(byKey.get("file.tags")?.type).toBe("multi-select");
+    expect(byKey.get("file.tags")?.statusOptions).toBeUndefined();
+    expect(byKey.get("file.links")?.type).toBe("text");
+    expect(byKey.get("file.links")?.statusOptions).toBeUndefined();
+    expect(byKey.get("file.backlinks")?.type).toBe("text");
+    expect(byKey.get("file.embeds")?.type).toBe("text");
+    expect(byKey.get("file.size")?.type).toBe("number");
+  });
+
+  it("does not import unsupported chart views into unusable chart configs", () => {
+    parseYamlMock.mockReturnValue({
+      sourceFolder: "Projects",
+      views: [
+        {
+          type: "chart",
+          name: "Revenue Chart",
+          order: ["file.name", "status", "amount"],
+          chartGroupField: "missing",
+          chartValueField: "also_missing",
+        },
+      ],
+    });
+    const plugin = createPlugin({
+      "Projects/Active/task.md": { status: "todo", amount: 12 },
+    });
+
+    const { config } = plugin.createConfigFromBase(file("Projects/source.base", "base"), "ignored") as unknown as { config: ConfigResult };
+
+    expect(config.views).toHaveLength(1);
+    expect(config.views[0]?.viewType).toBe("table");
+    expect(config.views[0]?.chartGroupField).toBeUndefined();
+    expect(config.views[0]?.chartValueField).toBeUndefined();
+    expect(config.views[0]?.columnOrder).toEqual(config.schema.columns.map((col) => col.key));
+  });
+
   it("rejects unsupported view filters instead of silently dropping them", () => {
     parseYamlMock.mockReturnValue({
       sourceFolder: "Projects",
@@ -261,5 +330,56 @@ describe(".base import", () => {
         { field: "owner", op: "eq", value: "me", valueType: "string" },
       ],
     });
+  });
+
+  it("skips readonly file.* CSV columns and writes file.tags to frontmatter tags", async () => {
+    const plugin = createPlugin();
+    const createdNotes: Array<{ path: string; content: string }> = [];
+    let createdConfig: ConfigResult | undefined;
+    plugin.app.vault = {
+      ...plugin.app.vault,
+      createFolder: () => Promise.resolve(),
+      create: (path: string, content: string) => {
+        createdNotes.push({ path, content });
+        return Promise.resolve(file(path));
+      },
+    } as typeof plugin.app.vault & {
+      createFolder: () => Promise<void>;
+      create: (path: string, content: string) => Promise<MockFile>;
+    };
+    plugin.dataSource = {
+      getViewDefFiles: () => [],
+      createViewDefFile: (_folder, name, config) => {
+        createdConfig = config as unknown as ConfigResult;
+        return Promise.resolve(file(`Databases/${name}.md`));
+      },
+      openNote: () => undefined,
+    };
+    plugin.saveSettings = async () => undefined;
+
+    await plugin.importFromCsvs(
+      {
+        csvFiles: [uploadFile("Import.csv", "Name,file.path,file.tags,status\nTask,Other.md,\"#alpha, #beta\",todo")],
+        markdownFiles: [],
+        databaseName: "Imported",
+        targetFolder: "Imported",
+      },
+      {
+        format: "note-database-csv-markdown",
+        database: {
+          id: "source",
+          name: "Source",
+          sourceFolder: "",
+          schema: { columns: [{ key: "file.name", label: "Name", type: "text" }], computedFields: [] },
+          views: [],
+        },
+      }
+    );
+
+    expect(createdConfig?.schema.columns.some((col) => col.key === "file.path")).toBe(false);
+    expect(createdConfig?.schema.columns.find((col) => col.key === "file.tags")?.type).toBe("multi-select");
+    expect(createdNotes[0]?.content).toContain("\"tags\":[\"alpha\",\"beta\"]");
+    expect(createdNotes[0]?.content).not.toContain("file.path");
+    expect(createdNotes[0]?.content).not.toContain("file.tags");
   });
 });

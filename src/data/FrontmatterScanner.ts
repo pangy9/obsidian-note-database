@@ -4,7 +4,7 @@ import { evaluateComputedFields } from "./ComputedEvaluator";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleNode } from "./types";
 import { hasObsidianTagValue, isObsidianTagsKey, toObsidianTagValues } from "./ColumnTypes";
 import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
-import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
+import { fileHasLink, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey } from "./FileFields";
 import { stringifyValue } from "./Stringify";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
@@ -154,7 +154,7 @@ function baseSourceScalarValuesEqual(value: unknown, rule: SourceRule, columns?:
 
 function shouldCompareSourceRuleAsDate(rule: SourceRule, columns?: ColumnDef[]): boolean {
 	if (rule.valueType === "date") return true;
-	return isBaseFileField(rule.field) && getBaseFileFieldType(rule.field) === "date";
+	return isFileFieldKey(rule.field) && getFileFieldFixedType(rule.field) === "date";
 }
 
 function matchesStringSourceRuleValue(value: unknown, predicate: (text: string) => boolean): boolean {
@@ -262,6 +262,7 @@ export function collectFileFrontmatterKeys(
 		if (!matchesRules(f, fm, sourceFolder, sourceRules, sourceLogic, sourceRuleTree, cache, app, computedFields, columns, baseThisFile)) continue;
 		for (const key of Object.keys(fm)) {
 			if (!key || key.startsWith("_") || key === "db_view") continue;
+			if (isFileFieldKey(key)) continue;
 			if (!allKeys.has(key)) {
 				allKeys.set(key, key);
 			}
@@ -331,7 +332,7 @@ export function inferColumnType(key: string, sampleValues: unknown[] = []): Colu
 	}
 
 	const lower = key.toLowerCase();
-	if (isBaseFileField(lower)) return getBaseFileFieldType(lower);
+	if (isFileFieldKey(lower)) return getFileFieldFixedType(lower);
 	if (lower.includes("date") || lower.includes("time") || key.includes("日期") || key.includes("时间")) return "date";
 	if (lower.includes("price") || lower.includes("cost") || lower.includes("amount") || key.includes("费用") || key.includes("金额") || key.includes("花费")) return "currency";
 	if (lower.includes("count") || lower.includes("days") || key.includes("天数")) return "number";

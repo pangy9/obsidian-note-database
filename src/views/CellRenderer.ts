@@ -1,13 +1,16 @@
 import { App, Notice, Platform, normalizePath, setIcon } from "obsidian";
 import {
   getColumnOptions,
+  getInvalidObsidianTagValues,
+  normalizeValidObsidianTagValue,
   normalizeOptionValueForKey,
   toBooleanValue,
   toMultiSelectValuesForKey,
+  toValidObsidianTagValues,
 } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { DataSource } from "../data/DataSource";
-import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
 import { t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
@@ -16,30 +19,12 @@ import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { confirmWithModal } from "./modals/ConfirmModal";
+import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
   "red", "slate", "cyan", "teal", "lime", "indigo", "violet", "rose",
 ];
-
-const OPTION_COLOR_HEX: Record<string, string> = {
-  gray: "#787774",
-  brown: "#8f5d45",
-  orange: "#b65f00",
-  yellow: "#8f6a00",
-  green: "#448361",
-  blue: "#2f6fad",
-  purple: "#6940a5",
-  pink: "#a83272",
-  red: "#d44c47",
-  slate: "#64748b",
-  cyan: "#0891b2",
-  teal: "#0f766e",
-  lime: "#65a30d",
-  indigo: "#4f46e5",
-  violet: "#7c3aed",
-  rose: "#e11d48",
-};
 
 export interface CellOptionTransaction {
   previousOptions?: StatusOptionDef[];
@@ -48,6 +33,16 @@ export interface CellOptionTransaction {
   renameValues?: Array<{ from: string; to: string }>;
   setValue?: boolean;
   value?: unknown;
+}
+
+interface OptionDragPreview {
+  preview: HTMLElement;
+  offsetX: number;
+  offsetY: number;
+}
+
+interface MetadataCacheWithTags {
+  getTags?(): Record<string, number>;
 }
 
 export class CellRenderer {
@@ -105,10 +100,10 @@ export class CellRenderer {
       }
       return;
     } else {
-      value = isBaseFileField(col.key) ? getRowFileFieldValue(row, col.key) : row.frontmatter[col.key];
+      value = isFileFieldKey(col.key) ? getRowFileFieldValue(row, col.key) : row.frontmatter[col.key];
     }
 
-    const displayType = getColumnDisplayType(col, this.getComputedFields());
+    const displayType = this.getEffectiveDisplayType(col);
     if (displayType === "checkbox") {
       this.renderCheckbox(td, row, col, value);
       return;
@@ -120,13 +115,26 @@ export class CellRenderer {
         this.makeComputedEditable(td, col);
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEditFormula"));
       }
-      if (!this.isReadOnly && col.type !== "computed" && !isBaseFileField(col.key)) {
+      if (!this.isReadOnly && this.isEditableCellColumn(col)) {
         td.addClass("db-editable-cell");
         this.makeEditable(td, row, col, "");
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEdit"));
+      } else if (!this.isReadOnly && isReadonlyFileField(col.key)) {
+        this.makeReadonlyFileFieldNotice(td, col);
       }
       if (this.isReadOnly) {
         setFieldTooltip(td, t("common.empty"));
+      }
+      return;
+    }
+
+    if (shouldRenderSpecialFileField(col) && renderSpecialFileFieldValue(td, this.app, row, col, value)) {
+      if (!this.isReadOnly && this.isEditableCellColumn(col)) {
+        td.addClass("db-editable-cell");
+        this.makeEditable(td, row, col, value);
+        setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEdit"));
+      } else {
+        setFieldTooltip(td, this.getTooltipValue(col, value));
       }
       return;
     }
@@ -159,13 +167,27 @@ export class CellRenderer {
     if (!this.isReadOnly && col.type === "computed") {
       this.makeComputedEditable(td, col);
       setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEditFormula"));
-    } else if (!this.isReadOnly && !isBaseFileField(col.key)) {
+    } else if (!this.isReadOnly && this.isEditableCellColumn(col)) {
       td.addClass("db-editable-cell");
       this.makeEditable(td, row, col, value);
       setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEdit"));
+    } else if (!this.isReadOnly && isReadonlyFileField(col.key)) {
+      this.makeReadonlyFileFieldNotice(td, col);
+      setFieldTooltip(td, this.getTooltipValue(col, value), t("fileField.readonly", { label: col.label || col.key }));
     } else {
       setFieldTooltip(td, this.getTooltipValue(col, value));
     }
+  }
+
+  private getEffectiveDisplayType(col: ColumnDef): ColumnDef["type"] {
+    if (isFileFieldKey(col.key)) return getFileFieldFixedType(col.key);
+    return getColumnDisplayType(col, this.getComputedFields());
+  }
+
+  private isEditableCellColumn(col: ColumnDef): boolean {
+    if (col.type === "computed") return false;
+    if (!isFileFieldKey(col.key)) return true;
+    return col.key === "file.tags";
   }
 
   private renderStatus(td: HTMLElement, col: ColumnDef, status: string): void {
@@ -190,7 +212,8 @@ export class CellRenderer {
   }
 
   private getTooltipValue(col: ColumnDef, value: unknown): unknown {
-    return getColumnDisplayType(col, this.getComputedFields()) === "multi-select" ? toMultiSelectValuesForKey(col.key, value) : value;
+    if (col.key === "file.tags") return toValidObsidianTagValues(value);
+    return this.getEffectiveDisplayType(col) === "multi-select" ? toMultiSelectValuesForKey(col.key, value) : value;
   }
 
   private renderCheckbox(td: HTMLElement, row: RowData, col: ColumnDef, value: unknown): void {
@@ -256,6 +279,21 @@ export class CellRenderer {
     });
   }
 
+  private makeReadonlyFileFieldNotice(td: HTMLElement, col: ColumnDef): void {
+    td.tabIndex = 0;
+    const showNotice = () => new Notice(t("fileField.readonly", { label: col.label || col.key }));
+    td.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showNotice();
+    });
+    td.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      showNotice();
+    });
+  }
+
   private makeComputedEditable(td: HTMLElement, col: ColumnDef): void {
     td.addClass("db-formula-cell");
     td.title = t("cell.doubleClickEditFormula");
@@ -273,6 +311,11 @@ export class CellRenderer {
     event?: MouseEvent,
     currentValue = this.getCurrentValue(row, col)
   ): void {
+    if (isReadonlyFileField(col.key)) {
+      new Notice(t("fileField.readonly", { label: col.label || col.key }));
+      return;
+    }
+
     if (col.type === "checkbox") {
       const checkbox = target.matches("input[type='checkbox']")
         ? target as HTMLInputElement
@@ -327,7 +370,7 @@ export class CellRenderer {
 
   private getCurrentValue(row: RowData, col: ColumnDef): unknown {
     if (col.type === "computed" && col.computedKey) return row.computed[col.computedKey];
-    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
+    if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
     return row.frontmatter[col.key];
   }
 
@@ -350,9 +393,11 @@ export class CellRenderer {
     const container = isHTMLElement(rawContainer) ? rawContainer : null;
     const host = container || window.activeDocument.body;
     host.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
+    const isFileTags = col.key === "file.tags";
+    const optionKey = isFileTags ? "tags" : col.key;
     const originalValues = multiple
-      ? toMultiSelectValuesForKey(col.key, currentValue)
-      : [normalizeOptionValueForKey(col.key, currentValue)].filter(Boolean);
+      ? (isFileTags ? toValidObsidianTagValues(currentValue) : toMultiSelectValuesForKey(optionKey, currentValue))
+      : [normalizeOptionValueForKey(optionKey, currentValue)].filter(Boolean);
     const selected = new Set(originalValues);
     const popover = host.createDiv({ cls: "db-cell-option-popover" });
     let activeOptionIndex = 0;
@@ -389,29 +434,36 @@ export class CellRenderer {
     };
     // Build option objects from column config (mutable copies)
     const optionDefs: StatusOptionDef[] = [];
-    const seenOptions = new Set<string>();
-    for (const option of getColumnOptions(col)) {
-      const value = normalizeOptionValueForKey(col.key, option.value);
-      if (!value || seenOptions.has(value)) continue;
-      seenOptions.add(value);
-      optionDefs.push({ ...option, value });
-    }
-    for (const v of originalValues) {
-      if (v && !optionDefs.find(o => o.value === v)) {
-        optionDefs.push({ value: v, color: "gray" });
+    if (isFileTags) {
+      optionDefs.push(...this.getFileTagDraftOptions(col, originalValues));
+    } else {
+      const seenOptions = new Set<string>();
+      for (const option of getColumnOptions(col)) {
+        const value = normalizeOptionValueForKey(optionKey, option.value);
+        if (!value || seenOptions.has(value)) continue;
+        seenOptions.add(value);
+        optionDefs.push({ ...option, value });
+      }
+      for (const v of originalValues) {
+        if (v && !optionDefs.find(o => o.value === v)) {
+          optionDefs.push({ value: v, color: "gray" });
+        }
       }
     }
 
     const cloneOptions = (options: StatusOptionDef[]) => options.map((option) => ({ ...option }));
     const getCommittedOptions = () => cloneOptions(col.statusOptions || []);
-    const getDraftOptions = () => cloneOptions(optionDefs);
+    const getDraftOptions = () => isFileTags ? this.persistFileTagColorOptions(optionDefs) : cloneOptions(optionDefs);
     const commitOptionTransaction = async (transaction: CellOptionTransaction) => {
       try {
         if (this.commitCellOptionTransaction) {
           await this.commitCellOptionTransaction(row, col, transaction);
           return;
         }
-        if (transaction.nextOptions) col.statusOptions = cloneOptions(transaction.nextOptions);
+        if (transaction.nextOptions) {
+          col.statusOptions = cloneOptions(transaction.nextOptions);
+          col.statusPresetId = undefined;
+        }
         if (transaction.setValue) await this.saveValue(row, col, transaction.value);
         else await this.refreshAfterSave();
       } catch (err) {
@@ -445,17 +497,21 @@ export class CellRenderer {
 
         // Drag handle for reorder
         const handle = item.createSpan({ cls: "db-option-drag-handle", text: "⠿" });
+        if (isFileTags) handle.addClass("is-hidden");
         handle.onmousedown = (e) => {
+          if (isFileTags) return;
           e.stopPropagation();
           e.preventDefault();
 
-          item.setCssProps({ opacity: "0.4" });
+          item.addClass("is-dragging");
+          const dragPreview = this.createOptionDragPreview(item, e);
           let dropLine: HTMLElement | null = null;
           let lastTarget = idx;
 
           const removeDropLine = () => { dropLine?.remove(); dropLine = null; };
 
           const onMove = (ev: MouseEvent) => {
+            this.updateOptionDragPreview(dragPreview, ev);
             // Find insert-before position in DOM
             const items = Array.from(popover.querySelectorAll<HTMLButtonElement>(".db-cell-option-item"));
             let insertBefore = items.length;
@@ -485,7 +541,8 @@ export class CellRenderer {
 
           const onUp = () => {
             removeDropLine();
-            item.setCssProps({ opacity: "" });
+            item.removeClass("is-dragging");
+            this.removeOptionDragPreview(dragPreview);
             if (lastTarget !== idx && lastTarget >= 0 && lastTarget < optionDefs.length) {
               const [moved] = optionDefs.splice(idx, 1);
               optionDefs.splice(lastTarget, 0, moved);
@@ -501,12 +558,14 @@ export class CellRenderer {
         };
 
         const moveControls = item.createSpan({ cls: "db-mobile-reorder-controls" });
+        if (isFileTags) moveControls.addClass("is-hidden");
         const upBtn = moveControls.createEl("button", {
           attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
         });
         setIcon(upBtn, "arrow-up");
         upBtn.disabled = idx === 0;
         upBtn.onclick = (event) => {
+          if (isFileTags) return;
           event.preventDefault();
           event.stopPropagation();
           const [moved] = optionDefs.splice(idx, 1);
@@ -520,6 +579,7 @@ export class CellRenderer {
         setIcon(downBtn, "arrow-down");
         downBtn.disabled = idx >= optionDefs.length - 1;
         downBtn.onclick = (event) => {
+          if (isFileTags) return;
           event.preventDefault();
           event.stopPropagation();
           const [moved] = optionDefs.splice(idx, 1);
@@ -531,7 +591,7 @@ export class CellRenderer {
         // Color dot — opens color picker
         const dot = item.createSpan({ cls: "db-option-color-dot" });
         const updateDot = () => {
-          dot.setCssProps({ width: "12px", height: "12px", borderRadius: "2px", margin: "0 4px", flexShrink: "0", background: `var(--status-color-fg-${opt.color})`, cursor: "pointer" });
+          dot.className = `db-option-color-dot db-option-color-${opt.color}`;
         };
         updateDot();
         dot.onclick = (e) => {
@@ -543,6 +603,7 @@ export class CellRenderer {
         // Label — double-click to rename
         const label = item.createSpan({ text: opt.value, cls: "db-option-label" });
         label.ondblclick = (e) => {
+          if (isFileTags) return;
           e.stopPropagation();
           e.preventDefault();
           const input = window.activeDocument.createElement("input");
@@ -582,9 +643,11 @@ export class CellRenderer {
           cls: "db-option-delete",
           attr: { title: t("common.delete"), "aria-label": t("common.delete") },
         });
+        if (isFileTags) deleteButton.addClass("is-hidden");
         setIcon(deleteButton, "trash");
         deleteButton.onmousedown = (event) => event.preventDefault();
         deleteButton.onclick = async (event) => {
+          if (isFileTags) return;
           event.preventDefault();
           event.stopPropagation();
           if (!this.app || !await confirmWithModal(this.app, {
@@ -632,10 +695,11 @@ export class CellRenderer {
     const showColorPicker = (anchor: HTMLElement, opt: StatusOptionDef, onUpdate: () => void) => {
       window.activeDocument.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
       const picker = window.activeDocument.body.createDiv({ cls: "db-color-picker-popup" });
-      picker.setCssProps({ position: "fixed", display: "flex", flexWrap: "wrap", gap: "4px", padding: "6px", background: "var(--background-primary)", border: "1px solid var(--background-modifier-border)", borderRadius: "6px", boxShadow: "0 4px 14px rgba(0,0,0,.15)", zIndex: "1002", width: "124px" });
       OPTION_COLORS.forEach(color => {
-        const swatch = picker.createSpan();
-        swatch.setCssProps({ width: "18px", height: "18px", borderRadius: "2px", background: OPTION_COLOR_HEX[color], cursor: "pointer", boxShadow: color === opt.color ? "0 0 0 2px var(--interactive-accent)" : "" });
+        const swatch = picker.createSpan({
+          cls: `db-color-picker-swatch db-option-color-${color}${color === opt.color ? " is-selected" : ""}`,
+          attr: { role: "button", tabindex: "0", title: color, "aria-label": color },
+        });
         swatch.onclick = (e) => {
           e.stopPropagation();
           const oldColor = opt.color;
@@ -651,6 +715,11 @@ export class CellRenderer {
             });
           }
           picker.remove();
+        };
+        swatch.onkeydown = (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          swatch.click();
         };
       });
       const rect = anchor.getBoundingClientRect();
@@ -672,22 +741,31 @@ export class CellRenderer {
     addInput.onkeydown = (e) => {
       if (e.key !== "Enter") return;
       e.preventDefault();
-      const name = normalizeOptionValueForKey(col.key, addInput.value);
+      if (isFileTags) {
+        const invalidTags = getInvalidObsidianTagValues([addInput.value]);
+        if (invalidTags.length > 0) {
+          new Notice(t("fileField.invalidTag", { tag: invalidTags[0] }));
+          return;
+        }
+      }
+      const name = isFileTags ? normalizeValidObsidianTagValue(addInput.value) : normalizeOptionValueForKey(optionKey, addInput.value);
       if (!name) return;
       if (optionDefs.some(o => o.value === name)) {
         new Notice(t("cell.optionExists", { name }));
         return;
       }
-      optionDefs.push({ value: name, color: OPTION_COLORS[optionDefs.length % OPTION_COLORS.length] });
+      optionDefs.push({ value: name, color: isFileTags ? "gray" : OPTION_COLORS[optionDefs.length % OPTION_COLORS.length] });
       addInput.value = "";
       if (!multiple) {
         selected.clear();
         selected.add(name);
         popover.querySelectorAll(".db-option-check").forEach(el => { el.textContent = ""; });
-        commitOptions({ setValue: true, value: name });
+        if (isFileTags) commitValue(name);
+        else commitOptions({ setValue: true, value: name });
       } else {
         selected.add(name);
-        commitOptions({ setValue: true, value: Array.from(selected) });
+        if (isFileTags) commitValue(Array.from(selected));
+        else commitOptions({ setValue: true, value: Array.from(selected) });
       }
       renderOptionList();
     };
@@ -1515,9 +1593,57 @@ export class CellRenderer {
 
   private normalizeCellValueForSave(col: ColumnDef, value: unknown): unknown {
     if (value == null) return value;
+    if (col.key === "file.tags") return toValidObsidianTagValues(value);
     if (col.type === "multi-select") return toMultiSelectValuesForKey(col.key, value);
     if (col.type === "select" || col.type === "status") return normalizeOptionValueForKey(col.key, value);
     return value;
+  }
+
+  private getVaultTagOptionValues(): string[] {
+    const metadataCache = this.app?.metadataCache as unknown as MetadataCacheWithTags | undefined;
+    const tags = metadataCache?.getTags?.();
+    if (!tags) return [];
+    return Object.keys(tags)
+      .map((tag) => normalizeValidObsidianTagValue(tag))
+      .filter((tag): tag is string => Boolean(tag))
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  private getFileTagDraftOptions(col: ColumnDef, currentValues: string[]): StatusOptionDef[] {
+    const colorsByValue = new Map<string, StatusOptionDef["color"]>();
+    for (const option of col.statusOptions || []) {
+      const value = normalizeValidObsidianTagValue(option.value);
+      if (!value) continue;
+      colorsByValue.set(value, option.color || "gray");
+    }
+
+    const options: StatusOptionDef[] = [];
+    const seen = new Set<string>();
+    const add = (value: string) => {
+      const normalized = normalizeValidObsidianTagValue(value);
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      options.push({ value: normalized, color: colorsByValue.get(normalized) || "gray" });
+    };
+
+    for (const value of this.getVaultTagOptionValues()) add(value);
+    for (const value of currentValues) add(value);
+    for (const value of colorsByValue.keys()) add(value);
+    return options;
+  }
+
+  private persistFileTagColorOptions(options: StatusOptionDef[]): StatusOptionDef[] {
+    const persisted: StatusOptionDef[] = [];
+    const seen = new Set<string>();
+    for (const option of options) {
+      const value = normalizeValidObsidianTagValue(option.value);
+      if (!value || seen.has(value)) continue;
+      const color = option.color || "gray";
+      if (color === "gray") continue;
+      seen.add(value);
+      persisted.push({ value, color });
+    }
+    return persisted;
   }
 
   private editFileName(td: HTMLElement, row: RowData, currentName: string): void {
@@ -1564,6 +1690,38 @@ export class CellRenderer {
     return Number.isInteger(value)
       ? String(value)
       : value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  }
+
+  private createOptionDragPreview(item: HTMLElement, event: MouseEvent): OptionDragPreview {
+    const rect = item.getBoundingClientRect();
+    const preview = item.cloneNode(true) as HTMLElement;
+    preview.addClass("db-cell-option-drag-preview");
+    preview.addClass("db-cell-option-item");
+    preview.removeClass("is-dragging");
+    preview.setAttribute("aria-hidden", "true");
+    preview.querySelectorAll(".db-mobile-reorder-controls").forEach((el) => el.remove());
+    preview.setCssProps({
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
+    window.activeDocument.body.appendChild(preview);
+    const state: OptionDragPreview = {
+      preview,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+    };
+    this.updateOptionDragPreview(state, event);
+    return state;
+  }
+
+  private updateOptionDragPreview(state: OptionDragPreview, event: MouseEvent): void {
+    state.preview.setCssProps({
+      transform: `translate3d(${Math.round(event.clientX - state.offsetX)}px, ${Math.round(event.clientY - state.offsetY)}px, 0)`,
+    });
+  }
+
+  private removeOptionDragPreview(state: OptionDragPreview): void {
+    state.preview.remove();
   }
 
   private positionOptionPopover(

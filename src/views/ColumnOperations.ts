@@ -13,9 +13,11 @@ import {
   updateSourceRuleKeyReferences,
 } from "../data/ColumnConfig";
 import { createOptionsFromValues, isOptionColumnType } from "../data/ColumnTypes";
+import { getDefaultChartDateBucket, getDefaultChartNumberBucket, isChartAggregationValueColumn, requiresChartValueField } from "../data/ChartAggregation";
 import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
 import { getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig, StatusOptionDef, ViewConfig } from "../data/types";
+import { getFileFieldFixedType, isFileFieldKey, isSupportedFileField } from "../data/FileFields";
 import { ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
@@ -43,13 +45,14 @@ export interface ColumnOperationsDeps {
   saveCurrentViewConfig(): Promise<void>;
   scheduleConfigSave(): void;
   refresh(): void;
-  refreshSchemaChanged(): void;
+  refreshSchemaChanged(options?: { preserveViewport?: boolean }): void;
   refreshAfterSave(): Promise<void>;
   markPendingColumn(key: string): void;
   refreshColumnManager(): void;
   setPendingUndoLabel(label: string): void;
   setPendingConfigCellChanges(changes: FrontmatterValueChange[]): void;
   getDefaultStatusOptions(): StatusOptionDef[];
+  getDefaultStatusPresetId(): string | undefined;
 }
 
 export class ColumnOperations {
@@ -101,8 +104,26 @@ export class ColumnOperations {
     }
 
     const isComputed = targetCol.type === "computed";
+    const oldIsFileField = isFileFieldKey(oldKey);
+    const newIsFileField = isFileFieldKey(newKey);
+    if (newIsFileField && !isSupportedFileField(newKey)) {
+      new Notice(t("fileField.unsupportedKey", { key: newKey }));
+      return;
+    }
+    if (oldIsFileField && newKey !== oldKey) {
+      new Notice(t("fileField.fixedType"));
+      return;
+    }
+    if (isComputed && newIsFileField) {
+      new Notice(t("fileField.fixedType"));
+      return;
+    }
+    if (!oldIsFileField && newIsFileField && result.migrateValues) {
+      new Notice(t("fileField.migrationIgnored", { key: newKey }));
+    }
+    const useFrontmatterMigration = !oldIsFileField && !newIsFileField;
     const displayOnly = this.isDisplayOnlyComputedSync();
-    const renameSavedComputedProperty = isComputed && !displayOnly && oldComputedKey !== newComputedKey
+    const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
       ? await confirmWithModal(this.deps.app, {
         title: t("menu.editProperty", { name: newLabel }),
         message: t("column.confirmRenameComputedSavedProperty", { oldKey: oldComputedKey, newKey: newComputedKey }),
@@ -110,7 +131,9 @@ export class ColumnOperations {
       })
       : false;
     let migrationNotice = "";
-    const frontmatterChanges = this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey);
+    const frontmatterChanges = useFrontmatterMigration
+      ? this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey)
+      : [];
     try {
       if (renameSavedComputedProperty) {
         const migration = await this.deps.propertyService.renameKey(
@@ -121,7 +144,7 @@ export class ColumnOperations {
           true
         );
         migrationNotice = t("column.migratedFiles", { count: migration.moved });
-      } else if (!isComputed && result.migrateValues) {
+      } else if (useFrontmatterMigration && !isComputed && result.migrateValues) {
         const migration = await this.propertySync.rename(config, targetCol, oldKey, newKey, true);
         if (migration) {
           migrationNotice = t("column.migratedFiles", { count: migration.moved });
@@ -129,7 +152,7 @@ export class ColumnOperations {
             migrationNotice += t("column.cleanedOldProps", { count: migration.deletedStale });
           }
         }
-      } else if (!isComputed && oldKey !== newKey) {
+      } else if (useFrontmatterMigration && !isComputed && oldKey !== newKey) {
         await this.propertySync.delete(config, targetCol);
       }
 
@@ -157,6 +180,11 @@ export class ColumnOperations {
       targetCol.key = newKey;
       targetCol.label = newLabel;
       targetCol.wrap = result.wrap || undefined;
+      if (newIsFileField) {
+        targetCol.type = getFileFieldFixedType(newKey);
+        targetCol.statusOptions = undefined;
+        targetCol.statusPresetId = undefined;
+      }
       if (targetCol.type === "computed") {
         const computed = config.schema.computedFields.find((field) => field.key === oldComputedKey);
         if (computed) {
@@ -173,7 +201,7 @@ export class ColumnOperations {
       const obsidianPropertyType = isComputed
         ? config.schema.computedFields.find((field) => field.key === newComputedKey)?.type || "text"
         : targetCol.type;
-      await this.deps.propertyService.setObsidianPropertyType(isComputed ? newComputedKey : newKey, obsidianPropertyType);
+      if (!newIsFileField) await this.deps.propertyService.setObsidianPropertyType(isComputed ? newComputedKey : newKey, obsidianPropertyType);
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
       new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
@@ -235,6 +263,7 @@ export class ColumnOperations {
     linkDatabaseSchema(db);
     const targetCol = this.resolveColumn(config, col, col.key);
     const isComputed = targetCol.type === "computed";
+    const isFileField = isFileFieldKey(targetCol.key);
     const propertyKey = getComputedStorageKey(targetCol);
     const displayOnly = this.isDisplayOnlyComputedSync();
     if (isComputed) {
@@ -262,7 +291,7 @@ export class ColumnOperations {
         danger: true,
       })
       : false;
-    const shouldDeleteFrontmatter = !isComputed || cleanupSavedComputedProperty;
+    const shouldDeleteFrontmatter = !isFileField && (!isComputed || cleanupSavedComputedProperty);
     const frontmatterChanges = shouldDeleteFrontmatter
       ? this.getDeleteKeyChanges(config, isComputed ? propertyKey : targetCol.key)
       : [];
@@ -332,6 +361,15 @@ export class ColumnOperations {
     if (config.galleryImageField === key) config.galleryImageField = undefined;
     if (config.boardGroupField === key) config.boardGroupField = undefined;
     if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
+    if (config.chartGroupField === key) {
+      config.chartGroupField = undefined;
+      config.chartDateBucket = undefined;
+      config.chartHiddenGroups = undefined;
+    }
+    if (config.chartStackField === key) config.chartStackField = undefined;
+    if (config.chartSeriesField === key) config.chartSeriesField = undefined;
+    if (config.chartValueField === key) config.chartValueField = undefined;
+    if (config.chartSecondaryValueField === key) config.chartSecondaryValueField = undefined;
     if (config.summaryRules?.[key]) delete config.summaryRules[key];
     this.removeSourceRuleReferences(config.sourceRules, key);
     config.sourceRuleTree = removeSourceRuleTreeReferences(config.sourceRuleTree, key);
@@ -405,7 +443,7 @@ export class ColumnOperations {
 
   async duplicateColumn(col: ColumnDef): Promise<void> {
     const config = this.deps.getConfig();
-    if (!config || col.key === "file.name") return;
+    if (!config || isFileFieldKey(col.key)) return;
     ensureColumnOrder(config);
 
     const copyKey = createUniqueColumnKey(config, `${col.key}_copy`);
@@ -477,6 +515,10 @@ export class ColumnOperations {
     if (!config || col.type === type) return;
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
+    if (isFileFieldKey(target.key)) {
+      new Notice(t("fileField.fixedType"));
+      return;
+    }
     const previousType = target.type;
     const previousComputedKey = target.computedKey || target.key;
     const previousOptions = target.statusOptions?.map((option) => ({ ...option }));
@@ -507,13 +549,17 @@ export class ColumnOperations {
     if (isOptionColumnType(type)) {
       if (previousOptions?.length) {
         target.statusOptions = previousOptions;
+        target.statusPresetId = undefined;
       } else if (inferredOptions.length > 0) {
         target.statusOptions = inferredOptions;
+        target.statusPresetId = undefined;
       } else if (!target.statusOptions?.length) {
         target.statusOptions = type === "status" ? this.deps.getDefaultStatusOptions() : [];
+        target.statusPresetId = type === "status" ? this.deps.getDefaultStatusPresetId() : undefined;
       }
     } else {
       target.statusOptions = undefined;
+      target.statusPresetId = undefined;
     }
     if (type === "computed") {
       target.computedKey = target.computedKey || target.key;
@@ -532,6 +578,8 @@ export class ColumnOperations {
       }
       target.computedKey = undefined;
     }
+    this.clearInvalidChartValueReferences(this.deps.getActiveDb(), target);
+    this.updateChartDateBucketReferences(this.deps.getActiveDb(), target);
 
     try {
       const frontmatterChanges = type === "computed"
@@ -559,6 +607,32 @@ export class ColumnOperations {
     }
   }
 
+  private clearInvalidChartValueReferences(db: DatabaseConfig, col: ColumnDef): void {
+    for (const view of db.views || []) {
+      if (
+        view.chartValueField === col.key &&
+        (!requiresChartValueField(view.chartAggregation) || !isChartAggregationValueColumn(col, view.chartAggregation, db.schema.computedFields))
+      ) {
+        view.chartValueField = undefined;
+      }
+      if (
+        view.chartSecondaryValueField === col.key &&
+        (!requiresChartValueField(view.chartSecondaryAggregation) || !isChartAggregationValueColumn(col, view.chartSecondaryAggregation, db.schema.computedFields))
+      ) {
+        view.chartSecondaryValueField = undefined;
+      }
+    }
+  }
+
+  private updateChartDateBucketReferences(db: DatabaseConfig, col: ColumnDef): void {
+    for (const view of db.views || []) {
+      if (view.chartGroupField !== col.key) continue;
+      view.chartDateBucket = getDefaultChartDateBucket(db.schema.columns, col.key, db.schema.computedFields);
+      view.chartNumberBucket = getDefaultChartNumberBucket(db.schema.columns, col.key, db.schema.computedFields);
+      if (!view.chartNumberBucket) view.chartNumberBucketSize = undefined;
+    }
+  }
+
   private createTextColumn(config: ViewConfig): ColumnDef {
     return {
       key: createUniqueColumnKey(config, "new_field"),
@@ -578,7 +652,7 @@ export class ColumnOperations {
       this.deps.setPendingUndoLabel(t("undo.insertColumnConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
-      this.deps.refreshSchemaChanged();
+      this.deps.refreshSchemaChanged({ preserveViewport: true });
       await this.deps.propertyService.setObsidianPropertyType(col.key, col.type);
       const result = await this.propertySync.ensure(config, col);
       await this.deps.refreshAfterSave();

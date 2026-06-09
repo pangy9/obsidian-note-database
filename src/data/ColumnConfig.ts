@@ -139,6 +139,11 @@ export function updateColumnKeyReferences(
   config.galleryImageField = replaceValue(config.galleryImageField);
   config.boardGroupField = replaceValue(config.boardGroupField);
   config.boardSubgroupField = replaceValue(config.boardSubgroupField);
+  config.chartGroupField = replaceValue(config.chartGroupField);
+  config.chartStackField = replaceValue(config.chartStackField);
+  config.chartSeriesField = replaceValue(config.chartSeriesField);
+  config.chartValueField = replaceValue(config.chartValueField);
+  config.chartSecondaryValueField = replaceValue(config.chartSecondaryValueField);
   config.groupByField = replaceValue(config.groupByField);
   config.sortColumn = replaceValue(config.sortColumn);
   config.sortColumnOrder = replaceValue(config.sortColumnOrder);

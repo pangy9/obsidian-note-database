@@ -1,4 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
+import { isFileFieldKey } from "../../data/FileFields";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
 
@@ -32,8 +33,9 @@ export class ColumnRenameModal extends Modal {
       attr: { type: "text", style: "width: 100%; margin-top: 4px;" },
     });
     keyInput.value = this.col.key;
-    keyInput.disabled = this.col.key === "file.name";
-    keyLabel.title = t("modal.propertyKeyHint");
+    const fileField = isFileFieldKey(this.col.key);
+    keyInput.disabled = fileField;
+    keyLabel.title = fileField ? t("fileField.fixedType") : t("modal.propertyKeyHint");
 
     contentEl.createEl("label", {
       text: t("modal.displayName"),
@@ -51,27 +53,35 @@ export class ColumnRenameModal extends Modal {
     wrapCheckbox.checked = !!this.col.wrap;
     wrapRow.createSpan({ text: t("modal.wrapContent") });
 
-    const canMigrate = this.col.key !== "file.name" && this.col.type !== "computed";
-    const migrateRow = contentEl.createEl("label", {
-      attr: { style: "display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px;" },
-    });
-    const migrateCheckbox = migrateRow.createEl("input", { attr: { type: "checkbox" } });
-    migrateCheckbox.checked = !canMigrate;
-    migrateCheckbox.disabled = !canMigrate;
-    if (this.col.type === "computed") {
-      migrateCheckbox.title = t("modal.migrateComputedDisabled");
-      migrateRow.title = t("modal.migrateComputedDisabled");
+    const canMigrate = !fileField && this.col.type !== "computed";
+    let migrateCheckbox: HTMLInputElement | undefined;
+    if (!fileField) {
+      const migrateRow = contentEl.createDiv({
+        attr: { style: "display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px;" },
+      });
+      const migrateLabel = migrateRow.createEl("label", {
+        attr: { style: "display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0;" },
+      });
+      migrateCheckbox = migrateLabel.createEl("input", { attr: { type: "checkbox" } });
+      migrateCheckbox.checked = !canMigrate;
+      migrateCheckbox.disabled = !canMigrate;
+      if (this.col.type === "computed") {
+        migrateCheckbox.title = t("modal.migrateComputedDisabled");
+        migrateLabel.title = t("modal.migrateComputedDisabled");
+      }
+      migrateLabel.createSpan({ text: t("modal.migrateValues") });
+      const migrateHelpText = t("modal.migrateValuesDesc");
+      const helpIcon = migrateRow.createEl("button", {
+        cls: "db-migrate-help-icon",
+        text: "?",
+        attr: { type: "button", title: migrateHelpText, "aria-label": migrateHelpText },
+      });
+      helpIcon.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        new Notice(migrateHelpText, 8000);
+      };
     }
-    migrateRow.createSpan({ text: t("modal.migrateValues") });
-    const helpIcon = migrateRow.createSpan({
-      cls: "db-migrate-help-icon",
-      text: "?",
-      attr: { title: t("modal.migrateValuesDesc"), tabindex: "0" },
-    });
-    helpIcon.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
 
     const buttonRow = contentEl.createDiv({
       attr: { style: "display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;" },
@@ -90,7 +100,7 @@ export class ColumnRenameModal extends Modal {
         new Notice(t("modal.propertyKeyExists", { key }));
         return;
       }
-      await this.onSave({ key, label, migrateValues: migrateCheckbox.checked, wrap: wrapCheckbox.checked });
+      await this.onSave({ key, label, migrateValues: migrateCheckbox?.checked ?? false, wrap: wrapCheckbox.checked });
       this.close();
     };
   }

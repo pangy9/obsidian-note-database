@@ -1,4 +1,4 @@
-import { WorkspaceLeaf } from "obsidian";
+import { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { DataSource } from "../data/DataSource";
 import { DatabaseConfig, StatusPresetDef } from "../data/types";
 import { t } from "../i18n";
@@ -39,6 +39,21 @@ export class DatabaseFileDashboardView extends DatabaseView {
     return "database";
   }
 
+  getState(): Record<string, unknown> {
+    return {
+      ...super.getState(),
+      file: this.filePath,
+    };
+  }
+
+  async setState(state: unknown, result: ViewStateResult): Promise<void> {
+    await super.setState(state, result);
+    const nextPath = this.getStateFilePath(state);
+    if (!nextPath || nextPath === this.filePath) return;
+    this.filePath = nextPath;
+    this.openViewReference(nextPath);
+  }
+
   async onOpen(): Promise<void> {
     await super.onOpen();
     this.contentEl.addClass("note-database-file-view");
@@ -46,5 +61,11 @@ export class DatabaseFileDashboardView extends DatabaseView {
     if (this.filePath) {
       this.openViewReference(this.filePath);
     }
+  }
+
+  private getStateFilePath(state: unknown): string {
+    if (!state || typeof state !== "object" || Array.isArray(state)) return "";
+    const file = (state as { file?: unknown }).file;
+    return typeof file === "string" ? file : "";
   }
 }

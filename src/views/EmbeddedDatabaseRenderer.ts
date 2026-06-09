@@ -4,7 +4,7 @@ import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { ensureColumnOrder, getColumnsInOrder, getVisibleColumns } from "../data/ColumnConfig";
 import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
-import { ColumnDef, DatabaseConfig, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
+import { ColumnDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
 import { ComputedFieldEngine } from "../data/ComputedField";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import {
@@ -32,6 +32,9 @@ import { SortPanelRenderer } from "./SortPanelRenderer";
 import { SummaryRenderer } from "./SummaryRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
+import { ChartRenderer } from "./ChartRenderer";
+import { ChartToolbarRenderer } from "./ChartToolbarRenderer";
+import { getDefaultChartDateBucket, getDefaultChartField, getDefaultChartNumberBucket } from "../data/ChartAggregation";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
 import { isHTMLElement } from "./DomGuards";
@@ -45,9 +48,13 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey } from "../data/ColumnDisplay";
 import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
-import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { getRowFileFieldValue, isFileFieldKey } from "../data/FileFields";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
+
+function filtersEqual(left: FilterRule, right: FilterRule): boolean {
+  return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "");
+}
 
 export interface EmbeddedDatabaseEntry {
   config: DatabaseConfig;
@@ -74,6 +81,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private boardRenderer: BoardRenderer;
   private galleryRenderer: GalleryRenderer;
   private listRenderer: ListRenderer;
+  private chartRenderer = new ChartRenderer();
+  private chartToolbarRenderer = new ChartToolbarRenderer();
   private toolbarRenderer = new ToolbarRenderer();
   private filterPanelRenderer = new FilterPanelRenderer();
   private columnManagerRenderer = new ColumnManagerRenderer();
@@ -110,6 +119,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private unsubscribe?: () => void;
   private unsubscribeViewConfig?: () => void;
   private configHistoryStack: DatabaseConfig[] = [];
+  private headerChromeHiddenOverride: boolean | null = null;
 
   constructor(
     private app: App,
@@ -242,11 +252,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     window.activeDocument.addEventListener("mouseup", this.handleMouseUpBound);
     window.addEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.addEventListener("keydown", this.handleEmbedKeydownBound);
+    this.registerEvent(this.app.workspace.on("css-change", () => this.chartRenderer.refreshTheme()));
     this.observeVisibility();
     this.render();
   }
 
   onunload(): void {
+    this.chartRenderer.destroy();
+    this.chartToolbarRenderer.closePopover();
     this.clearComputedSyncTimer();
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
@@ -295,13 +308,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private render(scroll?: { top: number; left: number }): void {
     const pos = scroll ?? this.saveScroll();
+    const descriptionScroll = this.saveDescriptionScroll();
     this.containerEl.empty();
+    this.containerEl.toggleClass("note-database-embed-headerless", this.shouldHideHeaderChrome());
     const config = this.getEmbeddedConfig();
     if (!config) {
       this.containerEl.createDiv({ cls: "db-empty", text: t("errors.databaseViewNotFound") });
       return;
     }
     this.renderToolbar(config);
+    this.renderHeaderChromeToggle(config);
     this.renderFilterPanel(config);
     this.renderSortPanel(config);
     this.renderColumnManager(config);
@@ -309,6 +325,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.renderResults(config);
     this.updateStickyOffsets();
     this.restoreScroll(pos);
+    this.restoreDescriptionScroll(descriptionScroll);
   }
 
   private saveScroll(): { top: number; left: number } {
@@ -318,6 +335,20 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private restoreScroll(pos: { top: number; left: number }): void {
     this.containerEl.scrollTop = pos.top;
     this.containerEl.scrollLeft = pos.left;
+  }
+
+  private saveDescriptionScroll(): number {
+    return this.containerEl.querySelector<HTMLElement>(":scope > .db-header .db-description")?.scrollTop || 0;
+  }
+
+  private restoreDescriptionScroll(scrollTop: number): void {
+    if (scrollTop <= 0) return;
+    const restore = () => {
+      const desc = this.containerEl.querySelector<HTMLElement>(":scope > .db-header .db-description");
+      if (desc) desc.scrollTop = scrollTop;
+    };
+    restore();
+    window.requestAnimationFrame(restore);
   }
 
   private handleDataChanged(): void {
@@ -354,7 +385,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       this.closePopovers();
       return;
     }
-    if (target.closest(".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-toolbar, .db-header")) return;
+    if (target.closest(".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-dropdown-popover, .db-toolbar, .db-header")) return;
     this.closePopovers();
   }
 
@@ -363,12 +394,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return !target.closest(
       "td[data-note-database-row-path][data-note-database-column-key], " +
       ".db-selection-status-bar, .db-cell-editing, input, textarea, select, button, a, " +
-      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-group-order-popover, .menu"
+      ".db-filter-panel, .db-sort-panel, .db-column-manager, .db-view-config-panel, .db-dropdown-popover, .db-group-order-popover, .menu"
     );
   }
 
   private closePopovers(): void {
     this.toolbarRenderer.closePopovers();
+    this.chartToolbarRenderer.closePopover();
     this.closeGroupOrderPopover();
     if (!this.config) return;
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
@@ -448,7 +480,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.updateFileViewWidthClass(config);
     this.applyViewTypeClass(config.viewType || "table");
     const target = this.containerEl;
-    target.querySelectorAll(".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-empty").forEach((el) => el.remove());
+    const staleViewSelector = config.viewType === "chart"
+      ? ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-empty"
+      : ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-chart, .db-chart-empty, .db-chart-number, .db-empty";
+    target.querySelectorAll(staleViewSelector).forEach((el) => el.remove());
     if (!config.schema.columns || config.schema.columns.length === 0) {
       target.createDiv({ cls: "db-empty", text: t("errors.noColumns") });
       return;
@@ -461,9 +496,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       return;
     }
 
-    this.rows = this.rowPipeline.build(records, this.withBaseThisContext(config), this.vs(config), this.app);
+    const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
+    this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(config), this.app);
     this.scheduleComputedSync(config, this.rows);
-    this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig);
+    if (config.viewType !== "chart") {
+      this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig, {
+        onChange: () => {
+          this.persistEmbeddedConfigLocally(config);
+          this.renderResults(config);
+          this.saveEmbeddedConfigInBackground();
+        },
+      });
+    }
     const renderConfig = this.getStatefulConfig(config);
     if (config.viewType === "board") {
       const field = config.boardGroupField || this.vs(config).groupByField || this.getDefaultBoardField(config);
@@ -486,6 +530,15 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       } else {
         this.listRenderer.render(target, renderConfig, this.rows);
       }
+    } else if (config.viewType === "chart") {
+      this.chartRenderer.render(target, renderConfig, this.rows, config.schema.columns, {
+        onFilter: (rules) => this.applyChartFilters(config, rules),
+        onConfigChange: () => {
+          this.persistEmbeddedConfigLocally(config);
+          this.renderChartOnly(config);
+          this.saveEmbeddedConfigInBackground();
+        },
+      });
     } else if (this.vs(config).groupByField) {
       const field = this.vs(config).groupByField;
       const groups = this.queryEngine.groupBy(this.rows, field);
@@ -494,11 +547,21 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     } else {
       this.tableRenderer.renderTable(target, renderConfig, this.rows);
     }
+    if (config.viewType === "chart") {
+      this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig, {
+        placement: "after-chart",
+        onChange: () => {
+          this.persistEmbeddedConfigLocally(config);
+          this.renderResults(config);
+          this.saveEmbeddedConfigInBackground();
+        },
+      });
+    }
     this.restoreScroll(scroll);
   }
 
   private applyViewTypeClass(viewType: NonNullable<ViewConfig["viewType"]>): void {
-    for (const type of ["table", "board", "gallery", "list"] as const) {
+    for (const type of ["table", "board", "gallery", "list", "chart"] as const) {
       this.containerEl.toggleClass(`db-view-${type}`, viewType === type);
     }
   }
@@ -516,6 +579,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
         if (!this.currentDbConfig || viewIndex === this.currentViewIndex) return;
+        const descriptionScroll = this.saveDescriptionScroll();
         this.closePopovers();
         this.currentViewIndex = viewIndex;
         this.viewIndexOverride = viewIndex;
@@ -524,6 +588,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         const newConfig = this.getEmbeddedConfig()!;
         this.rerenderToolbar(newConfig);
         this.renderResults(newConfig);
+        this.restoreDescriptionScroll(descriptionScroll);
         this.persistEmbeddedConfigLocally(newConfig);
         this.saveEmbeddedConfigInBackground();
         this.saveCodeBlockReferenceInBackground(newConfig);
@@ -544,6 +609,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         new Notice(t("notice.editInFullView", { action: t("toolbar.rename") }));
       },
       setViewType: (value) => {
+        const descriptionScroll = this.saveDescriptionScroll();
         this.setEmbeddedViewType(config, value);
         if (value === "gallery") {
           config.galleryImageField = config.galleryImageField || this.getDefaultGalleryImageField(config);
@@ -551,9 +617,17 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           config.galleryImageAspectRatio = config.galleryImageAspectRatio || 0.75;
           config.galleryImageFit = config.galleryImageFit || "cover";
         }
+        if (value === "chart") {
+          config.chartType = config.chartType || "bar";
+          config.chartAggregation = config.chartAggregation || "count";
+          if (!config.chartGroupField) config.chartGroupField = getDefaultChartField(config.schema.columns, config.schema.computedFields);
+          config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+          config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+        }
         this.persistEmbeddedConfigLocally(config);
         this.rerenderToolbar(config);
         this.renderResults(config);
+        this.restoreDescriptionScroll(descriptionScroll);
         this.saveEmbeddedConfigInBackground();
       },
       setDisplayWidth: (value) => {
@@ -584,6 +658,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       configureGroupOrder: () => this.showGroupOrderPopover(config),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(config, mode),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover(config, "sort", anchorEl),
+      toggleChartOptions: (anchorEl) => this.toggleChartOptions(config, anchorEl),
       syncComputedFields: this.persistMode === "codeblock"
         ? undefined
         : () => { this.syncComputedFieldsInBackground(config, this.rows, true, true); },
@@ -592,11 +667,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover(config, "view", anchorEl),
       closeToolbarPopovers: () => this.closePopovers(),
       openFullView: () => { void this.openFullDatabaseView(config); },
+      toggleHeaderChrome: (hidden) => this.toggleHeaderChrome(config, hidden),
       copyViewCode: () => { void this.copyEmbeddedViewCode(config); },
       exportData: (format) => this.exportData(config, format),
       exportCsvMarkdownZip: () => { void this.exportCsvMarkdownZip(); },
       createEntry: (defaults) => { if (this.persistMode !== "codeblock") void this.createBlankEntry(defaults); },
       isReadOnly: this.persistMode === "codeblock",
+      showChartOptions: this.persistMode !== "codeblock",
       addDatabase: () => {},
       deleteDatabase: () => {},
       openDatabaseFile: () => {},
@@ -604,26 +681,60 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       hideWidthSelect: true,
       showDatabaseChrome: this.persistMode === "frontmatter",
       hideDatabaseActions: this.persistMode === "frontmatter",
+      hideHeaderChrome: this.shouldHideHeaderChrome(),
     });
     this.updateStickyOffsets();
+  }
+
+  private renderHeaderChromeToggle(config: ViewConfig): void {
+    this.containerEl.querySelector(":scope > .db-embed-header-toggle")?.remove();
+    if (this.persistMode !== "codeblock") return;
+    const hidden = this.shouldHideHeaderChrome();
+    const label = hidden ? t("toolbar.showEmbedHeader") : t("toolbar.hideEmbedHeader");
+    const button = this.containerEl.createEl("button", {
+      cls: `db-toolbar-icon-button db-embed-header-toggle${hidden ? " is-header-hidden" : ""}`,
+      attr: {
+        type: "button",
+        title: label,
+        "aria-label": label,
+      },
+    });
+    setIcon(button, hidden ? "chevron-down" : "chevron-up");
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggleHeaderChrome(config, !hidden);
+    };
+    const header = this.containerEl.querySelector(":scope > .db-header");
+    if (header) this.containerEl.insertBefore(button, header);
+  }
+
+  private toggleHeaderChrome(config: ViewConfig, hidden: boolean): void {
+    this.headerChromeHiddenOverride = hidden;
+    this.containerEl.toggleClass("note-database-embed-headerless", hidden);
+    this.render();
+    this.saveCodeBlockReferenceInBackground(config);
   }
 
   private rerenderToolbar(config: ViewConfig): void {
     this.containerEl.querySelector(":scope > .db-header")?.remove();
     this.renderToolbar(config);
+    this.renderHeaderChromeToggle(config);
   }
 
   private updateStickyOffsets(): void {
     const update = () => {
-      const header = this.containerEl.querySelector(":scope > .db-header");
+      const hideHeader = this.shouldHideHeaderChrome();
+      const header = hideHeader ? null : this.containerEl.querySelector(":scope > .db-header");
       const height = header ? Math.ceil(header.getBoundingClientRect().height) : 88;
-      this.containerEl.style.setProperty("--db-table-header-top", `${height}px`);
+      this.containerEl.style.setProperty("--db-table-header-top", `${hideHeader ? 0 : height}px`);
     };
     update();
     window.requestAnimationFrame(update);
   }
 
   private toggleHeaderPopover(config: ViewConfig, kind: HeaderPopoverKind, anchorEl: HTMLElement): void {
+    this.chartToolbarRenderer.closePopover();
     const wasClosingActivePopover = this.activeHeaderPopover != null && this.isHeaderPopoverVisible(this.activeHeaderPopover);
     if (wasClosingActivePopover) this.persistVisibleHeaderPopoverState(config);
     const shouldOpen = this.activeHeaderPopover !== kind || !this.isHeaderPopoverVisible(kind);
@@ -842,6 +953,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           config.galleryImageAspectRatio = config.galleryImageAspectRatio || 0.75;
           config.galleryImageFit = config.galleryImageFit || "cover";
         }
+        if (value === "chart") {
+          config.chartType = config.chartType || "bar";
+          config.chartAggregation = config.chartAggregation || "count";
+          if (!config.chartGroupField) config.chartGroupField = getDefaultChartField(config.schema.columns, config.schema.computedFields);
+          config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+          config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+        }
         this.persistEmbeddedConfigLocally(config);
         this.render();
         this.saveEmbeddedConfigInBackground();
@@ -854,7 +972,61 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }, this.getHeaderPopoverAnchor("view"));
   }
 
+  private applyChartFilters(config: ViewConfig, rules: FilterRule[]): void {
+    if (rules.length === 0) return;
+    const state = this.vs(config);
+    let changed = false;
+    for (const rule of rules) {
+      if (state.filters.some((existing) => filtersEqual(existing, rule))) continue;
+      state.filters.push(rule);
+      changed = true;
+    }
+    if (!changed) return;
+    state.filterLogic = "and";
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private toggleChartOptions(config: ViewConfig, anchorEl: HTMLElement): void {
+    if (config.viewType !== "chart" || this.persistMode === "codeblock") return;
+    if (this.chartToolbarRenderer.isPopoverOpen()) {
+      this.chartToolbarRenderer.closePopover();
+      return;
+    }
+    this.closePopovers();
+    const activeAnchor = this.containerEl.querySelector<HTMLElement>(".db-chart-options-toolbar-btn") || anchorEl;
+    this.chartToolbarRenderer.togglePopover(this.containerEl, activeAnchor, config, {
+      onChange: () => {
+        this.persistEmbeddedConfigLocally(config);
+        this.renderChartOnly(config);
+        this.saveEmbeddedConfigInBackground();
+      },
+      onExportImage: () => this.chartRenderer.exportPng(this.getChartExportFilename(config)),
+      onCopyPng: () => { void this.chartRenderer.copyPng(); },
+    });
+  }
+
+  private getChartExportFilename(config: ViewConfig): string {
+    const dbName = this.currentDbConfig?.name || "database";
+    return `${dbName}-${config.name || "chart"}`.replace(/[\\/:*?"<>|]+/g, "-");
+  }
+
+  private renderChartOnly(config: ViewConfig): void {
+    if (config.viewType !== "chart") return;
+    const renderConfig = this.getStatefulConfig(config);
+    this.chartRenderer.render(this.containerEl, renderConfig, this.rows, config.schema.columns, {
+      onFilter: (rules) => this.applyChartFilters(config, rules),
+      onConfigChange: () => {
+        this.persistEmbeddedConfigLocally(config);
+        this.renderChartOnly(config);
+        this.saveEmbeddedConfigInBackground();
+      },
+    });
+  }
+
   private setEmbeddedViewType(config: ViewConfig, value: NonNullable<ViewConfig["viewType"]>): void {
+    if (config.viewType === "chart" && value !== "chart") this.chartRenderer.destroy();
     this.stateStore.persist(config, this.vs(config));
     config.viewType = value;
     this.stateStore.delete(0, this.currentViewIndex);
@@ -944,6 +1116,23 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       dbPath: options.dbPath || options.databasePath,
       viewId: options.viewId,
     };
+  }
+
+  private shouldHideHeaderChrome(): boolean {
+    if (this.persistMode !== "codeblock") return false;
+    if (this.headerChromeHiddenOverride != null) return this.headerChromeHiddenOverride;
+    const options = this.parseEmbeddedOptions();
+    return this.isTrueOption(options.hideHeader) ||
+      this.isTrueOption(options.hideToolbar) ||
+      this.isFalseOption(options.header);
+  }
+
+  private isTrueOption(value: string | undefined): boolean {
+    return /^(true|yes|1)$/i.test(value || "");
+  }
+
+  private isFalseOption(value: string | undefined): boolean {
+    return /^(false|no|0)$/i.test(value || "");
   }
 
   private getDatabaseEntries(): EmbeddedDatabaseEntry[] {
@@ -1080,7 +1269,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
     if (col.key === "file.name") return this.getFileDisplayName(row);
-    const value = isBaseFileField(col.key)
+    const value = isFileFieldKey(col.key)
       ? getRowFileFieldValue(row, col.key)
       : col.type === "computed" && col.computedKey
         ? row.computed[col.computedKey]
@@ -1906,6 +2095,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       lines.push(`dbId: ${this.currentDbConfig.id}`);
     }
     if (config.id) lines.push(`viewId: ${config.id}`);
+    if (this.shouldHideHeaderChrome()) lines.push("hideHeader: true");
     return lines.join("\n");
   }
 
@@ -1937,7 +2127,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
 
     const getCellValue = (row: RowData, col: ColumnDef): string => {
-      const value = isBaseFileField(col.key)
+      const value = isFileFieldKey(col.key)
         ? getRowFileFieldValue(row, col.key)
         : col.type === "computed" && col.computedKey
           ? row.computed[col.computedKey]
@@ -1984,7 +2174,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const options = await new CsvMarkdownExportModal(this.app).openAndWait();
     if (!options) return;
     const getExportCellValue = (row: RowData, col: ColumnDef): string => {
-      const value = isBaseFileField(col.key)
+      const value = isFileFieldKey(col.key)
         ? getRowFileFieldValue(row, col.key)
         : col.type === "computed" && col.computedKey
           ? row.computed[col.computedKey]
@@ -2071,6 +2261,23 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.galleryImageAspectRatio = this.config.galleryImageAspectRatio;
     origView.galleryCardSize = this.config.galleryCardSize;
     origView.galleryImageFit = this.config.galleryImageFit;
+    origView.chartType = this.config.chartType;
+    origView.chartGroupField = this.config.chartGroupField;
+    origView.chartDateBucket = this.config.chartDateBucket;
+    origView.chartNumberBucket = this.config.chartNumberBucket;
+    origView.chartNumberBucketSize = this.config.chartNumberBucketSize;
+    origView.chartStackField = this.config.chartStackField;
+    origView.chartSeriesField = this.config.chartSeriesField;
+    origView.chartAggregation = this.config.chartAggregation;
+    origView.chartValueField = this.config.chartValueField;
+    origView.chartSecondaryAggregation = this.config.chartSecondaryAggregation;
+    origView.chartSecondaryValueField = this.config.chartSecondaryValueField;
+    origView.chartColorPalette = this.config.chartColorPalette;
+    origView.chartColorByValue = this.config.chartColorByValue;
+    origView.chartValueAxisRange = this.config.chartValueAxisRange;
+    origView.chartValueAxisMin = this.config.chartValueAxisMin;
+    origView.chartValueAxisMax = this.config.chartValueAxisMax;
+    origView.chartReferenceLines = this.config.chartReferenceLines;
     origView.showEmptyFields = this.config.showEmptyFields;
     origView.columnOrder = this.config.columnOrder;
     origView.columnWidths = this.config.columnWidths;

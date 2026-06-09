@@ -1,4 +1,4 @@
-import { Menu, setIcon } from "obsidian";
+import { setIcon } from "obsidian";
 import { ColumnDef, DatabaseConfig, DatabaseViewType, GroupOrderMode, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
@@ -7,6 +7,7 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
+import { openDropdownMenu } from "./DropdownField";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -46,11 +47,13 @@ export interface ToolbarActions {
   toggleViewConfig(anchorEl: HTMLElement): void;
   configureGroupOrder(): void;
   toggleSortPanel(anchorEl: HTMLElement): void;
+  toggleChartOptions?(anchorEl: HTMLElement): void;
   syncComputedFields?(): void;
   toggleFilterPanel(anchorEl: HTMLElement): void;
   toggleColumnManager(anchorEl: HTMLElement): void;
   closeToolbarPopovers?(): void;
   openFullView?(): void;
+  toggleHeaderChrome?(hidden: boolean): void;
   createEntry(defaults?: Record<string, unknown>): void;
   readonly isReadOnly?: boolean;
   readonly isReadOnlyViews?: boolean;
@@ -58,6 +61,9 @@ export interface ToolbarActions {
   /** When true, show database selector and view tabs (standalone view) */
   readonly showDatabaseChrome?: boolean;
   readonly hideDatabaseActions?: boolean;
+  /** When true, render only the database content and skip title, tabs, and toolbar chrome. */
+  readonly hideHeaderChrome?: boolean;
+  readonly showChartOptions?: boolean;
 }
 
 export class ToolbarRenderer {
@@ -79,6 +85,7 @@ export class ToolbarRenderer {
   private removeExportPopoverListener?: () => void;
   private titleActionsPopover?: HTMLElement;
   private removeTitleActionsPopoverListener?: () => void;
+  private descriptionScrollTimers = new WeakMap<HTMLElement, number>();
 
   render(
     containerEl: HTMLElement,
@@ -97,6 +104,9 @@ export class ToolbarRenderer {
     const currentDb = currentEntry?.config;
     const currentView = currentDb?.views[currentViewIndex] || currentDb?.views[0];
     const phoneLayout = this.isPhoneLayout();
+    const isChartView = currentView?.viewType === "chart";
+
+    if (actions.hideHeaderChrome) return;
 
     const header = containerEl.createDiv({ cls: "db-header" });
     containerEl.insertBefore(header, containerEl.firstChild);
@@ -156,6 +166,7 @@ export class ToolbarRenderer {
             "data-placeholder": placeholder,
           },
         });
+        this.attachDescriptionScrollState(descEl);
         if (actions.updateDatabaseDescription) {
           descEl.ondblclick = (event) => this.startDatabaseTextEdit(event, descEl, description, true, (value) => actions.updateDatabaseDescription?.(value));
         }
@@ -173,13 +184,16 @@ export class ToolbarRenderer {
 
       const titleActions = titleRow.createDiv({ cls: "db-title-actions" });
       this.renderFullViewButton(titleActions, actions);
-      if (!actions.isReadOnly) this.renderNewButton(titleActions, actions);
+      if (actions.toggleHeaderChrome && phoneLayout) this.renderHeaderChromeButton(titleActions, actions, false);
+      if (!actions.isReadOnly && !isChartView) this.renderNewButton(titleActions, actions);
       if (currentDb?.description) {
         header.createDiv({
           cls: "db-description db-description-embed",
           text: currentDb.description,
           attr: { title: currentDb.description },
         });
+        const descEl = header.querySelector<HTMLElement>(".db-description-embed");
+        if (descEl) this.attachDescriptionScrollState(descEl);
       }
     }
 
@@ -198,17 +212,20 @@ export class ToolbarRenderer {
 
     if (!actions.hideWidthSelect) this.renderWidthSelect(right, currentEntry, currentView, actions);
     this.renderFilterButton(right, state, actions);
-    this.renderSortButton(right, state, actions);
+    if (!isChartView) this.renderSortButton(right, state, actions);
     this.renderViewConfigButton(right, actions);
-    this.renderGroupSelect(right, currentView, state, actions);
-    this.renderColumnButton(right, currentView, state, actions);
+    if (!isChartView) {
+      this.renderGroupSelect(right, currentView, state, actions);
+      this.renderColumnButton(right, currentView, state, actions);
+    }
     if (!actions.isReadOnly && normalizeComputedSyncMode(currentDb?.computedSyncMode) === "manual") {
       this.renderComputedSyncButton(right, actions);
     }
     this.renderExportButton(right, actions);
-    if (actions.showDatabaseChrome && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
+    if (actions.showDatabaseChrome && !actions.hideDatabaseActions && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
+    if (isChartView && actions.toggleChartOptions && actions.showChartOptions === true) this.renderChartOptionsButton(right, actions);
     if (!phoneLayout) this.renderSearch(right, state, actions);
-    if (!actions.isReadOnly) this.renderNewButton(right, actions);
+    if (!actions.isReadOnly && !isChartView) this.renderNewButton(right, actions);
   }
 
   private isPhoneLayout(): boolean {
@@ -622,16 +639,21 @@ export class ToolbarRenderer {
     });
     moreBtn.createSpan({ text: "⋯" });
     moreBtn.onclick = (e: MouseEvent) => {
-      const menu = new Menu();
-      for (const hidden of hiddenTabs) {
-        const view = db.views[hidden.index];
-        menu.addItem((item) => {
-          item.setTitle(view.name || t("common.untitled"));
-          if (hidden.index === currentViewIndex) item.setIcon("check");
-          item.onClick(() => actions.selectViewInView(0, hidden.index));
-        });
-      }
-      menu.showAtMouseEvent(e);
+      openDropdownMenu({
+        anchor: moreBtn,
+        label: t("toolbar.moreViews"),
+        value: String(currentViewIndex),
+        popoverClassName: "db-view-tabs-dropdown-popover",
+        options: hiddenTabs.map((hidden) => {
+          const view = db.views[hidden.index];
+          return {
+            value: String(hidden.index),
+            text: view.name || t("common.untitled"),
+            icon: this.getViewTypeIcon(view.viewType || "table"),
+          };
+        }),
+        onChange: (value) => actions.selectViewInView(0, Number(value)),
+      });
     };
   }
 
@@ -742,6 +764,7 @@ export class ToolbarRenderer {
     this.renderViewTabPopoverRow(panel, t("common.boardView"), this.getViewTypeIcon("board"), () => actions.addView("board"));
     this.renderViewTabPopoverRow(panel, t("common.galleryView"), this.getViewTypeIcon("gallery"), () => actions.addView("gallery"));
     this.renderViewTabPopoverRow(panel, t("common.listView"), this.getViewTypeIcon("list"), () => actions.addView("list"));
+    this.renderViewTabPopoverRow(panel, t("common.chartView"), this.getViewTypeIcon("chart"), () => actions.addView("chart"));
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (outsideEvent: MouseEvent) => {
       const target = outsideEvent.target as Node | null;
@@ -761,6 +784,7 @@ export class ToolbarRenderer {
     if (viewType === "board") return "layout-grid";
     if (viewType === "gallery") return "image";
     if (viewType === "list") return "list";
+    if (viewType === "chart") return "bar-chart";
     return "table";
   }
 
@@ -863,7 +887,15 @@ export class ToolbarRenderer {
     searchInput.value = state.searchText;
     button.onclick = () => {
       wrap.addClass("is-active");
-      window.requestAnimationFrame(() => searchInput.focus());
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          searchInput.focus();
+          searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+        });
+      });
+    };
+    button.onmousedown = (event) => {
+      event.preventDefault();
     };
     searchInput.addEventListener("focus", () => wrap.addClass("is-active"));
     searchInput.addEventListener("input", () => {
@@ -872,6 +904,19 @@ export class ToolbarRenderer {
     });
     searchInput.addEventListener("blur", () => {
       if (!searchInput.value) wrap.removeClass("is-active");
+    });
+  }
+
+  private attachDescriptionScrollState(descEl: HTMLElement): void {
+    descEl.addEventListener("scroll", () => {
+      descEl.addClass("is-scrolling");
+      const existing = this.descriptionScrollTimers.get(descEl);
+      if (existing != null) window.clearTimeout(existing);
+      const timer = window.setTimeout(() => {
+        descEl.removeClass("is-scrolling");
+        this.descriptionScrollTimers.delete(descEl);
+      }, 900);
+      this.descriptionScrollTimers.set(descEl, timer);
     });
   }
 
@@ -1135,6 +1180,21 @@ export class ToolbarRenderer {
     };
   }
 
+  private renderChartOptionsButton(toolbar: HTMLElement, actions: ToolbarActions): void {
+    const btn = this.createIconButton(toolbar, "", t("chart.options"), "db-chart-options-toolbar-btn");
+    appendSvg(btn, ToolbarRenderer.ICONS.chartSettings);
+    btn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeDatabasePopover();
+      this.closeGroupPopover();
+      this.closeViewTabPopover();
+      this.closeExportPopover();
+      this.closeTitleActionsPopover();
+      actions.toggleChartOptions?.(btn);
+    };
+  }
+
   private getSortRuleCount(state: DatabaseViewState): number {
     return state.sortRules.filter((rule) => rule.field && rule.direction).length ||
     (state.sortColumn ? 1 : 0);
@@ -1242,6 +1302,12 @@ export class ToolbarRenderer {
     fullBtn.onclick = () => actions.openFullView?.();
   }
 
+  private renderHeaderChromeButton(toolbar: HTMLElement, actions: ToolbarActions, hidden: boolean): void {
+    const label = hidden ? t("toolbar.showEmbedHeader") : t("toolbar.hideEmbedHeader");
+    const btn = this.createIconButton(toolbar, hidden ? "chevron-down" : "chevron-up", label, "db-embed-header-inline-toggle");
+    btn.onclick = () => actions.toggleHeaderChrome?.(!hidden);
+  }
+
   private renderDatabaseFileButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     const btn = toolbar.createEl("button", {
       cls: "db-toolbar-icon-button",
@@ -1295,6 +1361,7 @@ export class ToolbarRenderer {
     csv: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-table"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/><path d="M9 5v14"/><path d="M15 5v14"/></svg>`,
     markdown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-markdown"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15v-6l3 4l3-4v6"/><path d="M16 9v6"/><path d="M14 13l2 2l2-2"/></svg>`,
     settings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-settings-cog"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" /></svg>',
+    chartSettings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="icon icon-tabler icons-tabler-filled icon-tabler-chart-settings"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 3h14a2 2 0 0 1 2 2v9.25a5.5 5.5 0 0 0 -2 -1.14v-8.11h-14v14h8.11a5.5 5.5 0 0 0 1.14 2h-9.25a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2" /><path d="M8 14a1 1 0 0 1 1 1v1a1 1 0 0 1 -2 0v-1a1 1 0 0 1 1 -1" /><path d="M12 10a1 1 0 0 1 1 1v5a1 1 0 0 1 -2 0v-5a1 1 0 0 1 1 -1" /><path d="M16 7a1 1 0 0 1 1 1v4.1a5.5 5.5 0 0 0 -2 .9v-5a1 1 0 0 1 1 -1" /><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" /></g></svg>',
     group: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-group-fields"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 6v12" /><path d="M5 9h3" /><path d="M5 15h3" /><rect x="9" y="5" width="10" height="5" rx="1.5" /><rect x="9" y="14" width="10" height="5" rx="1.5" /></svg>',
     refresh_fx: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-recalculate-badge"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7a7 7 0 1 0 2 5"/><path d="M15 4v4h-4"/><g transform="translate(12 10)"><g transform="scale(0.6)" stroke-width="4"><path d="M6.5 5.5h10.5l-5.5 6.5l5.5 6.5h-10.5"/></g></g></svg>',
   };

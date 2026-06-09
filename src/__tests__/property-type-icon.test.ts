@@ -103,3 +103,28 @@ describe("computed checkbox cells", () => {
     expect(source).not.toContain("checkbox.style.pointerEvents");
   });
 });
+
+describe("base import property type icons", () => {
+  it("keeps type changes on the local SVG renderer instead of Obsidian setIcon", () => {
+    const source = readFileSync(new URL("../views/modals/BaseImportConfirmModal.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("renderPropertyTypeIcon");
+    expect(source).not.toContain("setIcon");
+  });
+
+  it("explains that file.name is added automatically", () => {
+    const source = readFileSync(new URL("../i18n.ts", import.meta.url), "utf8");
+
+    expect(source.match(/"baseImport\.desc": "[^"]*file\.name[^"]*"/g)?.length).toBe(3);
+  });
+});
+
+describe("column rename migration help", () => {
+  it("renders the help marker as an accessible button with an explicit popup action", () => {
+    const source = readFileSync(new URL("../views/modals/ColumnRenameModal.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('createEl("button"');
+    expect(source).toContain('"aria-label": migrateHelpText');
+    expect(source).toContain("new Notice(migrateHelpText");
+  });
+});

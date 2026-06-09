@@ -1,14 +1,15 @@
 import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
-import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
-import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
+import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
+import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 
 const CARD_MIME = "application/x-note-database-card";
 const CARD_FROM_GROUP_MIME = "application/x-note-database-card-from-group";
@@ -30,7 +31,7 @@ export interface BoardSubgroup {
 
 export interface BoardRendererActions {
   openRow(row: RowData): void;
-  createEntry(defaults?: Record<string, unknown>): void;
+  createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   updateGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void>;
   updateGroupOrder(field: string, order: string[]): void;
   updateCardOrder(field: string, groupKey: string, paths: string[]): void;
@@ -196,7 +197,7 @@ export class BoardRenderer {
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
-        () => this.actions.createEntry({ [groupField]: group.key || "" });
+        () => this.createEntryNearEnd({ [groupField]: group.key || "" }, group.rows);
     }
   }
 
@@ -240,7 +241,7 @@ export class BoardRenderer {
     }
     if (!this.actions.isReadOnly) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
-        () => this.actions.createEntry({ [groupField]: group.key || "", [subgroupField]: subgroup.key || "" });
+        () => this.createEntryNearEnd({ [groupField]: group.key || "", [subgroupField]: subgroup.key || "" }, subgroup.rows);
     }
   }
 
@@ -275,6 +276,15 @@ export class BoardRenderer {
       void this.moveCardAndOrder(row, groupField, group.key, fromGroup, path, this.getContainerDropOrder(group, path, subgroupField, subgroup), subgroupField, subgroup?.key, fromSubgroup);
     });
     return cards;
+  }
+
+  private createEntryNearEnd(defaults: Record<string, unknown> | undefined, rows: RowData[]): void {
+    this.actions.createEntry(defaults, this.getCreatePosition(rows));
+  }
+
+  private getCreatePosition(rows: RowData[]): CreateEntryPosition | undefined {
+    const last = rows[rows.length - 1];
+    return last ? { afterPath: last.file.path } : undefined;
   }
 
   private renderCard(
@@ -692,7 +702,7 @@ export class BoardRenderer {
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
-    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
+    if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
@@ -716,7 +726,7 @@ export class BoardRenderer {
     const valueEl = item.createDiv({ cls: "db-board-card-value" });
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     item.addEventListener("click", (event) => {
-      if (this.actions.isReadOnly) return;
+      if (this.actions.isReadOnly || isReadonlyFileField(col.key)) return;
       if (isHTMLElement(event.target) && event.target.closest("a, button, input, textarea, .db-cell-editing")) return;
       event.stopPropagation();
       this.actions.editCell(valueEl, row, col, event);
@@ -743,6 +753,13 @@ export class BoardRenderer {
         }
       }
       setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
+      return;
+    }
+    if (shouldRenderSpecialFileField(col) && renderSpecialFileFieldValue(valueEl, this.app, row, col, value, {
+      tagsContainerClass: "db-board-card-badges",
+      linkItemClass: "db-board-card-link",
+    })) {
+      valueEl.addClass("has-badges");
       return;
     }
     if (col.type === "select" || col.type === "status") {
@@ -870,6 +887,7 @@ export class BoardRenderer {
   }
 
   private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
+    if (isFileFieldKey(col.key)) return getFileFieldFixedType(col.key);
     return getColumnDisplayType(col, config.schema.computedFields);
   }
 

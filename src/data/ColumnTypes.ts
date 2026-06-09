@@ -173,6 +173,56 @@ export function normalizeObsidianTagValue(value: unknown): string {
   return stringifyValue(value).trim().replace(/^#/, "");
 }
 
+export interface ObsidianTagValidationResult {
+  valid: boolean;
+  value: string;
+}
+
+export function validateObsidianTagValue(value: unknown): ObsidianTagValidationResult {
+  const tag = normalizeObsidianTagValue(value);
+  if (!tag) return { valid: false, value: tag };
+  if (/\s/.test(tag)) return { valid: false, value: tag };
+  if (/^\d+$/.test(tag)) return { valid: false, value: tag };
+  if (!/^[\p{L}\p{N}_\-/]+$/u.test(tag)) return { valid: false, value: tag };
+  return { valid: true, value: tag };
+}
+
+export function normalizeValidObsidianTagValue(value: unknown): string | null {
+  const result = validateObsidianTagValue(value);
+  return result.valid ? result.value : null;
+}
+
+export function toValidObsidianTagValues(value: unknown): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const raw of getObsidianTagInputEntries(value)) {
+    const tag = normalizeValidObsidianTagValue(raw);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    values.push(tag);
+  }
+  return values;
+}
+
+export function getInvalidObsidianTagValues(value: unknown): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const raw of getObsidianTagInputEntries(value)) {
+    const result = validateObsidianTagValue(raw);
+    if (result.valid || !result.value || seen.has(result.value)) continue;
+    seen.add(result.value);
+    values.push(result.value);
+  }
+  return values;
+}
+
+function getObsidianTagInputEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value == null || value === "") return [];
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [value];
+}
+
 export function toObsidianTagValues(value: unknown): string[] {
   const rawValues = Array.isArray(value)
     ? value

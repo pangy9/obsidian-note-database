@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DatabaseConfig } from "../data/types";
 import {
+  createEditableSourceRuleRoot,
   getDefaultSourceRuleIsTypeValue,
   getDefaultSourceRuleOperatorForField,
   getSourceRuleIsTypeValueOptions,
@@ -110,5 +111,19 @@ describe("source rule operators", () => {
     expect(getSourceRuleIsTypeValueOptions("checkbox")).toContain("boolean");
     expect(getSourceRuleIsTypeValueOptions("array")).not.toContain("array");
     expect(getSourceRuleIsTypeValueOptions("array")).toContain("list");
+  });
+
+  it("wraps a single source rule as an editable root group", () => {
+    const rule = { field: "status", op: "eq", value: "active" } as const;
+    expect(createEditableSourceRuleRoot(rule)).toEqual({
+      type: "group",
+      logic: "and",
+      rules: [rule],
+    });
+  });
+
+  it("does not wrap an existing source rule group again", () => {
+    const group = { type: "group", logic: "or", rules: [] } satisfies Parameters<typeof createEditableSourceRuleRoot>[0];
+    expect(createEditableSourceRuleRoot(group)).toBe(group);
   });
 });

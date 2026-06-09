@@ -1,7 +1,9 @@
-import { App, Modal, setIcon } from "obsidian";
+import { App, Modal } from "obsidian";
+import { COLUMN_TYPE_LABELS } from "../../data/ColumnTypes";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
-import { PROPERTY_TYPE_ICON_NAMES, renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { createDropdownField } from "../DropdownField";
+import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
 
 export interface BaseImportColumn extends ColumnDef {
   /** Number of files that have this property */
@@ -86,18 +88,22 @@ export class BaseImportConfirmModal extends Modal {
       };
       const typeTd = tr.createEl("td");
       typeTd.addClass("base-import-type-cell");
-      const iconEl = renderPropertyTypeIcon(typeTd, col);
-      const select = typeTd.createEl("select");
-      for (const t of BaseImportConfirmModal.TYPES) {
-        const opt = select.createEl("option", { value: t, text: t });
-        if (col.type === t) opt.selected = true;
-      }
-      select.onchange = () => {
-        col.type = select.value as ColumnDef["type"];
-        const iconName = PROPERTY_TYPE_ICON_NAMES[col.type];
-        iconEl.setAttribute("data-icon", iconName);
-        setIcon(iconEl, iconName);
-      };
+      let iconEl = renderPropertyTypeIcon(typeTd, col);
+      const typeLabels = COLUMN_TYPE_LABELS();
+      const typeDropdown = createDropdownField({
+        parent: typeTd,
+        label: t("baseImport.inferredType"),
+        options: BaseImportConfirmModal.TYPES.map((type) => ({ value: type, text: typeLabels[type] })),
+        value: col.type,
+        className: "db-modal-dropdown db-base-import-type-dropdown",
+        hideLabel: true,
+        onChange: (value) => {
+          col.type = value as ColumnDef["type"];
+        iconEl.remove();
+        iconEl = renderPropertyTypeIcon(typeTd, col);
+          typeTd.insertBefore(iconEl, typeDropdown.button);
+        },
+      });
       const checkTd = tr.createEl("td");
       checkTd.addClass("base-import-check-cell");
       const checkbox = checkTd.createEl("input", {

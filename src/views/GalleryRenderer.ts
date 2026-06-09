@@ -1,14 +1,15 @@
 import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
-import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
-import { ColumnDef, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
+import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
+import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -21,7 +22,7 @@ export interface GalleryGroup {
 
 export interface GalleryRendererActions {
   openRow(row: RowData): void;
-  createEntry(defaults?: Record<string, unknown>): void;
+  createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   isRowSelected(row: RowData): boolean;
   toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void;
   areAllRowsSelected(rows: RowData[]): boolean;
@@ -74,7 +75,7 @@ export class GalleryRenderer {
     this.renderTotalHeader(container, rows);
     const gallery = this.createGallery(container, config);
     for (const row of rows) this.renderCard(gallery, config, row, undefined, undefined, undefined, rows);
-    this.renderNewCard(gallery);
+    this.renderNewCard(gallery, undefined, rows);
   }
 
   renderGrouped(container: HTMLElement, config: ViewConfig, groups: GalleryGroup[], groupField: string): void {
@@ -104,7 +105,7 @@ export class GalleryRenderer {
       const gallery = this.createGallery(section, config);
       this.setupGroupDropTarget(gallery, groupField, group.key);
       for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key, groups, group.rows);
-      this.renderNewCard(gallery, { [groupField]: group.key || "" });
+      this.renderNewCard(gallery, { [groupField]: group.key || "" }, group.rows);
     }
   }
 
@@ -422,10 +423,19 @@ export class GalleryRenderer {
     button.createEl("img", { attr: { src: image.src, alt: image.alt } });
   }
 
-  private renderNewCard(gallery: HTMLElement, defaults?: Record<string, unknown>): void {
+  private renderNewCard(gallery: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
     if (this.actions.isReadOnly) return;
     const button = gallery.createEl("button", { cls: "db-gallery-new-card", text: `+ ${t("toolbar.new")}` });
-    button.onclick = () => this.actions.createEntry(defaults);
+    button.onclick = () => this.createEntryNearEnd(defaults, rows);
+  }
+
+  private createEntryNearEnd(defaults: Record<string, unknown> | undefined, rows: RowData[]): void {
+    this.actions.createEntry(defaults, this.getCreatePosition(rows));
+  }
+
+  private getCreatePosition(rows: RowData[]): CreateEntryPosition | undefined {
+    const last = rows[rows.length - 1];
+    return last ? { afterPath: last.file.path } : undefined;
   }
 
   private getCoverImage(config: ViewConfig, row: RowData): ParsedImage | null {
@@ -442,7 +452,7 @@ export class GalleryRenderer {
 
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
-    if (isBaseFileField(col.key)) return getRowFileFieldValue(row, col.key);
+    if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
     if (col.type === "computed") return row.computed[col.computedKey || col.key];
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
@@ -466,7 +476,7 @@ export class GalleryRenderer {
     const valueEl = item.createDiv({ cls: "db-gallery-field-value" });
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     item.addEventListener("click", (event) => {
-      if (this.actions.isReadOnly) return;
+      if (this.actions.isReadOnly || isReadonlyFileField(col.key)) return;
       if (isHTMLElement(event.target) && event.target.closest("a, button, input, textarea, .db-cell-editing")) return;
       event.stopPropagation();
       this.actions.editCell(valueEl, row, col, event);
@@ -493,6 +503,13 @@ export class GalleryRenderer {
         }
       }
       setFieldTooltip(valueEl, cb.checked ? t("common.true") : t("common.false"));
+      return;
+    }
+    if (shouldRenderSpecialFileField(col) && renderSpecialFileFieldValue(valueEl, this.app, row, col, value, {
+      tagsContainerClass: "db-gallery-badges",
+      linkItemClass: "db-gallery-link",
+    })) {
+      valueEl.addClass("has-badges");
       return;
     }
     if (col.type === "select" || col.type === "status") {
@@ -693,6 +710,7 @@ export class GalleryRenderer {
   }
 
   private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
+    if (isFileFieldKey(col.key)) return getFileFieldFixedType(col.key);
     return getColumnDisplayType(col, config.schema.computedFields);
   }
 

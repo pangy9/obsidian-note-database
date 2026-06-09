@@ -6,6 +6,7 @@ import { getComputedStorageKey } from "../../data/ColumnDisplay";
 import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef } from "../../data/types";
 import { getEffectiveLocale, t } from "../../i18n";
 import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { createDropdownField } from "../DropdownField";
 import { confirmWithModal } from "./ConfirmModal";
 import { safeString } from "../../data/SafeString";
 
@@ -103,7 +104,6 @@ export class FormulaModal extends Modal {
   private textarea?: HTMLTextAreaElement;
   private highlightEl?: HTMLElement;
   private lineNumberEl?: HTMLElement;
-  private previewSelect?: HTMLSelectElement;
   private previewOutput?: HTMLElement;
   private previewStatus?: HTMLElement;
   private previewDetails?: HTMLElement;
@@ -113,10 +113,11 @@ export class FormulaModal extends Modal {
   private helpListEl?: HTMLElement;
   private helpDetailEl?: HTMLElement;
   private saveBtn?: HTMLButtonElement;
-  private typeSelect?: HTMLSelectElement;
   private matchedBracketIndexes = new Set<number>();
   private originalExpression = "";
   private originalResultType: ComputedFieldDef["type"] = "text";
+  private selectedResultType: ComputedFieldDef["type"] = "text";
+  private selectedPreviewIndex = 0;
   private expressionSyntax: ComputedFieldDef["expressionSyntax"] = "note-database";
   private saved = false;
   private resizeObserver?: ResizeObserver;
@@ -144,6 +145,8 @@ export class FormulaModal extends Modal {
     this.contentEl.addClass("formula-workbench-modal");
     this.originalExpression = this.computedField?.expression || "";
     this.originalResultType = this.computedField?.type || "text";
+    this.selectedResultType = this.originalResultType;
+    this.selectedPreviewIndex = 0;
     this.expressionSyntax = this.computedField?.expressionSyntax || "note-database";
 
     this.renderHeader();
@@ -184,13 +187,19 @@ export class FormulaModal extends Modal {
 
     const typeLabel = header.createEl("label", { cls: "db-formula-result-type" });
     typeLabel.createSpan({ text: t("formula.resultType") });
-    this.typeSelect = typeLabel.createEl("select");
-    for (const [value, labelKey] of RESULT_TYPE_KEYS) this.typeSelect.createEl("option", { value, text: t(labelKey) });
-    this.typeSelect.value = this.originalResultType;
-    this.typeSelect.onchange = () => {
-      this.updatePreview();
-      this.renderHelpBrowserContent();
-    };
+    createDropdownField({
+      parent: typeLabel,
+      label: t("formula.resultType"),
+      options: RESULT_TYPE_KEYS.map(([value, labelKey]) => ({ value, text: t(labelKey) })),
+      value: this.selectedResultType,
+      className: "db-modal-dropdown db-formula-result-type-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        this.selectedResultType = value as ComputedFieldDef["type"];
+        this.updatePreview();
+        this.renderHelpBrowserContent();
+      },
+    });
   }
 
   private getStorageSubtitle(): string {
@@ -328,20 +337,36 @@ export class FormulaModal extends Modal {
     const preview = parent.createDiv({ cls: "db-formula-preview" });
     const row = preview.createDiv({ cls: "db-formula-preview-row" });
     row.createSpan({ cls: "db-formula-preview-label", text: t("formula.previewItem") });
-    this.previewSelect = row.createEl("select");
     const previewRows = this.rows.slice(0, 80);
+    this.selectedPreviewIndex = Math.min(this.selectedPreviewIndex, Math.max(previewRows.length - 1, 0));
     if (previewRows.length === 0) {
-      this.previewSelect.createEl("option", { value: "0", text: t("formula.noPreviewItems") });
-      this.previewSelect.disabled = true;
+      createDropdownField({
+        parent: row,
+        label: t("formula.previewItem"),
+        options: [{ value: "0", text: t("formula.noPreviewItems") }],
+        value: "0",
+        className: "db-modal-dropdown db-formula-preview-dropdown",
+        hideLabel: true,
+        disabled: true,
+        onChange: () => undefined,
+      });
     } else {
-      previewRows.forEach((rowData, index) => {
-        this.previewSelect!.createEl("option", {
+      createDropdownField({
+        parent: row,
+        label: t("formula.previewItem"),
+        options: previewRows.map((rowData, index) => ({
           value: String(index),
           text: rowData.file.name.replace(/\.md$/, ""),
-        });
+        })),
+        value: String(this.selectedPreviewIndex),
+        className: "db-modal-dropdown db-formula-preview-dropdown",
+        hideLabel: true,
+        onChange: (value) => {
+          this.selectedPreviewIndex = Number(value) || 0;
+          this.updatePreview();
+        },
       });
     }
-    this.previewSelect.onchange = () => this.updatePreview();
 
     const result = preview.createDiv({ cls: "db-formula-result-card" });
     result.createSpan({ cls: "db-formula-preview-label", text: t("formula.calcResult") });
@@ -493,9 +518,13 @@ export class FormulaModal extends Modal {
 
   private renderFieldOptions(parent: HTMLElement, col: ColumnDef): void {
     if (!["select", "multi-select", "status"].includes(col.type)) return;
-    const options = this.getFieldOptionEntries(col);
     const section = parent.createDiv({ cls: "db-formula-field-options" });
     section.createDiv({ cls: "db-formula-field-options-title", text: t("formula.availableOptions") });
+    if (col.key === "file.tags") {
+      section.createDiv({ cls: "db-formula-hint", text: t("formula.fileTagsHint") });
+      return;
+    }
+    const options = this.getFieldOptionEntries(col);
     if (options.length === 0) {
       section.createDiv({ cls: "db-formula-hint", text: t("formula.noOptions") });
       return;
@@ -517,6 +546,7 @@ export class FormulaModal extends Modal {
 
   private getFieldOptionEntries(col: ColumnDef): StatusOptionDef[] {
     if (!isOptionColumnType(col.type)) return [];
+    if (col.key === "file.tags") return [];
     const values = new Set<string>();
     const colorsByValue = new Map<string, StatusOptionDef["color"]>();
     for (const option of getColumnOptions(col)) {
@@ -545,7 +575,7 @@ export class FormulaModal extends Modal {
     buttonRow.createEl("button", { text: t("common.cancel") }).onclick = () => this.close();
     this.saveBtn = buttonRow.createEl("button", { text: t("formula.save"), cls: "mod-cta" });
     this.saveBtn.onclick = async () => {
-      if (!this.textarea || !this.typeSelect) return;
+      if (!this.textarea) return;
       const state = this.validateFormula();
       if (!state.valid) {
         new Notice(state.message);
@@ -554,7 +584,7 @@ export class FormulaModal extends Modal {
       const expression = this.textarea.value.trim();
       await this.onSave({
         expression,
-        resultType: this.typeSelect.value as ComputedFieldDef["type"],
+        resultType: this.selectedResultType,
         expressionSyntax: this.expressionSyntax,
       });
       this.saved = true;
@@ -709,7 +739,7 @@ export class FormulaModal extends Modal {
       return { valid: false, empty: false, message: fieldError, output: fieldError, severity: "error" };
     }
 
-    const index = Number(this.previewSelect?.value || 0);
+    const index = this.selectedPreviewIndex;
     const row = this.rows[index];
     if (!row) {
       return { valid: true, empty: false, message: t("formula.noPreviewSaveFirst"), output: t("formula.noPreview"), severity: "muted" };
@@ -780,7 +810,7 @@ export class FormulaModal extends Modal {
   }
 
   private validateResultType(value: unknown): string | null {
-    const type = this.typeSelect?.value as ComputedFieldDef["type"] | undefined;
+    const type = this.selectedResultType;
     if (value == null || value === "") return null;
     if (typeof value === "number" && !Number.isFinite(value)) {
       if (value === Infinity || value === -Infinity) return t("formula.divisionByZero");
@@ -798,8 +828,8 @@ export class FormulaModal extends Modal {
   }
 
   private updateSaveState(state = this.validateFormula()): void {
-    if (!this.saveBtn || !this.textarea || !this.typeSelect) return;
-    const dirty = this.textarea.value.trim() !== this.originalExpression.trim() || this.typeSelect.value !== this.originalResultType;
+    if (!this.saveBtn || !this.textarea) return;
+    const dirty = this.textarea.value.trim() !== this.originalExpression.trim() || this.selectedResultType !== this.originalResultType;
     this.saveBtn.disabled = !dirty || !state.valid;
     this.saveBtn.textContent = !dirty ? t("formula.notModified") : state.valid ? t("formula.save") : t("formula.invalid");
   }
@@ -861,7 +891,7 @@ export class FormulaModal extends Modal {
   }
 
   private getPreviewRow(): RowData | undefined {
-    const index = Number(this.previewSelect?.value || 0);
+    const index = this.selectedPreviewIndex;
     return this.rows[index];
   }
 
@@ -1454,9 +1484,9 @@ export class FormulaModal extends Modal {
   }
 
   private hasUnsavedChanges(): boolean {
-    if (!this.textarea || !this.typeSelect) return false;
+    if (!this.textarea) return false;
     return this.textarea.value.trim() !== this.originalExpression.trim()
-      || this.typeSelect.value !== this.originalResultType;
+      || this.selectedResultType !== this.originalResultType;
   }
 
   close(): void {

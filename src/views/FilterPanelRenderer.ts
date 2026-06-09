@@ -1,6 +1,7 @@
-import { getColumnOptions } from "../data/ColumnTypes";
+import { getColumnOptions, isObsidianTagsKey } from "../data/ColumnTypes";
 import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { createDropdownField } from "./DropdownField";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { DatabaseViewState } from "./ViewStateStore";
 
@@ -106,36 +107,45 @@ export class FilterPanelRenderer {
     if (!rule) return;
     const row = panel.createDiv({ cls: "db-panel-row" });
 
-    const fieldSel = row.createEl("select");
     const allCols = this.getFilterColumns(config);
-    for (const col of allCols) {
-      fieldSel.createEl("option", { value: col.key, text: col.label });
-    }
     const firstKey = allCols[0]?.key || "status";
-    fieldSel.value = rule.field || firstKey;
-    const currentCol = allCols.find((col) => col.key === fieldSel.value) || allCols[0];
-    fieldSel.onchange = () => {
-      rule.field = fieldSel.value;
-      const nextCol = allCols.find((col) => col.key === rule.field);
-      const nextOps = this.getOperatorsForColumn(nextCol);
-      if (!nextOps.some(([op]) => op === rule.op)) rule.op = nextOps[0]?.[0] || "eq";
-      rule.value = "";
-      actions.saveState();
-      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
-      actions.refresh();
-    };
+    const currentField = rule.field || firstKey;
+    const currentCol = allCols.find((col) => col.key === currentField) || allCols[0];
+    createDropdownField({
+      parent: row,
+      label: t("panel.field"),
+      options: allCols.map((col) => ({ value: col.key, text: col.label })),
+      value: currentField,
+      className: "db-panel-dropdown db-filter-field-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        rule.field = value;
+        const nextCol = allCols.find((col) => col.key === rule.field);
+        const nextOps = this.getOperatorsForColumn(nextCol);
+        if (!nextOps.some(([op]) => op === rule.op)) rule.op = nextOps[0]?.[0] || "eq";
+        rule.value = "";
+        actions.saveState();
+        this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+        actions.refresh();
+      },
+    });
 
-    const opSel = row.createEl("select");
     const ops = this.getOperatorsForColumn(currentCol);
-    for (const [value, label] of ops) opSel.createEl("option", { value, text: label });
     if (!ops.some(([op]) => op === rule.op)) rule.op = ops[0]?.[0] || "eq";
-    opSel.value = rule.op;
-    opSel.onchange = () => {
-      rule.op = opSel.value as FilterRule["op"];
-      actions.saveState();
-      this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
-      actions.refresh();
-    };
+    createDropdownField({
+      parent: row,
+      label: t("panel.operator"),
+      options: ops.map(([value, label]) => ({ value, text: label })),
+      value: rule.op,
+      className: "db-panel-dropdown db-filter-operator-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        rule.op = value as FilterRule["op"];
+        actions.saveState();
+        this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
+        actions.refresh();
+      },
+    });
 
     if (rule.op !== "empty" && rule.op !== "notempty") {
       this.renderValueInput(row, rule, currentCol, actions);
@@ -169,6 +179,7 @@ export class FilterPanelRenderer {
       return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
     }
     if (col.type === "multi-select") {
+      if (col.key === "file.tags" || isObsidianTagsKey(col.key)) return [...base, ["hasTag", t("filter.hasTag")], ["contains", t("filter.contains")], ...emptyOps];
       return [...base, ["contains", t("filter.contains")], ...emptyOps];
     }
     if (col.type === "checkbox") {
@@ -189,30 +200,43 @@ export class FilterPanelRenderer {
       return;
     }
     if (col?.type === "select" || col?.type === "status") {
-      const select = row.createEl("select");
-      select.createEl("option", { value: "", text: t("panel.value") });
-      for (const option of getColumnOptions(col)) {
-        select.createEl("option", { value: option.value, text: option.value });
-      }
-      select.value = rule.value || "";
-      select.onchange = () => {
-        rule.value = select.value;
-        actions.saveState();
-        actions.refresh();
-      };
+      createDropdownField({
+        parent: row,
+        label: t("panel.value"),
+        options: [
+          { value: "", text: t("panel.value") },
+          ...getColumnOptions(col).map((option) => ({ value: option.value, text: option.value })),
+        ],
+        value: rule.value || "",
+        className: "db-panel-dropdown db-filter-value-dropdown",
+        hideLabel: true,
+        onChange: (value) => {
+          rule.value = value;
+          actions.saveState();
+          actions.refresh();
+        },
+      });
       return;
     }
     if (col?.type === "checkbox") {
-      const select = row.createEl("select");
-      select.createEl("option", { value: "true", text: t("common.true") });
-      select.createEl("option", { value: "false", text: t("common.false") });
-      select.value = rule.value === "false" ? "false" : "true";
-      if (!rule.value) rule.value = select.value;
-      select.onchange = () => {
-        rule.value = select.value;
-        actions.saveState();
-        actions.refresh();
-      };
+      const value = rule.value === "false" ? "false" : "true";
+      if (!rule.value) rule.value = value;
+      createDropdownField({
+        parent: row,
+        label: t("panel.value"),
+        options: [
+          { value: "true", text: t("common.true") },
+          { value: "false", text: t("common.false") },
+        ],
+        value,
+        className: "db-panel-dropdown db-filter-value-dropdown",
+        hideLabel: true,
+        onChange: (nextValue) => {
+          rule.value = nextValue;
+          actions.saveState();
+          actions.refresh();
+        },
+      });
       return;
     }
     const inp = row.createEl("input", {

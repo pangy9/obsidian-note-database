@@ -12,15 +12,17 @@ import {
   normalizeStatusPresets,
   resolveDefaultStatusPresetId,
   toMultiSelectValuesForKey,
+  toValidObsidianTagValues,
 } from "./data/ColumnTypes";
 import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/EmbeddedDatabaseRenderer";
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
 import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
-import { BASE_FILE_FIELD_KEYS, getFileFieldValue, isBaseFileField } from "./data/FileFields";
+import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
 import { safeString, isRecord } from "./data/SafeString";
+import { isElement } from "./views/DomGuards";
 
 /** Parsed view data from a .base file */
 interface BaseFileViewData {
@@ -58,6 +60,8 @@ export default class NoteDatabasePlugin extends Plugin {
   private databaseFileConfigCache = new Map<string, DatabaseConfig>();
   /** 防抖 timer，防止 file-open / active-leaf-change / layout-change 同时触发导致重复打开 */
   private pendingDatabaseFileOpen: number | null = null;
+  private pendingDatabaseFileOpenFile?: TFile;
+  private pendingDatabaseFileOpenLeaf?: WorkspaceLeaf;
   private readonly commandNameKeys: Record<string, string> = {
     "open-dashboard": "command.openDashboard",
     "convert-active-base-to-database": "command.convertBase",
@@ -90,7 +94,7 @@ export default class NoteDatabasePlugin extends Plugin {
             if (v.filters != null && !Array.isArray(v.filters)) v.filters = undefined;
             if (v.filterLogic !== "or") v.filterLogic = "and";
             if (!v.name) v.name = `${t("common.database")} ${i + 1}`;
-            if (v.viewType !== "board" && v.viewType !== "gallery" && v.viewType !== "list") v.viewType = "table";
+            if (v.viewType !== "board" && v.viewType !== "gallery" && v.viewType !== "list" && v.viewType !== "chart") v.viewType = "table";
             // Wrap as DatabaseConfig with one ViewConfig child
             const viewCopy = { ...v, id: (v.id as string) || generateId() };
             return {
@@ -123,7 +127,7 @@ export default class NoteDatabasePlugin extends Plugin {
             if (!db.schema) db.schema = (isRecord(dbViews[0]) ? dbViews[0].schema : undefined) || { columns: [], computedFields: [] };
             for (const view of dbViews) {
               if (!isRecord(view)) continue;
-              if (view.viewType !== "board" && view.viewType !== "gallery" && view.viewType !== "list") view.viewType = "table";
+              if (view.viewType !== "board" && view.viewType !== "gallery" && view.viewType !== "list" && view.viewType !== "chart") view.viewType = "table";
             }
             return db as unknown as DatabaseConfig;
           });
@@ -137,6 +141,12 @@ export default class NoteDatabasePlugin extends Plugin {
 
         if (!rawSettings.databaseFolder) rawSettings.databaseFolder = DEFAULT_SETTINGS.databaseFolder;
         if (!Array.isArray(rawSettings.databaseFileOrder)) rawSettings.databaseFileOrder = [];
+        if (typeof rawSettings.databaseFilesAlwaysOpenInNewTab !== "boolean") {
+          rawSettings.databaseFilesAlwaysOpenInNewTab = DEFAULT_SETTINGS.databaseFilesAlwaysOpenInNewTab;
+        }
+        if (typeof rawSettings.databaseFilesPreventDuplicateTabs !== "boolean") {
+          rawSettings.databaseFilesPreventDuplicateTabs = DEFAULT_SETTINGS.databaseFilesPreventDuplicateTabs;
+        }
         rawSettings.statusPresets = normalizeStatusPresets(rawSettings.statusPresets);
         rawSettings.defaultStatusPresetId = resolveDefaultStatusPresetId(rawSettings.statusPresets, rawSettings.defaultStatusPresetId);
         if (Array.isArray(rawSettingsRecord["databases"])) {
@@ -194,6 +204,9 @@ export default class NoteDatabasePlugin extends Plugin {
         this.scheduleDatabaseFileViewOpen(file);
       }
     }));
+    this.registerDomEvent(window.activeDocument, "click", (event) => {
+      this.handleDatabaseFileExplorerClick(event);
+    }, { capture: true });
     this.app.workspace.onLayoutReady(() => {
       const file = this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
@@ -331,9 +344,18 @@ export default class NoteDatabasePlugin extends Plugin {
     if (this.pendingDatabaseFileOpen !== null) {
       window.clearTimeout(this.pendingDatabaseFileOpen);
     }
+    const previousFile = this.pendingDatabaseFileOpenFile;
+    this.pendingDatabaseFileOpenFile = file;
+    if (leaf || !previousFile || previousFile.path !== file.path) {
+      this.pendingDatabaseFileOpenLeaf = leaf;
+    }
     this.pendingDatabaseFileOpen = window.setTimeout(() => {
+      const pendingFile = this.pendingDatabaseFileOpenFile;
+      const pendingLeaf = this.pendingDatabaseFileOpenLeaf;
       this.pendingDatabaseFileOpen = null;
-      void this.openDatabaseFileViewIfNeeded(file, leaf);
+      this.pendingDatabaseFileOpenFile = undefined;
+      this.pendingDatabaseFileOpenLeaf = undefined;
+      if (pendingFile) void this.openDatabaseFileViewIfNeeded(pendingFile, pendingLeaf);
     }, delay);
   }
 
@@ -342,7 +364,17 @@ export default class NoteDatabasePlugin extends Plugin {
     const bypassUntil = this.markdownDatabaseFileBypass.get(file.path) || 0;
     if (Date.now() < bypassUntil) return;
     if (!(await this.isDatabaseViewFile(file))) return;
-    const leaf = targetLeaf || this.app.workspace.getLeaf(false);
+    const openedLeaf = targetLeaf || this.findOpenedMarkdownLeaf(file.path);
+    const duplicateLeaf = this.shouldPreventDuplicateDatabaseFileTabs()
+      ? this.findMatchingDatabaseFileLeaf(file.path)
+      : null;
+    if (duplicateLeaf && duplicateLeaf !== openedLeaf) {
+      await this.revealDatabaseFileLeaf(duplicateLeaf);
+      this.detachOpenedDuplicateLeaf(openedLeaf, file.path);
+      return;
+    }
+
+    const leaf = openedLeaf;
     if (!leaf || leaf.view.getViewType() === DATABASE_FILE_VIEW_TYPE) return;
     const leafFile = this.getLeafFile(leaf);
     if (leafFile instanceof TFile && leafFile.path !== file.path) return;
@@ -357,6 +389,108 @@ export default class NoteDatabasePlugin extends Plugin {
     } finally {
       this.switchingDatabaseFileView = false;
     }
+  }
+
+  /**
+   * Reuse the existing database-file tab before Obsidian creates a fresh leaf.
+   * This only handles plain file-explorer clicks; other open flows keep using
+   * the normal file-open conversion fallback above.
+   */
+  private handleDatabaseFileExplorerClick(event: MouseEvent): void {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    const path = this.getFileExplorerClickPath(event);
+    if (!path) return;
+
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md" || !this.getDatabaseFileConfig(file)) return;
+
+    const leaf = this.shouldPreventDuplicateDatabaseFileTabs()
+      ? this.findMatchingDatabaseFileLeaf(path)
+      : null;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (leaf) {
+      void this.reuseDatabaseFileLeaf(leaf, path);
+    } else {
+      void this.openDatabaseFileView(file);
+    }
+  }
+
+  /** Extract the clicked vault path from Obsidian's file explorer tree item. */
+  private getFileExplorerClickPath(event: MouseEvent): string | null {
+    const target = event.target;
+    if (!isElement(target)) return null;
+
+    const titleEl = target.closest(".nav-file-title");
+    if (!titleEl) return null;
+
+    const path = titleEl.getAttribute("data-path");
+    return path && path.trim() ? path : null;
+  }
+
+  /** Find an already-open database file tab for the same vault path. */
+  private findMatchingDatabaseFileLeaf(path: string): WorkspaceLeaf | null {
+    const leaves = this.app.workspace.getLeavesOfType(DATABASE_FILE_VIEW_TYPE);
+    return leaves.find((leaf) => leaf.getViewState().state?.file === path) || null;
+  }
+
+  private shouldAlwaysOpenDatabaseFilesInNewTab(): boolean {
+    return this.settings.databaseFilesAlwaysOpenInNewTab === true;
+  }
+
+  private shouldPreventDuplicateDatabaseFileTabs(): boolean {
+    return this.settings.databaseFilesPreventDuplicateTabs !== false;
+  }
+
+  /** Switch a database-file tab to the requested database file without creating a new tab. */
+  private async reuseDatabaseFileLeaf(leaf: WorkspaceLeaf, path: string): Promise<void> {
+    try {
+      await leaf.setViewState({
+        type: DATABASE_FILE_VIEW_TYPE,
+        state: { file: path },
+        active: true,
+      });
+      await this.app.workspace.revealLeaf(leaf);
+      this.markDatabaseFileTabs();
+    } catch (error) {
+      console.error("Note Database: failed to reuse database file tab", error);
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+    }
+  }
+
+  private async revealDatabaseFileLeaf(leaf: WorkspaceLeaf): Promise<void> {
+    await this.app.workspace.revealLeaf(leaf);
+    this.markDatabaseFileTabs();
+  }
+
+  private detachOpenedDuplicateLeaf(leaf: WorkspaceLeaf | null | undefined, path: string): void {
+    if (!leaf || leaf.view.getViewType() === DATABASE_FILE_VIEW_TYPE) return;
+    const leafFile = this.getLeafFile(leaf);
+    if (!(leafFile instanceof TFile) || leafFile.path !== path) return;
+    leaf.detach();
+  }
+
+  private findOpenedMarkdownLeaf(path: string): WorkspaceLeaf | null {
+    let match: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (match) return;
+      const file = this.getLeafFile(leaf);
+      if (file instanceof TFile && file.path === path && leaf.view.getViewType() === "markdown") {
+        match = leaf;
+      }
+    });
+    return match;
   }
 
   private async isDatabaseViewFile(file: TFile): Promise<boolean> {
@@ -430,6 +564,38 @@ export default class NoteDatabasePlugin extends Plugin {
   async openDashboardReference(sourcePath: string): Promise<void> {
     await this.openDashboard();
     this.getActiveDbView()?.openViewReference(sourcePath);
+  }
+
+  /** Open a database definition file directly as the plugin file view. */
+  async openDatabaseFileView(file: TFile): Promise<void> {
+    if (file.extension !== "md" || !(await this.isDatabaseViewFile(file))) {
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      return;
+    }
+
+    const reusableLeaf = this.shouldPreventDuplicateDatabaseFileTabs()
+      ? this.findMatchingDatabaseFileLeaf(file.path)
+      : null;
+    if (reusableLeaf) {
+      await this.reuseDatabaseFileLeaf(reusableLeaf, file.path);
+      return;
+    }
+
+    const leaf = this.getDatabaseFileOpenLeaf();
+    await leaf.setViewState({
+      type: DATABASE_FILE_VIEW_TYPE,
+      state: { file: file.path },
+      active: true,
+    });
+    await this.app.workspace.revealLeaf(leaf);
+    this.markDatabaseFileTabs();
+  }
+
+  private getDatabaseFileOpenLeaf(): WorkspaceLeaf {
+    if (this.shouldAlwaysOpenDatabaseFilesInNewTab()) {
+      return this.app.workspace.getLeaf("tab");
+    }
+    return this.app.workspace.getMostRecentLeaf() || this.app.workspace.getLeaf(false);
   }
 
   /** Notify the database view and status bar that settings have changed */
@@ -509,6 +675,11 @@ export default class NoteDatabasePlugin extends Plugin {
     return getStatusPresetOptions(presets, this.settings.defaultStatusPresetId);
   }
 
+  private getDefaultStatusPresetId(): string | undefined {
+    const presets = normalizeStatusPresets(this.settings.statusPresets);
+    return resolveDefaultStatusPresetId(presets, this.settings.defaultStatusPresetId);
+  }
+
   private async convertBaseToDatabase(file: TFile): Promise<void> {
     const source = await this.app.vault.read(file);
     let config: DatabaseConfig;
@@ -547,6 +718,7 @@ export default class NoteDatabasePlugin extends Plugin {
           }));
         } else if (col.type === "status") {
           schemaCol.statusOptions = this.getDefaultStatusOptions();
+          schemaCol.statusPresetId = this.getDefaultStatusPresetId();
         }
       }
     }
@@ -632,7 +804,9 @@ export default class NoteDatabasePlugin extends Plugin {
     const skipLabels = new Set(["path"]);
     const dataHeaders = headers
       .map((label, index) => ({ label: label || `Property ${index + 1}`, index }))
-      .filter((item) => item.index !== titleIndex && !skipLabels.has(item.label.trim().toLowerCase()));
+      .filter((item) => item.index !== titleIndex &&
+        !skipLabels.has(item.label.trim().toLowerCase()) &&
+        !this.shouldSkipCsvMarkdownDataHeader(item.label));
     const columnKeys = new Map<number, string>();
     const seenKeys = new Set(["file.name"]);
     const metadataColumns = metadata?.database?.schema?.columns || [];
@@ -654,6 +828,7 @@ export default class NoteDatabasePlugin extends Plugin {
       for (let j = 0; j < csvHeaders.length; j++) {
         if (j === csvTitleIdx) continue;
         const label = csvHeaders[j] || `Property ${j + 1}`;
+        if (this.shouldSkipCsvMarkdownDataHeader(label)) continue;
         if (!label) continue;
         const normalizedKey = this.normalizeImportKey(label);
         const existingKey = [...allColumnLabels.keys()].find(
@@ -740,6 +915,11 @@ export default class NoteDatabasePlugin extends Plugin {
         const raw = row[item.index] || "";
         const value = this.parseCsvMarkdownCellValue(raw, col?.type || "text", key);
         if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
+        if (key === "file.tags") {
+          frontmatter["tags"] = toValidObsidianTagValues(value);
+          continue;
+        }
+        if (isFileFieldKey(key)) continue;
         frontmatter[key] = value;
       }
       const body = page?.body || "";
@@ -768,6 +948,7 @@ export default class NoteDatabasePlugin extends Plugin {
       for (let j = 0; j < csvHeaders.length; j++) {
         if (j === csvTitleIdx) continue;
         const label = csvHeaders[j] || `Property ${j + 1}`;
+        if (this.shouldSkipCsvMarkdownDataHeader(label)) continue;
         const normalizedKey = this.normalizeImportKey(label);
         const matchingCol = columns.find(
           (c) => c.key === normalizedKey || c.label === label
@@ -944,6 +1125,11 @@ export default class NoteDatabasePlugin extends Plugin {
     return key || `property_${Date.now().toString(36)}`;
   }
 
+  private shouldSkipCsvMarkdownDataHeader(label: string): boolean {
+    const key = this.normalizeImportKey(label);
+    return key === "file.name" || isReadonlyFileField(key);
+  }
+
   private getUniqueImportKey(base: string, seen: Set<string>): string {
     let key = base || "property";
     let index = 2;
@@ -1110,7 +1296,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const preliminaryColumns: ColumnDef[] = Array.from(allColumnKeys.keys()).map((key) => (
       key.startsWith("formula.")
         ? { key, label: allColumnKeys.get(key) || key, type: "computed", computedKey: key.slice("formula.".length) }
-        : { key, label: allColumnKeys.get(key) || key, type: inferColumnType(key, sampleValues.get(key) || []) }
+        : { key, label: allColumnKeys.get(key) || key, type: isFileFieldKey(key) ? getFileFieldFixedType(key) : inferColumnType(key, sampleValues.get(key) || []) }
     ));
     const computedSamples = collectComputedFieldSamples(
       this.app,
@@ -1137,10 +1323,10 @@ export default class NoteDatabasePlugin extends Plugin {
           const col: ColumnDef = { key, label, type: "computed", computedKey };
           return col;
         }
-        const type = inferColumnType(key, sampleValues.get(key) || []);
+        const type = isFileFieldKey(key) ? getFileFieldFixedType(key) : inferColumnType(key, sampleValues.get(key) || []);
         const col: ColumnDef & { fileCount?: number } = { key, label, type };
         // For tags field, pre-populate options from vault tags
-        if (isObsidianTagsKey(key) && type === "multi-select") {
+        if (!isFileFieldKey(key) && isObsidianTagsKey(key) && type === "multi-select") {
           const vaultTags = getVaultTags(this.app, sourceFolder, parsed.sourceRules, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
           if (vaultTags.length > 0) {
             col.statusOptions = vaultTags.map((tag: string, i: number) => ({
@@ -1150,7 +1336,7 @@ export default class NoteDatabasePlugin extends Plugin {
           }
         }
         // For other multi-select fields inferred from list data, collect unique values as options
-        if (type === "multi-select" && !isObsidianTagsKey(key)) {
+        if (!isFileFieldKey(key) && type === "multi-select" && !isObsidianTagsKey(key)) {
           const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, parsed.sourceRules, parsed.sourceLogic, sourceRuleTree, baseComputedFields, [], file);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({

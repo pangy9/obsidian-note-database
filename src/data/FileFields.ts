@@ -1,5 +1,5 @@
 import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian";
-import { toObsidianTagValues } from "./ColumnTypes";
+import { toValidObsidianTagValues } from "./ColumnTypes";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef, RowData } from "./types";
 
@@ -23,15 +23,47 @@ export const BASE_FILE_FIELD_KEYS = new Set([
   "file.properties",
 ]);
 
+const EDITABLE_FILE_FIELD_KEYS = new Set(["file.name", "file.tags"]);
+const FILE_LINK_LIST_FIELD_KEYS = new Set(["file.links", "file.backlinks", "file.embeds"]);
+
+/** Any file.* key is reserved for virtual file metadata, even if unsupported. */
+export function isFileFieldKey(key: string): boolean {
+  return key.startsWith("file.");
+}
+
+/** Supported built-in file fields that the plugin knows how to resolve. */
+export function isSupportedFileField(key: string): boolean {
+  return BASE_FILE_FIELD_KEYS.has(key);
+}
+
+/** File fields that have an explicit write path outside normal frontmatter properties. */
+export function isEditableFileField(key: string): boolean {
+  return EDITABLE_FILE_FIELD_KEYS.has(key);
+}
+
+/** Readonly file metadata fields, including unsupported reserved file.* keys. */
+export function isReadonlyFileField(key: string): boolean {
+  return isFileFieldKey(key) && !isEditableFileField(key);
+}
+
+/** File fields that should render as Obsidian links instead of option badges. */
+export function isFileLinkListField(key: string): boolean {
+  return FILE_LINK_LIST_FIELD_KEYS.has(key);
+}
+
 export function isBaseFileField(key: string): boolean {
   return BASE_FILE_FIELD_KEYS.has(key);
 }
 
-export function getBaseFileFieldType(key: string): ColumnDef["type"] {
+export function getFileFieldFixedType(key: string): ColumnDef["type"] {
   if (key === "file.ctime" || key === "file.created" || key === "file.mtime" || key === "file.modified") return "date";
   if (key === "file.size") return "number";
-  if (key === "file.tags" || key === "file.links" || key === "file.backlinks" || key === "file.embeds") return "multi-select";
+  if (key === "file.tags") return "multi-select";
   return "text";
+}
+
+export function getBaseFileFieldType(key: string): ColumnDef["type"] {
+  return getFileFieldFixedType(key);
 }
 
 export function getFileFieldValue(
@@ -51,8 +83,8 @@ export function getFileFieldValue(
   if (key === "file.mtime" || key === "file.modified") return file.stat.mtime;
   if (key === "file.size") return file.stat.size;
   if (key === "file.tags") {
-    return toObsidianTagValues([
-      ...toObsidianTagValues(frontmatter?.["tags"]),
+    return toValidObsidianTagValues([
+      ...toValidObsidianTagValues(frontmatter?.["tags"]),
       ...(cache ? getAllTags(cache) || [] : []),
     ]);
   }

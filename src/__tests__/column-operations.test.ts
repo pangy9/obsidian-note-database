@@ -199,4 +199,178 @@ describe("ColumnOperations", () => {
     expect(db.schema.columns.map((candidate) => candidate.key)).toEqual(["file.name"]);
     expect(db.schema.computedFields).toEqual([]);
   });
+
+  it("deletes readonly file fields from config without touching frontmatter", async () => {
+    const filePathCol: ColumnDef = { key: "file.path", label: "Path", type: "text" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, filePathCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "file.path"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.deleteColumn(filePathCol);
+
+    expect(db.schema.columns.map((candidate) => candidate.key)).toEqual(["file.name"]);
+    expect(view.columnOrder).toEqual(["file.name"]);
+    expect(propertyService.deleteKey).not.toHaveBeenCalled();
+  });
+
+  it("clears chartValueField when the numeric value column is deleted", async () => {
+    const amountCol: ColumnDef = { key: "amount", label: "Amount", type: "number" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, { key: "status", label: "Status", type: "status" as const }, amountCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "chart",
+      name: "Chart",
+      viewType: "chart",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "status", "amount"],
+      chartGroupField: "status",
+      chartAggregation: "sum",
+      chartValueField: "amount",
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.deleteColumn(amountCol);
+
+    expect(view.chartGroupField).toBe("status");
+    expect(view.chartValueField).toBeUndefined();
+    expect(propertyService.deleteKey).toHaveBeenCalledWith([], "amount");
+  });
+
+  it("clears chartValueField when the value column is converted to a non-numeric type", async () => {
+    const amountCol: ColumnDef = { key: "amount", label: "Amount", type: "number" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, { key: "status", label: "Status", type: "status" as const }, amountCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "chart",
+      name: "Chart",
+      viewType: "chart",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "status", "amount"],
+      chartGroupField: "status",
+      chartAggregation: "sum",
+      chartValueField: "amount",
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops } = makeOps(db, view);
+
+    await ops.changeColumnType(amountCol, "text");
+
+    expect(amountCol.type).toBe("text");
+    expect(view.chartValueField).toBeUndefined();
+  });
+
+  it("blocks type changes and duplication for file fields", async () => {
+    const tagsCol: ColumnDef = { key: "file.tags", label: "Tags", type: "multi-select" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, tagsCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "file.tags"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.changeColumnType(tagsCol, "text");
+    await ops.duplicateColumn(tagsCol);
+
+    expect(tagsCol.type).toBe("multi-select");
+    expect(schema.columns.map((candidate) => candidate.key)).toEqual(["file.name", "file.tags"]);
+    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
+    expect(propertyService.copyKey).not.toHaveBeenCalled();
+  });
+
+  it("allows file fields to update display settings without frontmatter migration", async () => {
+    const tagsCol: ColumnDef = { key: "file.tags", label: "Tags", type: "multi-select" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, tagsCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "file.tags"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.renameColumn(tagsCol, { key: "file.tags", label: "Note tags", migrateValues: true, wrap: true });
+
+    expect(tagsCol).toMatchObject({ key: "file.tags", label: "Note tags", type: "multi-select", wrap: true });
+    expect(propertyService.renameKey).not.toHaveBeenCalled();
+    expect(propertyService.deleteKey).not.toHaveBeenCalled();
+    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
+  });
+
+  it("preserves the database viewport after inserting or appending columns", async () => {
+    const firstCol: ColumnDef = { key: "file.name", label: "Name", type: "text" };
+    const secondCol: ColumnDef = { key: "status", label: "Status", type: "text" };
+    const schema = {
+      columns: [firstCol, secondCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "status"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+    propertyService.ensureKey.mockResolvedValue({ changed: 0, skipped: 0 });
+
+    await ops.insertColumnNear(secondCol, "left");
+    await ops.appendColumn();
+
+    expect((ops as unknown as { deps: OpsDeps }).deps.refreshSchemaChanged).toHaveBeenNthCalledWith(1, { preserveViewport: true });
+    expect((ops as unknown as { deps: OpsDeps }).deps.refreshSchemaChanged).toHaveBeenNthCalledWith(2, { preserveViewport: true });
+  });
+
+  it("rejects unsupported file.* keys when renaming normal columns", async () => {
+    const customCol: ColumnDef = { key: "custom", label: "Custom", type: "text" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, customCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "custom"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.renameColumn(customCol, { key: "file.unknown", label: "Unknown", migrateValues: true, wrap: false });
+
+    expect(customCol.key).toBe("custom");
+    expect(propertyService.renameKey).not.toHaveBeenCalled();
+    expect(propertyService.deleteKey).not.toHaveBeenCalled();
+    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
+  });
 });

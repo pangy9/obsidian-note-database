@@ -3,6 +3,8 @@ import { ColumnDef, SortRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { createDropdownField } from "./DropdownField";
+import { isHTMLElement } from "./DomGuards";
 
 export interface SortPanelActions {
   save(): void;
@@ -69,6 +71,14 @@ export class SortPanelRenderer {
     actions: SortPanelActions
   ): void {
     const row = panel.createDiv({ cls: "db-panel-row db-sort-rule-row" });
+    row.draggable = true;
+    row.ondragstart = (event) => {
+      if (this.shouldIgnoreRuleDrag(event)) {
+        event.preventDefault();
+        return;
+      }
+      this.startDrag(event, index, row);
+    };
     row.ondragover = (event) => {
       event.preventDefault();
       row.addClass("is-drop-target");
@@ -78,9 +88,7 @@ export class SortPanelRenderer {
     row.ondragend = () => this.finishDrag();
 
     const drag = row.createSpan({ cls: "db-panel-drag", text: "⋮⋮" });
-    drag.draggable = true;
     drag.title = t("panel.dragToSort");
-    drag.ondragstart = (event) => this.startDrag(event, index, row);
 
     const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
     const upBtn = moveControls.createEl("button", {
@@ -104,28 +112,41 @@ export class SortPanelRenderer {
       this.moveRule(panel, config, state, actions, index, index + 1);
     };
 
-    const fieldSel = row.createEl("select");
-    for (const col of this.getSortColumns(config)) fieldSel.createEl("option", { value: col.key, text: col.label });
-    fieldSel.value = rule.field;
-    fieldSel.onchange = () => {
-      state.sortColumn = undefined;
-      state.sortDirection = "asc";
-      rule.field = fieldSel.value;
-      actions.save();
-      actions.refresh();
-    };
+    const columns = this.getSortColumns(config);
+    createDropdownField({
+      parent: row,
+      label: t("panel.field"),
+      options: columns.map((col) => ({ value: col.key, text: col.label })),
+      value: rule.field,
+      className: "db-panel-dropdown db-sort-field-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        state.sortColumn = undefined;
+        state.sortDirection = "asc";
+        rule.field = value;
+        actions.save();
+        actions.refresh();
+      },
+    });
 
-    const dirSel = row.createEl("select");
-    dirSel.createEl("option", { value: "asc", text: t("common.asc") });
-    dirSel.createEl("option", { value: "desc", text: t("common.desc") });
-    dirSel.value = rule.direction;
-    dirSel.onchange = () => {
-      state.sortColumn = undefined;
-      state.sortDirection = "asc";
-      rule.direction = dirSel.value as SortRule["direction"];
-      actions.save();
-      actions.refresh();
-    };
+    createDropdownField({
+      parent: row,
+      label: t("panel.sortDirection"),
+      options: [
+        { value: "asc", text: t("common.asc") },
+        { value: "desc", text: t("common.desc") },
+      ],
+      value: rule.direction,
+      className: "db-panel-dropdown db-sort-direction-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        state.sortColumn = undefined;
+        state.sortDirection = "asc";
+        rule.direction = value as SortRule["direction"];
+        actions.save();
+        actions.refresh();
+      },
+    });
 
     row.createEl("button", { cls: "db-panel-button", text: "×" }).onclick = () => {
       state.sortRules.splice(index, 1);
@@ -201,5 +222,10 @@ export class SortPanelRenderer {
     const columns = config.schema?.columns || [];
     if (columns.some((col) => col.key === "file.name")) return columns;
     return [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }, ...columns];
+  }
+
+  private shouldIgnoreRuleDrag(event: DragEvent): boolean {
+    return isHTMLElement(event.target)
+      && event.target.closest("input, select, textarea, button, .db-dropdown-field, .db-mobile-reorder-controls") != null;
   }
 }

@@ -7,6 +7,7 @@ import {
 } from "../../data/ColumnTypes";
 import { ColumnDef, StatusPresetDef, generateId } from "../../data/types";
 import { t } from "../../i18n";
+import { createDropdownField } from "../DropdownField";
 import { StatusOptionsModal } from "./StatusOptionsModal";
 
 export class StatusPresetManagerModal extends Modal {
@@ -60,15 +61,18 @@ export class StatusPresetManagerModal extends Modal {
   private renderDefaultSelector(): void {
     const row = this.contentEl.createDiv({ cls: "db-status-preset-default-row" });
     row.createSpan({ text: t("statusPresets.default") });
-    const select = row.createEl("select", { cls: "db-control-select" });
-    for (const preset of this.presets) {
-      select.createEl("option", { value: preset.id, text: preset.name });
-    }
-    select.value = this.defaultPresetId;
-    select.onchange = () => {
-      this.defaultPresetId = select.value;
+    createDropdownField({
+      parent: row,
+      label: t("statusPresets.default"),
+      options: this.presets.map((preset) => ({ value: preset.id, text: preset.name })),
+      value: this.defaultPresetId,
+      className: "db-modal-dropdown db-status-preset-default-dropdown",
+      hideLabel: true,
+      onChange: (value) => {
+        this.defaultPresetId = value;
       this.renderList();
-    };
+      },
+    });
   }
 
   private renderList(): void {
@@ -132,8 +136,8 @@ export class StatusPresetManagerModal extends Modal {
       type: "status",
       statusOptions: preset.options.map((option) => ({ ...option })),
     };
-    new StatusOptionsModal(this.app, col, async (options) => {
-      preset.options = options.map((option) => ({ ...option }));
+    new StatusOptionsModal(this.app, col, async (result) => {
+      preset.options = result.options.map((option) => ({ ...option }));
       this.renderList();
     }, [], false).open();
   }

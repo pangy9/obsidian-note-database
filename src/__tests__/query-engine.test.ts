@@ -39,4 +39,18 @@ describe("QueryEngine filters", () => {
     expect(engine.applyFilters(rows, [{ field: "tags", op: "hasTag", value: "#project" }], "and", columns).map((item) => item.file.path)).toEqual(["a.md"]);
     expect(engine.applyFilters(rows, [{ field: "file.tags", op: "hasTag", value: "project" }], "and", columns).map((item) => item.file.path)).toEqual(["a.md", "b.md"]);
   });
+
+  it("does not treat unrelated text values as equal just because they contain no digits", () => {
+    const engine = new QueryEngine();
+    const columns: ColumnDef[] = [
+      { key: "service", label: "Service", type: "text" },
+    ];
+    const rows = [
+      row("glm.md", { service: "GLM pro" }),
+      row("qq.md", { service: "QQ 音乐绿钻" }),
+      row("chatgpt.md", { service: "ChatGPT" }),
+    ];
+
+    expect(engine.applyFilters(rows, [{ field: "service", op: "eq", value: "QQ 音乐绿钻" }], "and", columns).map((item) => item.file.path)).toEqual(["qq.md"]);
+  });
 });

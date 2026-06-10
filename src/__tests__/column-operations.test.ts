@@ -325,6 +325,52 @@ describe("ColumnOperations", () => {
     expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
   });
 
+  it("deletes old frontmatter when a normal property is converted to a supported file field", async () => {
+    const customCol: ColumnDef = { key: "custom", label: "Custom", type: "text" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, customCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "custom"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops, propertyService } = makeOps(db, view);
+
+    await ops.renameColumn(customCol, { key: "file.path", label: "Path", migrateValues: true, wrap: false });
+
+    expect(customCol).toMatchObject({ key: "file.path", label: "Path", type: "text" });
+    expect(propertyService.renameKey).not.toHaveBeenCalled();
+    expect(propertyService.deleteKey).toHaveBeenCalledWith([], "custom");
+    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
+  });
+
+  it("does not create pending frontmatter values for file fields", () => {
+    const backlinksCol: ColumnDef = { key: "file.backlinks", label: "Backlinks", type: "text" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, backlinksCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "table",
+      name: "Table",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "file.backlinks"],
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops } = makeOps(db, view);
+    const getEnsureKeyChanges = (ops as unknown as {
+      getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): unknown[];
+    }).getEnsureKeyChanges.bind(ops);
+
+    expect(getEnsureKeyChanges(view, backlinksCol)).toEqual([]);
+  });
+
   it("preserves the database viewport after inserting or appending columns", async () => {
     const firstCol: ColumnDef = { key: "file.name", label: "Name", type: "text" };
     const secondCol: ColumnDef = { key: "status", label: "Status", type: "text" };

@@ -2106,7 +2106,7 @@ export class DatabaseView extends ItemView {
     );
     if (sourceConfig.typeFilter) frontmatter["type"] = sourceConfig.typeFilter;
     for (const col of config.schema.columns) {
-      if (col.key === "file.name" || col.type === "computed") continue;
+      if (isFileFieldKey(col.key) || col.type === "computed") continue;
       if (!Object.prototype.hasOwnProperty.call(frontmatter, col.key)) {
         frontmatter[col.key] = this.getDefaultCellValue(col);
       }

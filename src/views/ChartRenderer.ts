@@ -332,7 +332,7 @@ export class ChartRenderer {
 
   private renderChart(container: HTMLElement, result: ChartRenderResult): void {
     const colors = getThemeColors(container);
-    const wrap = container.createDiv({ cls: "db-chart" });
+    const wrap = this.createChartRoot(container, "db-chart");
     const canvas = wrap.createEl("canvas", { cls: "db-chart-canvas" });
     const config = this.lastRender?.config;
     const columns = this.lastRender?.columns || [];
@@ -548,7 +548,7 @@ export class ChartRenderer {
   }
 
   private renderEmptyState(container: HTMLElement, reason: ChartEmptyReason): void {
-    const empty = container.createDiv({ cls: "db-chart-empty" });
+    const empty = this.createChartRoot(container, "db-chart-empty");
     const icon = empty.createDiv({ cls: "db-chart-empty-icon" });
     setIcon(icon, "bar-chart");
     empty.createDiv({ cls: "db-chart-empty-text", text: getEmptyMessage(reason) });
@@ -661,7 +661,7 @@ export class ChartRenderer {
     const config = this.lastRender?.config;
     const columns = this.lastRender?.columns || [];
     const point = result.points[0];
-    const wrap = container.createDiv({ cls: "db-chart-number" });
+    const wrap = this.createChartRoot(container, "db-chart-number");
     const effectiveConfig = config || createFallbackChartConfig(columns);
     wrap.addClass(getChartHeightClass(effectiveConfig));
     if (config?.chartShowTitle !== false) {
@@ -671,6 +671,13 @@ export class ChartRenderer {
     }
     wrap.createDiv({ cls: "db-chart-number-value", text: formatChartNumber(point?.value ?? 0, config, columns) });
     wrap.createDiv({ cls: "db-chart-number-caption", text: getChartTypeLabel(config?.chartType) });
+  }
+
+  private createChartRoot(container: HTMLElement, cls: string): HTMLElement {
+    const root = container.createDiv({ cls });
+    const summary = container.querySelector(":scope > .db-summary");
+    if (summary?.parentElement) summary.parentElement.insertBefore(root, summary);
+    return root;
   }
 
   private createDataset(

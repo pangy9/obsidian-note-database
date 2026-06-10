@@ -121,6 +121,7 @@ export class ColumnOperations {
     if (!oldIsFileField && newIsFileField && result.migrateValues) {
       new Notice(t("fileField.migrationIgnored", { key: newKey }));
     }
+    const convertingToFileField = !oldIsFileField && newIsFileField;
     const useFrontmatterMigration = !oldIsFileField && !newIsFileField;
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
@@ -131,7 +132,9 @@ export class ColumnOperations {
       })
       : false;
     let migrationNotice = "";
-    const frontmatterChanges = useFrontmatterMigration
+    const frontmatterChanges = convertingToFileField
+      ? this.getDeleteKeyChanges(config, oldKey)
+      : useFrontmatterMigration
       ? this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey)
       : [];
     try {
@@ -153,6 +156,8 @@ export class ColumnOperations {
           }
         }
       } else if (useFrontmatterMigration && !isComputed && oldKey !== newKey) {
+        await this.propertySync.delete(config, targetCol);
+      } else if (convertingToFileField && !isComputed) {
         await this.propertySync.delete(config, targetCol);
       }
 
@@ -732,7 +737,7 @@ export class ColumnOperations {
   }
 
   private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {
-    if (col.key === "file.name" || col.type === "computed") return [];
+    if (isFileFieldKey(col.key) || col.type === "computed") return [];
     const defaultValue = this.deps.propertyService.getDefaultValue(col);
     return this.getRecords(config)
       .filter((record) => !Object.prototype.hasOwnProperty.call(record.frontmatter, col.key))

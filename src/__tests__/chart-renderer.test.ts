@@ -162,6 +162,18 @@ class FakeElement {
     return child;
   }
 
+  get parentElement(): FakeElement | null {
+    return this.parent;
+  }
+
+  insertBefore(child: FakeElement, anchor: FakeElement): void {
+    if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1);
+    child.parent = this;
+    const index = this.children.indexOf(anchor);
+    if (index < 0) this.children.push(child);
+    else this.children.splice(index, 0, child);
+  }
+
   remove(): void {
     if (!this.parent) return;
     this.parent.children.splice(this.parent.children.indexOf(this), 1);
@@ -170,6 +182,10 @@ class FakeElement {
   querySelectorAll(selector: string): FakeElement[] {
     const classes = selector.split(",").map((part) => part.trim().replace(/^\./, ""));
     return this.findAll((element) => classes.some((cls) => element.classList.contains(cls)));
+  }
+
+  querySelector(selector: string): FakeElement | null {
+    return this.querySelectorAll(selector.replace(/^:scope > /, ""))[0] || null;
   }
 
   private findAll(predicate: (element: FakeElement) => boolean): FakeElement[] {
@@ -296,6 +312,28 @@ describe("ChartRenderer", () => {
     expect(container.querySelectorAll(".db-chart-canvas")).toHaveLength(1);
     const chartOptions = chartCtor.mock.calls[0]?.[1] as { options: { animation: boolean } } | undefined;
     expect(chartOptions?.options.animation).toBe(false);
+  });
+
+  it("keeps rebuilt chart roots before an existing summary row", () => {
+    chartCtor.mockClear();
+    chartDestroy.mockClear();
+    const body = new FakeElement("body");
+    body.ownerDocument.defaultView = {
+      getComputedStyle: () => ({ getPropertyValue: () => "" }),
+    };
+    const container = new FakeElement("div", body.ownerDocument);
+    const renderer = new ChartRenderer();
+    const cfg = config();
+
+    renderer.render(container as unknown as HTMLElement, cfg, [
+      row("a.md", { status: "todo" }),
+    ], [column()]);
+    const summary = container.createDiv({ cls: "db-summary" });
+    renderer.render(container as unknown as HTMLElement, { ...cfg, chartType: "number" }, [
+      row("a.md", { status: "todo" }),
+    ], [column()]);
+
+    expect(container.children.indexOf(container.querySelector(".db-chart-number")!)).toBeLessThan(container.children.indexOf(summary));
   });
 
   it("destroys the chart and observer when a refresh moves into an empty state", () => {

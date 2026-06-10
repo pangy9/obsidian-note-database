@@ -150,6 +150,7 @@ describe("DatabaseView file field write guards", () => {
     expect(source).toContain('return col.key === "file.tags" ? "tags" : col.key');
     expect(source).toContain('if (target.key === "file.tags")');
     expect(source).toContain("!isReadonlyFileField(change.key)");
+    expect(source).toContain('if (isFileFieldKey(col.key) || col.type === "computed") continue;');
   });
 
   it("validates file.tags writes and shows labels in readonly notices", () => {

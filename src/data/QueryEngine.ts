@@ -191,8 +191,11 @@ export class QueryEngine {
   }
 
   private compareNumbers(left: string, right: string): number {
-    const a = Number(stringifyValue(left).replace(/[^0-9.-]/g, ""));
-    const b = Number(stringifyValue(right).replace(/[^0-9.-]/g, ""));
+    const leftText = stringifyValue(left).replace(/[^0-9.-]/g, "");
+    const rightText = stringifyValue(right).replace(/[^0-9.-]/g, "");
+    if (!/[0-9]/.test(leftText) || !/[0-9]/.test(rightText)) return Number.NaN;
+    const a = Number(leftText);
+    const b = Number(rightText);
     if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN;
     return a - b;
   }

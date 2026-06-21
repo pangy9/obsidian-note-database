@@ -62,6 +62,12 @@ describe("shared dropdown field adoption", () => {
     expect(styles).toContain(".note-database-container .db-view-config-inline-controls .db-view-config-dropdown");
     expect(styles).toContain(".note-database-container .db-status-preset-setting-dropdown");
     expect(styles).toContain(".note-database-settings .db-status-preset-setting-item .setting-item-control");
+    expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item")).toContain("grid-template-columns: minmax(0, 1fr) max-content");
+    expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-info")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-control")).toContain("flex: 0 0 auto");
+    expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-control")).toContain("min-width: max-content");
+    expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-name,\n.note-database-settings .setting-group-body .setting-item .setting-item-description")).toContain("white-space: normal");
+    expect(cssRule(styles, ".note-database-settings .db-settings-dropdown")).toContain("min-width: max-content");
     expect(styles).toContain(".note-database-settings .db-dropdown-field");
   });
 
@@ -94,6 +100,7 @@ describe("shared dropdown field adoption", () => {
     expect(summary).not.toContain("icon: \"sigma\"");
     expect(toolbar).toContain("openDropdownMenu");
     expect(toolbar).toContain("db-view-tabs-dropdown-popover");
+    expect(toolbar).toContain("db-view-tab-popover-chevron");
     expect(dropdown).toContain("icon?: string");
     expect(dropdown).toContain("searchable?: boolean");
     expect(dropdown).toContain("closeOnSelect?: boolean");
@@ -114,12 +121,25 @@ describe("shared dropdown field adoption", () => {
     expect(styles).toContain(".db-column-type-popover .db-column-type-option-icon");
     expect(styles).toContain(".note-database-container .db-dropdown-option.has-icon");
     expect(styles).toContain(".note-database-container .db-dropdown-option-icon");
+    expect(cssRule(styles, ".note-database-container .db-view-tab-popover-row")).toContain("grid-template-columns: 22px minmax(0, 1fr) 16px");
+    expect(cssRule(styles, ".note-database-container .db-view-tab-popover-marker,\n.note-database-container .db-view-tab-popover-chevron")).toContain("flex: 0 0 auto");
+    expect(cssRule(styles, ".note-database-container .db-view-tab-popover-label")).toContain("min-width: 0");
     expect(cssRule(styles, ".note-database-container .db-dropdown-popover")).toContain("max-height: min(360px, calc(100vh - 24px))");
     expect(cssRule(styles, ".note-database-container .db-dropdown-popover")).toContain("overflow-y: auto");
     expect(cssRule(styles, ".note-database-container .db-dropdown-popover")).toContain("overscroll-behavior: contain");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-field")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-option")).toContain("width: 100%");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-option")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-option-check,\n.note-database-container .db-dropdown-option-icon,\n.note-database-container .db-dropdown-option-swatches")).toContain("flex: 0 0 auto");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-field-icon,\n.note-database-container .db-dropdown-field-chevron")).toContain("flex: 0 0 auto");
     expect(styles).toContain(".note-database-container .db-dropdown-search");
     expect(cssRule(styles, ".note-database-modal .db-dropdown-popover")).toContain("overflow-y: auto");
     expect(cssRule(styles, ".note-database-settings .db-dropdown-popover")).toContain("overflow-y: auto");
+    expect(cssRule(styles, ".note-database-modal .db-dropdown-field")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-settings .db-dropdown-field")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-modal .db-dropdown-option")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-settings .db-dropdown-option")).toContain("min-width: 0");
+    expect(cssRule(styles, ".db-column-type-popover .db-dropdown-option")).toContain("min-width: 0");
     expect(dropdown).not.toContain("db-dropdown-section-separator");
     expect(styles).not.toContain("db-dropdown-section-separator");
     expect(cssRule(styles, ".note-database-container .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");

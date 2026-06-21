@@ -9,7 +9,7 @@ export interface RecordSchema {
 export interface ColumnDef {
   key: string;
   label: string;
-  type: "text" | "number" | "date" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed";
+  type: "text" | "number" | "date" | "datetime" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed";
   width?: number;
   urgency?: { enabled: boolean; thresholdDays: number };
   dateFormat?: string;
@@ -53,7 +53,7 @@ export interface ComputedFieldDef {
   key: string;
   label: string;
   expression: string;
-  type: "number" | "text" | "date" | "checkbox";
+  type: "number" | "text" | "date" | "datetime" | "checkbox";
   /** Expression language. Bases imports keep their native formula syntax. */
   expressionSyntax?: "note-database" | "base";
 }
@@ -100,7 +100,7 @@ export interface ViewModeStateDef {
   sortRules?: SortRule[];
 }
 
-export type DatabaseViewType = "table" | "board" | "gallery" | "list" | "chart";
+export type DatabaseViewType = "table" | "board" | "gallery" | "list" | "chart" | "calendar" | "timeline";
 export type ChartType = "bar" | "horizontal-bar" | "line" | "area" | "pie" | "donut" | "number" | "stacked-bar" | "grouped-bar" | "percent-stacked-bar" | "mixed";
 export type ChartAggregation =
   | "count"
@@ -131,6 +131,7 @@ export type ChartDonutCenterMode = "hidden" | "total" | "aggregation";
 export type ChartValueAxisRange = "auto" | "zero-based" | "custom";
 export type ChartReferenceLineType = "constant" | "average" | "median" | "min" | "max";
 export type ChartReferenceLineStyle = "solid" | "dashed" | "dotted";
+export type TimelineScale = "day" | "week" | "month" | "quarter";
 export type GroupOrderMode = "text-asc" | "text-desc" | "number-asc" | "number-desc" | "date-asc" | "date-desc" | "checkbox-false-first" | "checkbox-true-first" | "option-asc" | "option-desc" | "multi-select-priority";
 export const NO_TITLE_FIELD = "__none";
 
@@ -242,6 +243,7 @@ export interface ViewConfig {
   /** Board grouping property. Falls back to groupByField/status when absent. */
   boardGroupField?: string;
   /** Optional secondary board grouping property rendered inside each board column. */
+  boardSubgroupEnabled?: boolean;
   boardSubgroupField?: string;
   /** Shared board column width in pixels. */
   boardColumnWidth?: number;
@@ -263,6 +265,8 @@ export interface ViewConfig {
   groupByField?: string;
   /** Explicit group display order keyed by grouped property. */
   groupOrders?: Record<string, string[]>;
+  /** Override empty-group visibility keyed by grouped option/status/multi-select property. */
+  showEmptyGroups?: Record<string, boolean>;
   /** Collapsed group keys keyed by grouped property. */
   collapsedGroups?: Record<string, string[]>;
   /** Manual board card order keyed by board group field and group key. */
@@ -357,6 +361,70 @@ export interface ViewConfig {
   chartValueAxisMax?: number;
   /** Optional reference lines drawn on the value axis. */
   chartReferenceLines?: ChartReferenceLine[];
+  /** Date field used to place records on calendar views. */
+  calendarStartDateField?: string;
+  /** Active calendar month in YYYY-MM form. */
+  calendarMonth?: string;
+  /** Optional end date field used to span multi-day calendar events. */
+  calendarEndDateField?: string;
+  /** Optional title field used for calendar events. Falls back to titleField or file name. */
+  calendarTitleField?: string;
+  /** Optional status/select/multi-select field used to color calendar event cards. */
+  calendarColorField?: string;
+  /** Calendar day cell minimum height in pixels. */
+  calendarCellMinHeight?: number;
+  /** Keep calendar day cells close to a square aspect ratio when space allows. */
+  calendarKeepCellAspectRatio?: boolean;
+  /** Calendar display scale: month grid, week time grid, or single-day time grid. */
+  calendarScale?: "month" | "week" | "day";
+  /** Active calendar day in YYYY-MM-DD form. Used for day-view navigation. */
+  calendarDay?: string;
+  /** Column width mode for calendar grid. Undefined = adaptive. */
+  calendarColumnSizeMode?: "adaptive" | "custom";
+  /** Custom column width in pixels when calendarColumnSizeMode is "custom". */
+  calendarCustomColumnWidth?: number;
+  /** Row height mode for calendar month grid. Undefined = adaptive. */
+  calendarRowSizeMode?: "adaptive" | "custom";
+  /** Per-row custom heights keyed by row index (string) when calendarRowSizeMode is "custom". */
+  calendarCustomRowHeights?: Record<string, number>;
+  /** Week view time slot duration in minutes. Default 30. */
+  calendarWeekSlotDuration?: 15 | 30 | 60;
+  /** First visible hour in week/day time grids. Default 0. */
+  calendarStartHour?: number;
+  /** Last visible hour in week/day time grids. Default 24. */
+  calendarEndHour?: number;
+  /** Pixel height per hour in week/day time grids. Default 48. */
+  calendarHourHeight?: number;
+  /** Start date of the displayed week in YYYY-MM-DD format. Used for week-view navigation. */
+  calendarWeekStart?: string;
+  /** Max visible all-day event lanes before the rest collapse into a "+N" row. Default 2. */
+  calendarAllDayMaxLanes?: number;
+  /** Day the calendar week starts on (0=Sun, 1=Mon, 6=Sat). Undefined follows the locale. */
+  calendarFirstDayOfWeek?: 0 | 1 | 6;
+  /** 日期年份显示：always 始终显示（默认）/ smart 当年隐藏 / never 始终隐藏。视图级，各视图设置面板可配。 */
+  yearDisplayMode?: "always" | "smart" | "never";
+  /** Max visible event lanes per month day before collapsing into "+N". Undefined derives from row height. */
+  calendarMonthVisibleLanes?: number;
+  /** Date field used to place records on timeline views. */
+  timelineStartDateField?: string;
+  /** Optional end date field used to span timeline events. */
+  timelineEndDateField?: string;
+  /** Optional grouping field used to split timeline lanes. */
+  timelineGroupField?: string;
+  /** Optional title field used for timeline events. Falls back to titleField or file name. */
+  timelineTitleField?: string;
+  /** Optional status/select/multi-select field used to color timeline event bars. */
+  timelineColorField?: string;
+  /** Timeline scale / window span: day=hourly single day, week/month/quarter=daily columns (quarter uses weekly ticks). Week is the default. */
+  timelineScale?: TimelineScale;
+  /** Anchor date (YYYY-MM-DD) the visible window is centered on; defaults to today. */
+  timelineAnchor?: string;
+  /** Start minute of the active day-scale timeline window. Only used when timelineScale is "day". */
+  timelineAnchorTimeMinutes?: number;
+  /** Column width mode: "custom" lets users resize the unit width. */
+  timelineColumnSizeMode?: "auto" | "custom";
+  /** Custom column-unit width in px when timelineColumnSizeMode is "custom". */
+  timelineCustomUnitWidth?: number;
   /** Per-renderer state so table and board can keep independent visible columns, filters, and sorting. */
   viewStates?: Partial<Record<DatabaseViewType, ViewModeStateDef>>;
 }

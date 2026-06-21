@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import { getDefaultChartValueField, isChartAggregationValueColumn, isChartCheckboxGroupColumn, isChartDateGroupColumn, isChartNumberGroupColumn, isChartSeriesColumn, isChartValueColumn, parseNumberBucketKey, requiresChartValueField, toChartNumber } from "./ChartAggregation";
 import { isObsidianTagsKey, normalizeObsidianTagValue } from "./ColumnTypes";
+import { isDateLikeColumnType } from "./DateTimeFormat";
 import { stringifyValue } from "./Stringify";
 import { ChartDateBucket, ColumnDef, ComputedFieldDef, FilterRule, RowData, ViewConfig } from "./types";
 
@@ -55,7 +56,7 @@ export function getAggregationTitle(aggregation: ViewConfig["chartAggregation"])
 export function getChartGroupLabel(config: ViewConfig, columns: ColumnDef[]): string {
   const column = config.chartGroupField ? columns.find((col) => col.key === config.chartGroupField) : undefined;
   if (!column) return t("viewConfig.chartGroupFieldNone");
-  if (column.type === "date" && config.chartDateBucket) {
+  if (isDateLikeColumnType(column.type) && config.chartDateBucket) {
     return t("chart.autoTitleDateGroup", {
       bucket: getDateBucketTitle(config.chartDateBucket),
       field: column.label || column.key,

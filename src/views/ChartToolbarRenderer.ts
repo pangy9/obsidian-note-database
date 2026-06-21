@@ -24,7 +24,7 @@ import { createDropdownField, DropdownOption } from "./DropdownField";
 import { PROPERTY_TYPE_ICON_NAMES, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 
 export interface ChartToolbarActions {
-  onChange(): void;
+  onChange(label?: string): void;
   onExportImage?(): void;
   onCopyPng?(): void;
 }
@@ -394,7 +394,7 @@ export class ChartToolbarRenderer {
       normalizeChartConfigForType(config);
       normalizeChartAggregationForValueField(config);
       if ((config.chartType || "bar") === "mixed") normalizeChartSecondaryAggregationForValueField(config);
-      actions.onChange();
+      actions.onChange(t("undo.chartTypeConfig"));
       this.refreshOpenPopover(containerEl, config, actions);
     }, "bar-chart");
     if ((config.chartType || "bar") !== "number") {
@@ -411,27 +411,27 @@ export class ChartToolbarRenderer {
           : undefined;
         if (!config.chartNumberBucket) config.chartNumberBucketSize = undefined;
         config.chartHiddenGroups = undefined;
-        actions.onChange();
+        actions.onChange(t("undo.chartGroupConfig"));
         this.refreshOpenPopover(containerEl, config, actions);
-      }, "group", false, true);
+        }, "group", false, true);
       if (isSelectedGroupDateField(config)) {
         this.renderSelect(section, t("chart.toolbarBucket"), getDateBucketOptions(), config.chartDateBucket || "month", (value) => {
           config.chartDateBucket = value as ChartDateBucket;
-          actions.onChange();
+          actions.onChange(t("undo.chartDateBucketConfig"));
         }, "calendar-days");
       }
       if (isSelectedGroupNumberField(config)) {
         this.renderSelect(section, t("chart.toolbarBucket"), getNumberBucketOptions(), config.chartNumberBucket || "auto", (value) => {
           config.chartNumberBucket = value as ChartNumberBucket;
           if (config.chartNumberBucket !== "fixed") config.chartNumberBucketSize = undefined;
-          actions.onChange();
+          actions.onChange(t("undo.chartNumberBucketConfig"));
           this.refreshOpenPopover(containerEl, config, actions);
         }, "ruler");
         if ((config.chartNumberBucket || "auto") === "fixed") {
           this.renderTextInput(section, t("chart.numberBucketSize"), String(config.chartNumberBucketSize || ""), "10", (value) => {
             const size = Number(value);
             config.chartNumberBucketSize = Number.isFinite(size) && size > 0 ? size : undefined;
-            actions.onChange();
+            actions.onChange(t("undo.chartNumberBucketSizeConfig"));
           }, "hash");
         }
       }
@@ -445,7 +445,7 @@ export class ChartToolbarRenderer {
         this.renderSelect(section, t("chart.toolbarSubgroup"), options, getSelectedSeriesField(config) || "", (value) => {
           config.chartSeriesField = value || undefined;
           config.chartStackField = config.chartSeriesField;
-          actions.onChange();
+          actions.onChange(t("undo.chartSubgroupConfig"));
         }, "layers", false, true);
       }
     }
@@ -465,17 +465,17 @@ export class ChartToolbarRenderer {
       { value: "label-desc", text: t("chart.sortLabelDesc") },
     ], config.chartSortBy || "option-order", (value) => {
       config.chartSortBy = value as ViewConfig["chartSortBy"];
-      actions.onChange();
+      actions.onChange(t("undo.chartSortConfig"));
     }, "arrow-up-down");
     this.renderSwitch(section, t("chart.omitZeroValues"), config.chartOmitZeroValues === true, (checked) => {
       config.chartOmitZeroValues = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartOmitZeroValuesConfig"));
     }, "eye-off");
     const cumulativeSupported = isChartCumulativeSupported(config);
     if (!cumulativeSupported) config.chartCumulative = false;
     this.renderSwitch(section, t("chart.cumulative"), config.chartCumulative === true && cumulativeSupported, (checked) => {
       config.chartCumulative = checked && isChartCumulativeSupported(config);
-      actions.onChange();
+      actions.onChange(t("undo.chartCumulativeConfig"));
       this.syncCumulativeSwitch(section, config);
     }, "trending-up", !cumulativeSupported, "cumulative", t("chart.disabledCumulative"));
   }
@@ -524,7 +524,7 @@ export class ChartToolbarRenderer {
     this.renderSelect(section, t("chart.toolbarValue"), getChartMeasureFieldOptions(config), fieldKey || "", (value) => {
       this.setChartValueField(config, slot, value || undefined);
       if (slot === "primary") this.syncCumulativeSwitch(this.popover || section, config);
-      actions.onChange();
+      actions.onChange(t("undo.chartValueFieldConfig"));
       this.refreshChartAggregationOptions(section, config, actions, slot);
     }, "hash", false, true);
     this.renderChartAggregationOptions(section, config, actions, slot);
@@ -539,7 +539,7 @@ export class ChartToolbarRenderer {
         this.setChartAggregation(config, slot, option.value as ViewConfig["chartAggregation"]);
         this.syncChartAggregationSelection(section, option.value);
         if (slot === "primary") this.syncCumulativeSwitch(this.popover || section, config);
-        actions.onChange();
+        actions.onChange(t("undo.chartAggregationConfig"));
         this.refreshValueAggregationControls(section, config, actions, slot);
       });
     }
@@ -646,18 +646,18 @@ export class ChartToolbarRenderer {
     const section = this.createSection(panel, t("chart.optionsStyle"));
     this.renderSelect(section, t("chart.colorPalette"), getColorPaletteOptions(), config.chartColorPalette || "auto", (value) => {
       config.chartColorPalette = value as ViewConfig["chartColorPalette"];
-      actions.onChange();
+      actions.onChange(t("undo.chartColorPaletteConfig"));
     }, "palette");
     this.renderSwitch(section, t("chart.colorByValue"), config.chartColorByValue === true, (checked) => {
       config.chartColorByValue = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartColorByValueConfig"));
     }, "paint-bucket", !["bar", "horizontal-bar"].includes(config.chartType || "bar"), undefined, t("chart.disabledBarOnly"));
     this.renderPopoverEntry(section, t("chart.optionsStyleEntry"), "", "paintbrush", (anchor) => {
       this.openStylePopover(containerEl, anchor, config, actions);
     });
     this.renderTextInput(section, t("chart.title"), config.chartTitle || "", getChartAutoTitle(config, config.schema.columns), (value) => {
       config.chartTitle = value.trim() || undefined;
-      actions.onChange();
+      actions.onChange(t("undo.chartTitleConfig"));
     }, "text-cursor-input");
   }
 
@@ -678,15 +678,23 @@ export class ChartToolbarRenderer {
       { value: "xlarge", text: t("chart.heightXLarge") },
     ], config.chartHeight || "medium", (value) => {
       config.chartHeight = value as ViewConfig["chartHeight"];
-      actions.onChange();
+      actions.onChange(t("undo.chartHeightConfig"));
     }, "chart:ruler-vertical");
+    this.renderSelect(section, t("viewConfig.yearDisplayMode"), [
+      { value: "always", text: t("viewConfig.yearDisplayMode.always") },
+      { value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
+      { value: "never", text: t("viewConfig.yearDisplayMode.never") },
+    ], config.yearDisplayMode || "always", (value) => {
+      config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
+      actions.onChange(t("undo.yearDisplayModeConfig"));
+    }, "calendar");
     this.renderSelect(section, t("chart.gridLines"), [
       { value: "none", text: t("chart.gridNone") },
       { value: "value", text: t("chart.gridValue") },
       { value: "both", text: t("chart.gridBoth") },
     ], config.chartGridLines || "value", (value) => {
       config.chartGridLines = value as ViewConfig["chartGridLines"];
-      actions.onChange();
+      actions.onChange(t("undo.chartGridLinesConfig"));
     }, "chart:grid-horizontal");
     this.renderSelect(section, t("chart.axisNames"), [
       { value: "none", text: t("chart.axisNone") },
@@ -695,7 +703,7 @@ export class ChartToolbarRenderer {
       { value: "both", text: t("chart.axisBoth") },
     ], config.chartAxisNames || "none", (value) => {
       config.chartAxisNames = value as ViewConfig["chartAxisNames"];
-      actions.onChange();
+      actions.onChange(t("undo.chartAxisNamesConfig"));
     }, "chart:axis-xy");
     if (!isAxislessChart(config.chartType)) {
       this.renderSelect(section, t("chart.valueAxisRange"), getAxisRangeOptions(), config.chartValueAxisRange || "auto", (value) => {
@@ -704,55 +712,55 @@ export class ChartToolbarRenderer {
           config.chartValueAxisMin = undefined;
           config.chartValueAxisMax = undefined;
         }
-        actions.onChange();
+        actions.onChange(t("undo.chartAxisRangeConfig"));
       }, "ruler");
       if ((config.chartValueAxisRange || "auto") === "custom") {
         this.renderTextInput(section, t("chart.axisMin"), valueToInput(config.chartValueAxisMin), "0", (value) => {
           config.chartValueAxisMin = parseOptionalNumber(value);
-          actions.onChange();
+          actions.onChange(t("undo.chartAxisMinConfig"));
         }, "minus");
         this.renderTextInput(section, t("chart.axisMax"), valueToInput(config.chartValueAxisMax), "100", (value) => {
           config.chartValueAxisMax = parseOptionalNumber(value);
-          actions.onChange();
+          actions.onChange(t("undo.chartAxisMaxConfig"));
         }, "plus");
       }
       this.renderReferenceLinesSection(section, config, actions);
     }
     this.renderSwitch(section, t("chart.showTitle"), config.chartShowTitle !== false, (checked) => {
       config.chartShowTitle = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartShowTitleConfig"));
     }, "heading");
     this.renderSwitch(section, t("chart.showDataLabels"), config.chartShowDataLabels === true, (checked) => {
       config.chartShowDataLabels = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartDataLabelsConfig"));
       this.refreshOpenPopover(undefined, config, actions);
     }, "chart:data-labels");
     if (config.chartShowDataLabels === true) {
       this.renderSelect(section, t("chart.dataLabelMode"), getDataLabelModeOptions(), config.chartDataLabelMode || "value", (value) => {
         config.chartDataLabelMode = value as ViewConfig["chartDataLabelMode"];
-        actions.onChange();
+        actions.onChange(t("undo.chartDataLabelModeConfig"));
       }, "chart:data-labels");
       this.renderSelect(section, t("chart.dataLabelColor"), getDataLabelColorOptions(), config.chartDataLabelColor || "auto", (value) => {
         config.chartDataLabelColor = value as ViewConfig["chartDataLabelColor"];
-        actions.onChange();
+        actions.onChange(t("undo.chartDataLabelColorConfig"));
       }, "palette");
     }
     this.renderSwitch(section, t("chart.showLegend"), config.chartShowLegend !== false, (checked) => {
       config.chartShowLegend = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartLegendConfig"));
     }, "list");
     this.renderSwitch(section, t("chart.smoothLine"), config.chartSmoothLine !== false, (checked) => {
       config.chartSmoothLine = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartSmoothLineConfig"));
     }, "activity", !["line", "area", "mixed"].includes(config.chartType || "bar"), undefined, t("chart.disabledLineAreaMixed"));
     this.renderSwitch(section, t("chart.gradientArea"), config.chartGradientArea === true, (checked) => {
       config.chartGradientArea = checked;
-      actions.onChange();
+      actions.onChange(t("undo.chartGradientAreaConfig"));
     }, "blend", !["line", "area", "mixed"].includes(config.chartType || "bar"), undefined, t("chart.disabledLineAreaMixed"));
     this.renderSelect(section, t("chart.donutCenter"), getDonutCenterModeOptions(), config.chartDonutCenterMode || (config.chartShowDonutCenter === true ? "total" : "hidden"), (value) => {
       config.chartDonutCenterMode = value as ViewConfig["chartDonutCenterMode"];
       config.chartShowDonutCenter = value !== "hidden";
-      actions.onChange();
+      actions.onChange(t("undo.chartDonutCenterConfig"));
     }, "circle-dot", (config.chartType || "bar") !== "donut", false, t("chart.disabledDonutOnly"));
   }
 
@@ -776,7 +784,7 @@ export class ChartToolbarRenderer {
       });
       addLine.onclick = () => {
         config.chartReferenceLines = [...(config.chartReferenceLines || []), createReferenceLine("constant")];
-        actions.onChange();
+        actions.onChange(t("undo.chartReferenceLineAddConfig"));
         render();
       };
     };
@@ -789,22 +797,22 @@ export class ChartToolbarRenderer {
       line.type = value as ChartReferenceLine["type"];
       if (line.type !== "constant") line.value = undefined;
       else if (line.value == null) line.value = 0;
-      actions.onChange();
+      actions.onChange(t("undo.chartReferenceLineTypeConfig"));
       rerender();
     }, "activity");
     this.renderTextInput(wrap, t("chart.title"), line.label || "", t(`chart.referenceLine${capitalizeReferenceType(line.type)}`), (value) => {
       line.label = value.trim() || undefined;
-      actions.onChange();
+      actions.onChange(t("undo.chartReferenceLineTitleConfig"));
     }, "text-cursor-input");
     if (line.type === "constant") {
       this.renderTextInput(wrap, t("chart.toolbarValue"), valueToInput(line.value), "0", (value) => {
         line.value = parseOptionalNumber(value);
-        actions.onChange();
+        actions.onChange(t("undo.chartReferenceLineValueConfig"));
       }, "hash");
     }
     this.renderSelect(wrap, t("chart.referenceLineStyle"), getReferenceLineStyleOptions(), line.style || "solid", (value) => {
       line.style = value as ChartReferenceLine["style"];
-      actions.onChange();
+      actions.onChange(t("undo.chartReferenceLineStyleConfig"));
     }, "minus");
     this.renderReferenceLineColorPicker(wrap, line, actions);
     const remove = wrap.createEl("button", { cls: "db-chart-reference-line-remove", attr: { type: "button", "aria-label": t("toolbar.delete") } });
@@ -812,7 +820,7 @@ export class ChartToolbarRenderer {
     remove.onclick = () => {
       config.chartReferenceLines = (config.chartReferenceLines || []).filter((candidate) => candidate !== line);
       if (config.chartReferenceLines.length === 0) config.chartReferenceLines = undefined;
-      actions.onChange();
+      actions.onChange(t("undo.chartReferenceLineRemoveConfig"));
       rerender();
     };
   }
@@ -836,7 +844,7 @@ export class ChartToolbarRenderer {
       button.style.background = option.color;
       button.onclick = () => {
         line.color = option.value || undefined;
-        actions.onChange();
+        actions.onChange(t("undo.chartReferenceLineColorConfig"));
         swatches.querySelectorAll(".db-chart-reference-line-swatch").forEach((el) => el.removeClass("is-selected"));
         button.addClass("is-selected");
       };
@@ -879,7 +887,7 @@ export class ChartToolbarRenderer {
           config.chartHiddenGroups = config.chartHiddenGroups || {};
           if (checked) delete config.chartHiddenGroups[group];
           else config.chartHiddenGroups[group] = true;
-          actions.onChange();
+          actions.onChange(t("undo.chartVisibleGroupsConfig"));
         });
       }
     }, { minWidth: 220, preferredWidth: 280, maxWidth: 320 });

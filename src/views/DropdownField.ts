@@ -49,6 +49,7 @@ export interface DropdownMenuOptions {
 }
 
 export function createDropdownField(options: DropdownFieldOptions): DropdownFieldHandle {
+  let currentValue = options.value;
   const button = options.parent.createEl("button", {
     cls: `db-dropdown-field${options.className ? ` ${options.className}` : ""}`,
     attr: { type: "button", "aria-haspopup": "listbox", "aria-expanded": "false" },
@@ -65,7 +66,7 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
   }
   const text = button.createDiv({ cls: "db-dropdown-field-text" });
   if (!options.hideLabel) text.createSpan({ cls: "db-dropdown-field-label", text: options.label });
-  const valueEl = text.createSpan({ cls: "db-dropdown-field-value", text: getOptionText(options.options, options.value) || options.placeholder || "" });
+  const valueEl = text.createSpan({ cls: "db-dropdown-field-value", text: getOptionText(options.options, currentValue) || options.placeholder || "" });
   if (options.disabled && options.disabledReason) {
     text.createSpan({ cls: "db-dropdown-field-disabled-reason", text: options.disabledReason });
   }
@@ -83,7 +84,14 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
       close();
       return;
     }
-    cleanup = openDropdownPopover(button, options, valueEl, close);
+    cleanup = openDropdownPopover(button, {
+      ...options,
+      value: currentValue,
+      onChange: (value) => {
+        currentValue = value;
+        options.onChange(value);
+      },
+    }, valueEl, close);
     button.setAttr("aria-expanded", "true");
   };
   return { button, valueEl, close };

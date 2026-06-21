@@ -192,7 +192,7 @@ export class ColumnMenu {
     panel.setAttr("role", "listbox");
     const labels = COLUMN_TYPE_LABELS();
     const groups: Array<{ title: string; types: ColumnDef["type"][] }> = [
-      { title: t("columnType.group.basic"), types: ["text", "number", "date", "currency", "checkbox"] },
+      { title: t("columnType.group.basic"), types: ["text", "number", "date", "datetime", "currency", "checkbox"] },
       { title: t("columnType.group.options"), types: ["select", "multi-select", "status"] },
       { title: t("columnType.group.advanced"), types: ["computed"] },
     ];

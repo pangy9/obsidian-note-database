@@ -1,6 +1,7 @@
 import { ColumnDef, ComputedFieldDef } from "./types";
 import { safeEval } from "./SafeEval";
 import { safeString } from "./SafeString";
+import { hasDateTimeValue } from "./DateTimeFormat";
 import type { MomentConstructor, MomentLike } from "./MomentTypes";
 import { t } from "../i18n";
 
@@ -206,6 +207,25 @@ export class ComputedFieldEngine {
         const md = parseMoment(d);
         return md ? md.date() : null;
       },
+      hour: (d: string) => {
+        if (d == null) return null;
+        const md = parseMoment(d);
+        return md ? md.hour() : null;
+      },
+      minute: (d: string) => {
+        if (d == null) return null;
+        const md = parseMoment(d);
+        return md ? md.minute() : null;
+      },
+      second: (d: string) => {
+        if (d == null) return null;
+        const md = parseMoment(d);
+        return md ? md.second() : null;
+      },
+      time: (h: number, m: number, s = 0) => {
+        const pad = (n: number) => String(Number(n) || 0).padStart(2, "0");
+        return `${pad(h)}:${pad(m)}:${pad(s)}`;
+      },
       concat: (...args: string[]) => args.filter(a => a != null).join(""),
       // String functions
       trim: (s: unknown) => (s != null ? safeString(s).trim() : ""),
@@ -323,6 +343,10 @@ export class ComputedFieldEngine {
       YEAR: context.year,
       MONTH: context.month,
       DAY: context.day,
+      HOUR: context.hour,
+      MINUTE: context.minute,
+      SECOND: context.second,
+      TIME: context.time,
       EOMONTH: context.eomonth,
       WEEKDAY: context.weekday,
       WEEKNUM: context.weeknum,
@@ -530,11 +554,16 @@ export class ComputedFieldEngine {
     return value;
   }
 
+  /** 原值带时间时保留时间精度（产出 datetime），否则纯日期。 */
+  private formatMoment(md: MomentLike, originalDate: string): string {
+    return hasDateTimeValue(originalDate) ? md.format("YYYY-MM-DD HH:mm:ss") : md.format("YYYY-MM-DD");
+  }
+
   private addDays(date: string, days: number): string {
     if (date == null) return "";
     const md = parseMoment(date);
     if (!md) return "";
-    return md.add(Number(days) || 0, "days").format("YYYY-MM-DD");
+    return this.formatMoment(md.add(Number(days) || 0, "days"), date);
   }
 
   private dateAdd(date: string, amount: number, unit: unknown): string {
@@ -548,8 +577,14 @@ export class ComputedFieldEngine {
         ? "years"
         : normalizedUnit.startsWith("week")
           ? "weeks"
-          : "days";
-    return md.add(Number(amount) || 0, safeUnit).format("YYYY-MM-DD");
+          : normalizedUnit.startsWith("hour")
+            ? "hours"
+            : normalizedUnit.startsWith("minute")
+              ? "minutes"
+              : normalizedUnit.startsWith("second")
+                ? "seconds"
+                : "days";
+    return this.formatMoment(md.add(Number(amount) || 0, safeUnit), date);
   }
 
   private formatText(value: unknown, format: string): string {

@@ -99,6 +99,22 @@ describe("SummaryRenderer", () => {
     expect(container.allText()).toEqual(["Total", "2"]);
   });
 
+  it("does not render summaries for calendar and timeline views", () => {
+    for (const viewType of ["calendar", "timeline"] as const) {
+      const container = new FakeElement("div");
+      const renderer = new SummaryRenderer();
+      renderer.render(container as unknown as HTMLElement, [
+        row("a.md", { amount: 2 }),
+      ], config());
+
+      renderer.render(container as unknown as HTMLElement, [
+        row("a.md", { amount: 2 }),
+      ], { ...config({ amount: "SUM" }), viewType });
+
+      expect(container.allText()).toEqual([]);
+    }
+  });
+
   it("renders an opt-in SUM summary from view summaryRules", () => {
     const container = new FakeElement("div");
 

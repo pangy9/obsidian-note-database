@@ -1,7 +1,10 @@
 import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
+import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { formatGroupKeyDisplay } from "../data/GroupDisplay";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
@@ -10,6 +13,7 @@ import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
+import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -66,6 +70,7 @@ export class GalleryRenderer {
   private resizeState?: { startX: number; startWidth: number; gallery: HTMLElement };
   private rowByPath = new Map<string, RowData>();
   private draggingPath: string | undefined;
+  private rowDropFeedback = new DragDropFeedbackState();
 
   constructor(private app: App, private actions: GalleryRendererActions) {}
 
@@ -99,7 +104,7 @@ export class GalleryRenderer {
         this.actions.toggleGroupCollapsed?.(groupField, group.key);
       };
       this.renderGroupCheckbox(header, group.rows);
-      header.createSpan({ cls: "db-gallery-group-title", text: group.key || t("common.uncategorized") });
+      header.createSpan({ cls: "db-gallery-group-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
       header.createSpan({ cls: "db-gallery-group-count", text: String(group.count) });
       if (collapsed) continue;
       const gallery = this.createGallery(section, config);
@@ -253,8 +258,9 @@ export class GalleryRenderer {
         if (this.canManualReorder(config)) menu.addSeparator();
         for (const group of groups) {
           if (group.key === groupKey) continue;
+          const groupLabel = formatGroupKeyDisplay(config, groupField, group.key);
           menu.addItem((item) => item
-            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setTitle(`${t("mobile.moveTo")} ${groupLabel}`)
             .setIcon("folder-input")
             .onClick(() => {
               const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
@@ -319,20 +325,17 @@ export class GalleryRenderer {
     card.addEventListener("dragend", () => {
       this.draggingPath = undefined;
       card.removeClass("is-dragging");
-      this.clearDropTargets(card.parentElement);
+      this.rowDropFeedback.clear();
     });
     card.addEventListener("dragover", (event) => {
       const dragPath = this.draggingPath;
       if (!dragPath || dragPath === row.file.path) return;
       if (!this.isRowDrag(event)) return;
       event.preventDefault();
-      const rect = card.getBoundingClientRect();
-      const isAfter = event.clientX > rect.left + rect.width / 2;
-      card.toggleClass("is-drop-after", isAfter);
-      card.toggleClass("is-drop-before", !isAfter);
+      this.rowDropFeedback.update(card, resolveDropPlacement(card, event, "horizontal"));
     });
     card.addEventListener("dragleave", () => {
-      card.removeClass("is-drop-before", "is-drop-after");
+      this.rowDropFeedback.clearTarget(card);
     });
     card.addEventListener("drop", (event) => {
       if (!this.isRowDrag(event)) return;
@@ -342,9 +345,9 @@ export class GalleryRenderer {
       event.preventDefault();
       event.stopPropagation();
       this.draggingPath = undefined;
-      this.clearDropTargets(card.parentElement);
-      const rect = card.getBoundingClientRect();
-      const isAfter = event.clientX > rect.left + rect.width / 2;
+      const placement = this.rowDropFeedback.getPlacement(card) || resolveDropPlacement(card, event, "horizontal");
+      this.rowDropFeedback.clear();
+      const isAfter = placement === "after";
       const currentPaths = rows.map((r) => r.file.path).filter((path) => path !== dragPath);
       const targetIndex = currentPaths.indexOf(row.file.path);
       const beforePath = isAfter ? row.file.path : (targetIndex > 0 ? currentPaths[targetIndex - 1] : undefined);
@@ -361,13 +364,6 @@ export class GalleryRenderer {
       } else {
         this.actions.moveRowToPosition(dragPath, beforePath, afterPath);
       }
-    });
-  }
-
-  private clearDropTargets(parent: HTMLElement | null): void {
-    if (!parent) return;
-    parent.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
-      el.classList.remove("is-drop-before", "is-drop-after");
     });
   }
 
@@ -397,8 +393,7 @@ export class GalleryRenderer {
   }
 
   private canManualReorder(config: ViewConfig): boolean {
-    if (config.sortColumn) return false;
-    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
+    return !isExplicitlySorted(config);
   }
 
   private isPhoneLayout(): boolean {
@@ -522,6 +517,14 @@ export class GalleryRenderer {
       const values = toMultiSelectValuesForKey(col.key, value);
       setFieldTooltip(wrap, values);
       for (const entry of values) this.renderBadge(wrap, col, entry);
+      return;
+    }
+    if (displayType === "date" || displayType === "datetime") {
+      valueEl.addClass("db-date-value");
+      valueEl.textContent = displayType === "datetime"
+        ? formatDateTimeValueDisplay(value, { mode: "full", showTimeWhenMissing: true })
+        : formatDateValueDisplay(value);
+      setFieldTooltip(valueEl, valueEl.textContent);
       return;
     }
 
@@ -715,6 +718,7 @@ export class GalleryRenderer {
   }
 
   private clear(container: HTMLElement): void {
+    this.rowDropFeedback.clear();
     container.querySelectorAll(".db-gallery, .db-gallery-grouped, .db-gallery-total-header").forEach((el) => el.remove());
   }
 }

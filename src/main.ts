@@ -20,6 +20,7 @@ import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnTyp
 import { setLocale, t } from "./i18n";
 import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
+import { hasDateTimeValue, parseDateTimeParts } from "./data/DateTimeFormat";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
 import { safeString, isRecord } from "./data/SafeString";
 import { isElement } from "./views/DomGuards";
@@ -1147,7 +1148,9 @@ export default class NoteDatabasePlugin extends Plugin {
     const lower = cleaned.map((value) => value.toLowerCase());
     if (lower.every((value) => ["true", "false", "yes", "no", "checked", "unchecked"].includes(value))) return "checkbox";
     if (cleaned.every((value) => Number.isFinite(Number(value.replace(/[$,¥￥€£\s]/g, ""))))) return "number";
-    if (cleaned.every((value) => Number.isFinite(Date.parse(value))) && cleaned.some((value) => /\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value))) return "date";
+    if (cleaned.every((value) => Number.isFinite(Date.parse(value))) && cleaned.some((value) => /\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value))) {
+      return cleaned.some((value) => hasDateTimeValue(value)) ? "datetime" : "date";
+    }
     if (cleaned.some((value) => value.includes(","))) return "multi-select";
     const unique = new Set(cleaned);
     if (unique.size <= Math.min(12, Math.max(3, Math.ceil(cleaned.length / 2)))) return "select";
@@ -1162,8 +1165,12 @@ export default class NoteDatabasePlugin extends Plugin {
       return Number.isFinite(n) ? n : text;
     }
     if (type === "date") {
-      const parsed = new Date(text);
-      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+      const parts = parseDateTimeParts(text);
+      return parts ? parts.dateKey : text;
+    }
+    if (type === "datetime") {
+      const parts = parseDateTimeParts(text);
+      if (parts) return `${parts.dateKey}T${parts.time || "00:00"}`;
       return text;
     }
     if (type === "checkbox") {

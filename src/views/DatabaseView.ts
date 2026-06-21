@@ -30,6 +30,8 @@ import {
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
+import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { setShowEmptyGroups, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { CellOptionTransaction, CellRenderer } from "./CellRenderer";
@@ -38,7 +40,12 @@ import { ColumnHeaderController } from "./ColumnHeaderController";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { RowMenu } from "./RowMenu";
 import { TableRenderer } from "./TableRenderer";
-import { captureDatabaseViewport, restoreDatabaseViewport } from "./DatabaseViewport";
+import {
+  captureDatabaseViewport,
+  DatabaseViewportRequest,
+  resolveDatabaseViewportMode,
+  restoreDatabaseViewport,
+} from "./DatabaseViewport";
 
 import { SummaryRenderer } from "./SummaryRenderer";
 import { FilterPanelRenderer } from "./FilterPanelRenderer";
@@ -53,6 +60,10 @@ import { ListRenderer } from "./ListRenderer";
 import { ChartRenderer } from "./ChartRenderer";
 import { ChartToolbarRenderer } from "./ChartToolbarRenderer";
 import { getDefaultChartDateBucket, getDefaultChartField, getDefaultChartNumberBucket } from "../data/ChartAggregation";
+import { getDefaultEventDateField, getTimelineDayNonDateTimeColumns } from "../data/CalendarTimelineModel";
+import { CalendarTimelineCreateOptions, CalendarTimelineDateChange, CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
+import { CalendarRenderer } from "./CalendarRenderer";
+import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ColumnRenameModal } from "./modals/ColumnRenameModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
@@ -61,7 +72,9 @@ import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportCon
 import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
-import { getComputedStorageKey } from "../data/ColumnDisplay";
+import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
+import { getColumnDisplayType, getComputedStorageKey } from "../data/ColumnDisplay";
+import { isDateLikeColumnType, setDateDisplayMode } from "../data/DateTimeFormat";
 import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
@@ -69,6 +82,7 @@ import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { StatusPresetManagerModal } from "./modals/StatusPresetManagerModal";
 import { FormulaModal, FormulaSaveResult } from "./modals/FormulaModal";
 import { ComputedFrontmatterCleanupModal } from "./modals/ComputedFrontmatterCleanupModal";
+import { InvalidTimeEventEdit, InvalidTimeEventsModal } from "./modals/InvalidTimeEventsModal";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
 import { t } from "../i18n";
@@ -155,7 +169,13 @@ interface ConfigHistoryEntry {
   cellChanges?: CellEditChange[];
 }
 
-type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry;
+interface CreatedHistoryEntry {
+  type: "created";
+  label: string;
+  path: string;
+}
+
+type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry;
 
 interface ViewEntry {
   config: DatabaseConfig;
@@ -165,6 +185,7 @@ interface ViewEntry {
 interface ConfigSaveMetadata {
   undoLabel: string | null;
   cellChanges: CellEditChange[] | null;
+  skipHistory?: boolean;
 }
 
 interface PendingConfigSave extends ConfigSaveMetadata {
@@ -194,6 +215,43 @@ export class DatabaseView extends ItemView {
   private listRenderer: ListRenderer;
   private chartRenderer = new ChartRenderer();
   private chartToolbarRenderer = new ChartToolbarRenderer();
+  private calendarTimelineRenderer = new CalendarTimelineRenderer({
+    openRow: (row) => this.dataSource.openNote(row.file),
+    showRowMenu: (event, row) => this.rowMenu.show(event, row),
+    createEntryForDate: (config, dateKey, options) => { void this.createCalendarTimelineEntry(config, dateKey, options); },
+    updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
+    reorderTimelineEvent: (row, beforePath, afterPath) => this.moveRowToPosition(row.file.path, beforePath, afterPath),
+    moveTimelineEventToGroup: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
+      this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
+    isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
+    toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+    openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
+    updateTimelineAnchor: (dateKey, label, timeMinutes) => this.updateTimelineAnchor(dateKey, label, timeMinutes),
+    updateTimelineScale: (scale, label) => this.updateTimelineScale(scale, label),
+    onConfigChange: (label) => {
+      this.pendingUndoLabel = label || t("undo.viewTypeConfig");
+      this.scheduleConfigSave();
+      this.refresh();
+    },
+  });
+  private calendarRenderer = new CalendarRenderer({
+    openRow: (row) => this.dataSource.openNote(row.file),
+    showRowMenu: (event, row) => this.rowMenu.show(event, row),
+    createEntryForDate: (config, dateKey, timeRange) => { void this.createCalendarTimelineEntry(config, dateKey, timeRange); },
+    updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
+    updateCalendarScale: (scale, anchorDateKey, label) => this.updateCalendarScale(scale, anchorDateKey, label),
+    onConfigChange: (label) => {
+      this.pendingUndoLabel = label || t("undo.viewTypeConfig");
+      this.scheduleConfigSave();
+      this.refresh();
+    },
+    getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
+    getCalendarInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+    openCalendarInvalidEvents: () => { void this.openInvalidEvents(); },
+    isReadOnly: false,
+  });
+  private calendarToolbarRenderer = new CalendarToolbarRenderer();
   private queryEngine = new QueryEngine();
   private rowPipeline = new RowPipeline();
   private containerEl_: HTMLElement | null = null;
@@ -205,6 +263,8 @@ export class DatabaseView extends ItemView {
   private currentDbIndex = 0;
   private currentViewIndex = 0;
   private rows: RowData[] = [];
+  private timelineInvalidRowsVersion = 0;
+  private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
   private selectedRows = new Set<string>();
   private lastSelectedRowPath: string | null = null;
   private cellSelection: CellSelectionRange | null = null;
@@ -244,6 +304,12 @@ export class DatabaseView extends ItemView {
   private pendingNewFilePath?: string;
   private pendingNewRecord?: NoteRecord & { expiresAt: number };
   private pendingNewRevealTimer: number | null = null;
+  private pendingCalendarTimelineCreates = new Set<string>();
+  private lastCalendarTimelineSameDateFieldNoticeAt = 0;
+  /** Last view type we finished rendering. Used to reset the calendar/timeline
+   * scroll to the top only on an actual view switch — not on filter/sort/data
+   * refreshes, which must preserve the user's scroll position. */
+  private lastRenderedViewType: DatabaseViewType | null = null;
   private onConfigChanged?: () => void | Promise<void>;
   private databaseFolder: string;
   private readonly instanceId = generateId();
@@ -803,6 +869,10 @@ export class DatabaseView extends ItemView {
 
   async onClose(): Promise<void> {
     this.chartRenderer.destroy();
+    // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免视图关闭后泄漏
+    this.calendarTimelineRenderer.destroy();
+    // 取消可能仍在调度的无效时间事件分块扫描，避免视图关闭后继续占用 idle 回调
+    this.timelineInvalidEventsScanner.clear();
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
     this.closeGroupOrderPopover();
@@ -939,18 +1009,36 @@ export class DatabaseView extends ItemView {
       moveView: (fromIndex, toIndex) => this.moveView(fromIndex, toIndex),
       renameDatabase: (name) => this.renameDatabase(name),
       updateDatabaseDescription: (description) => this.updateDatabaseDescription(description),
-      setViewType: (value) => this.setViewType(value),
+      setViewType: (value, viewIndex) => this.setViewType(value, viewIndex),
       setDisplayWidth: (value) => this.setDisplayWidth(value),
       setSearchText: (value) => {
         this.vs().searchText = value;
-        this.refresh();
+        this.refresh({ viewport: "reset-top" });
       },
       setGroupByField: (value) => this.setGroupByField(value),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(mode),
+      setShowEmptyGroups: (field, value) => this.setShowEmptyGroups(field, value),
+      setBoardSubgroupEnabled: (enabled) => this.setBoardSubgroupEnabled(enabled),
+      setBoardSubgroupField: (value) => this.setBoardSubgroupField(value),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover("view", anchorEl),
       configureGroupOrder: () => this.showGroupOrderPopover(),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover("sort", anchorEl),
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(anchorEl),
+      toggleCalendarOptions: (containerEl, anchor, config) => {
+        this.calendarToolbarRenderer.togglePopover(containerEl, anchor, config, {
+          onChange: (label) => {
+            this.pendingUndoLabel = label || t("undo.viewTypeConfig");
+            this.scheduleConfigSave();
+            this.refresh();
+          },
+          getInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+          openInvalidEvents: () => { void this.openInvalidEvents(); },
+        });
+      },
+      getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+      openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
+      updateViewConfig: (label) => this.updateToolbarViewConfig(label),
+      updateTimelineScale: (scale, label) => this.updateTimelineScale(scale, label),
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover("filter", anchorEl),
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover("columns", anchorEl),
       syncComputedFields: () => this.syncComputedFieldsManually(),
@@ -984,9 +1072,19 @@ export class DatabaseView extends ItemView {
     window.requestAnimationFrame(update);
   }
 
-  private setViewType(value: DatabaseViewType): void {
+  private setViewType(value: DatabaseViewType, viewIndex: number = this.currentViewIndex): void {
     const config = this.getConfig();
     if (!config) return;
+    if (viewIndex !== this.currentViewIndex) {
+      const view = this.getActiveDb().views[viewIndex];
+      if (!view) return;
+      view.viewType = value;
+      this.initializeViewTypeDefaults(view, value);
+      this.pendingUndoLabel = t("undo.viewTypeConfig");
+      this.scheduleConfigSave();
+      this.rerenderToolbar();
+      return;
+    }
     const descriptionScroll = this.saveDescriptionScrollPosition();
     if (config.viewType === "chart" && value !== "chart") this.chartRenderer.destroy();
     this.viewStateStore.persist(config, this.vs());
@@ -996,6 +1094,26 @@ export class DatabaseView extends ItemView {
     this.viewStateStore.persist(config, this.vs());
     this.clearSelection();
     this.clearCellSelection();
+    this.initializeViewTypeDefaults(config, value);
+    this.pendingUndoLabel = t("undo.viewTypeConfig");
+    this.scheduleConfigSave();
+    this.rerenderToolbar();
+    this.refresh();
+    this.restoreDescriptionScrollPosition(descriptionScroll);
+  }
+
+  private setDisplayWidth(value: "default" | "wide"): void {
+    const config = this.getConfig();
+    if (!config) return;
+    config.displayWidth = value;
+    this.pendingUndoLabel = t("undo.displayWidthConfig");
+    this.scheduleConfigSave();
+    this.applyDisplayWidth();
+    this.rerenderToolbar();
+    this.refresh();
+  }
+
+  private initializeViewTypeDefaults(config: ViewConfig, value: DatabaseViewType): void {
     if (value === "board" && !config.boardGroupField) {
       config.boardGroupField = this.getDefaultBoardField(config);
     }
@@ -1012,21 +1130,19 @@ export class DatabaseView extends ItemView {
       config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
       config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
     }
-    this.pendingUndoLabel = t("undo.viewTypeConfig");
-    this.scheduleConfigSave();
-    this.rerenderToolbar();
-    this.refresh();
-    this.restoreDescriptionScrollPosition(descriptionScroll);
+    if (value === "calendar") {
+      config.calendarStartDateField = config.calendarStartDateField || getDefaultEventDateField(config);
+    }
+    if (value === "timeline") {
+      const defaultDateField = getDefaultEventDateField(config);
+      config.timelineStartDateField = config.timelineStartDateField || defaultDateField;
+      config.calendarStartDateField = config.calendarStartDateField || defaultDateField;
+    }
   }
 
-  private setDisplayWidth(value: "default" | "wide"): void {
-    const config = this.getConfig();
-    if (!config) return;
-    config.displayWidth = value;
-    this.pendingUndoLabel = t("undo.displayWidthConfig");
+  private updateToolbarViewConfig(label?: string): void {
+    this.pendingUndoLabel = label || t("undo.viewConfig");
     this.scheduleConfigSave();
-    this.applyDisplayWidth();
-    this.rerenderToolbar();
     this.refresh();
   }
 
@@ -1046,7 +1162,7 @@ export class DatabaseView extends ItemView {
 
   private applyViewTypeClass(viewType: DatabaseViewType): void {
     if (!this.containerEl_) return;
-    for (const type of ["table", "board", "gallery", "list", "chart"] as const) {
+    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline"] as const) {
       this.containerEl_.toggleClass(`db-view-${type}`, viewType === type);
     }
   }
@@ -1058,6 +1174,7 @@ export class DatabaseView extends ItemView {
       // Board view requires a group field; reject empty values
       if (!value) return;
       config.boardGroupField = value;
+      this.normalizeBoardSubgroupAfterGroupChange(config, value);
     } else {
       this.vs().groupByField = value;
     }
@@ -1067,11 +1184,49 @@ export class DatabaseView extends ItemView {
     this.pendingUndoLabel = t("undo.groupConfig");
     this.viewStateStore.persist(config, this.vs());
     this.saveCurrentViewConfigInBackground();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
+  }
+
+  private normalizeBoardSubgroupAfterGroupChange(config: ViewConfig, groupField: string): void {
+    if (config.boardSubgroupField === groupField) config.boardSubgroupField = undefined;
+  }
+
+  private setShowEmptyGroups(field: string, value: boolean): void {
+    const config = this.getConfig();
+    if (!config) return;
+    setShowEmptyGroups(config, field, value);
+    this.pendingUndoLabel = t("undo.groupConfig");
+    this.scheduleConfigSave();
+    this.refresh({ viewport: "reset-top" });
+  }
+
+  private setBoardSubgroupEnabled(enabled: boolean): void {
+    const config = this.getConfig();
+    if (!config || config.viewType !== "board") return;
+    config.boardSubgroupEnabled = enabled;
+    if (!enabled) config.boardSubgroupField = undefined;
+    this.pendingUndoLabel = t("undo.boardSubgroupConfig");
+    this.scheduleConfigSave();
+    this.updateToolbarIndicators();
+    this.refresh({ viewport: "reset-top" });
+  }
+
+  private setBoardSubgroupField(value: string): void {
+    const config = this.getConfig();
+    if (!config || config.viewType !== "board") return;
+    const groupField = config.boardGroupField || this.vs().groupByField || this.getDefaultBoardField(config);
+    const subgroupField = value && value !== groupField && value !== "file.name" ? value : "";
+    config.boardSubgroupEnabled = true;
+    config.boardSubgroupField = subgroupField || undefined;
+    this.pendingUndoLabel = t("undo.boardSubgroupConfig");
+    this.scheduleConfigSave();
+    this.updateToolbarIndicators();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private toggleHeaderPopover(kind: HeaderPopoverKind, anchorEl: HTMLElement): void {
     this.chartToolbarRenderer.closePopover();
+    this.calendarToolbarRenderer.closePopover();
     const wasClosingActivePopover = this.activeHeaderPopover != null && this.isHeaderPopoverVisible(this.activeHeaderPopover);
     if (wasClosingActivePopover) this.persistVisibleHeaderPopoverState();
     const shouldOpen = this.activeHeaderPopover !== kind || !this.isHeaderPopoverVisible(kind);
@@ -1107,7 +1262,8 @@ export class DatabaseView extends ItemView {
     this.closeHeaderPopovers();
     const activeAnchor = this.containerEl_.querySelector<HTMLElement>(".db-chart-options-toolbar-btn") || anchorEl;
     this.chartToolbarRenderer.togglePopover(this.containerEl_, activeAnchor, config, {
-      onChange: () => {
+      onChange: (label) => {
+        this.pendingUndoLabel = label || t("undo.chartConfig");
         this.scheduleConfigSave();
         this.renderChart(config);
       },
@@ -1174,6 +1330,7 @@ export class DatabaseView extends ItemView {
   private closeHeaderPopovers(): void {
     this.toolbarRenderer.closePopovers();
     this.chartToolbarRenderer.closePopover();
+    this.calendarToolbarRenderer.closePopover();
     this.closeGroupOrderPopover();
     if (!this.showFilterPanel && !this.showSortPanel && !this.showColumnManager && !this.showViewConfigPanel) return;
     this.persistVisibleHeaderPopoverState();
@@ -1246,7 +1403,7 @@ export class DatabaseView extends ItemView {
       return;
     }
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col));
     const keys = groups.map((group) => group.key);
     const currentOrder = config.groupOrders?.[field] || [];
     const defaultOrder = getDefaultGroupOrder(config, field);
@@ -1284,7 +1441,7 @@ export class DatabaseView extends ItemView {
       config.groupOrders = { ...(config.groupOrders || {}), [field]: [...order] };
       this.pendingUndoLabel = t("undo.groupConfig");
       this.scheduleConfigSave();
-      this.refresh();
+      this.refresh({ viewport: "reset-top" });
       window.requestAnimationFrame(positionPopover);
     };
     const clearDropLine = () => {
@@ -1348,7 +1505,7 @@ export class DatabaseView extends ItemView {
         };
 
         row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
-        row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
+        row.createSpan({ cls: "db-group-order-name", text: formatGroupKeyDisplay(config, field, key) });
         const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
         const upBtn = moveControls.createEl("button", {
           attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
@@ -1413,7 +1570,7 @@ export class DatabaseView extends ItemView {
     const field = this.getActiveGroupField(config);
     if (!field) return;
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col));
     const keys = groups.map((group) => group.key);
     const optionOrder = getDefaultGroupOrder(config, field).filter((key) => keys.includes(key));
     const appendMissing = (order: string[]) => [...order, ...keys.filter((key) => !order.includes(key))];
@@ -1458,7 +1615,7 @@ export class DatabaseView extends ItemView {
     config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
     this.pendingUndoLabel = t("undo.groupConfig");
     this.scheduleConfigSave();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private toNumericGroupValue(value: string): number {
@@ -1485,7 +1642,7 @@ export class DatabaseView extends ItemView {
     this.clearSelection();
     this.clearHeaderPopover();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   /** Switch to a different view within the current database */
@@ -1496,7 +1653,7 @@ export class DatabaseView extends ItemView {
     this.clearSelection();
     this.clearCellSelection();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
     this.restoreDescriptionScrollPosition(descriptionScroll);
   }
 
@@ -1526,13 +1683,19 @@ export class DatabaseView extends ItemView {
       chartDateBucket: viewType === "chart" ? getDefaultChartDateBucket(db.schema.columns, getDefaultChartField(db.schema.columns, db.schema.computedFields), db.schema.computedFields) : undefined,
       chartNumberBucket: viewType === "chart" ? getDefaultChartNumberBucket(db.schema.columns, getDefaultChartField(db.schema.columns, db.schema.computedFields), db.schema.computedFields) : undefined,
       chartAggregation: viewType === "chart" ? "count" : undefined,
+      calendarStartDateField: viewType === "calendar" || viewType === "timeline"
+        ? getDefaultEventDateField({ schema: db.schema } as ViewConfig)
+        : undefined,
+      timelineStartDateField: viewType === "timeline"
+        ? getDefaultEventDateField({ schema: db.schema } as ViewConfig)
+        : undefined,
     };
     db.views.push(newView);
     this.currentViewIndex = db.views.length - 1;
     this.clearViewStateCache();
     this.saveCurrentViewConfigInBackground();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   /** Delete a view from the current database (must keep at least 1) */
@@ -1546,7 +1709,7 @@ export class DatabaseView extends ItemView {
     this.clearViewStateCache();
     this.saveCurrentViewConfigInBackground();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   /** Rename a view */
@@ -1568,7 +1731,7 @@ export class DatabaseView extends ItemView {
     this.clearViewStateCache();
     this.saveCurrentViewConfigInBackground(this.getCurrentDatabaseMutationTarget());
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private moveDatabase(fromIndex: number, toIndex: number): void {
@@ -1597,7 +1760,7 @@ export class DatabaseView extends ItemView {
     if (this.currentViewIndex < 0) this.currentViewIndex = 0;
     this.clearViewStateCache();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private getMovedIndex(current: number, from: number, to: number): number {
@@ -1638,6 +1801,8 @@ export class DatabaseView extends ItemView {
     if (viewType === "gallery") return t("common.galleryView");
     if (viewType === "list") return t("common.listView");
     if (viewType === "chart") return t("common.chartView");
+    if (viewType === "calendar") return t("common.calendarView");
+    if (viewType === "timeline") return t("common.timelineView");
     return t("common.tableView");
   }
 
@@ -1760,7 +1925,7 @@ export class DatabaseView extends ItemView {
     this.currentDbIndex = idx >= 0 ? idx : 0;
     this.currentViewIndex = 0;
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private async duplicateCurrentDatabase(): Promise<void> {
@@ -1778,7 +1943,7 @@ export class DatabaseView extends ItemView {
     this.currentViewIndex = 0;
     this.clearViewStateCache();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private createDuplicatedDatabaseConfig(source: DatabaseConfig): DatabaseConfig {
@@ -1858,7 +2023,7 @@ export class DatabaseView extends ItemView {
     this.currentViewIndex = 0;
     void this.onConfigChanged?.();
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
   }
 
   private async openDatabaseFile(): Promise<void> {
@@ -2007,7 +2172,7 @@ export class DatabaseView extends ItemView {
     this.clearViewStateCache();
     this.saveCurrentViewConfigInBackground(this.getCurrentDatabaseMutationTarget());
     this.rerenderToolbar();
-    this.refresh();
+    this.refresh({ viewport: "reset-top" });
     new Notice(t("notice.copiedView", { name: duplicated.name }));
   }
 
@@ -2050,7 +2215,7 @@ export class DatabaseView extends ItemView {
       const viewIndex = viewId ? views.findIndex((view) => view.id === viewId) : -1;
       this.currentViewIndex = viewIndex >= 0 ? viewIndex : 0;
       this.rerenderToolbar();
-      this.refresh();
+      this.refresh({ viewport: "reset-top" });
     }
   }
 
@@ -2124,11 +2289,211 @@ export class DatabaseView extends ItemView {
         void this.syncComputedForFile(file, frontmatter, undefined, config);
       }
       this.assignManualRankForNewEntry(config, file.path, position);
+      this.pushHistory({ type: "created", label: t("undo.createRow"), path: file.path });
       new Notice(t("notice.createdRow", { name: file.basename }));
       await this.refreshAfterSave();
     } catch (err) {
       new Notice(t("errors.createFailed", { error: String(err) }));
     }
+  }
+
+  private async createCalendarTimelineEntry(
+    config: ViewConfig,
+    dateKey: string,
+    options?: CalendarTimelineCreateOptions
+  ): Promise<void> {
+    const createKey = `${config.id || config.name}:${dateKey}:${options?.endDateKey ?? ""}:${options?.startTimeMinutes ?? ""}:${options?.endTimeMinutes ?? ""}:${options?.groupField ?? ""}:${options?.groupKey ?? ""}`;
+    if (this.pendingCalendarTimelineCreates.has(createKey)) return;
+    const startField = config.viewType === "timeline"
+      ? (config.timelineStartDateField || config.calendarStartDateField || getDefaultEventDateField(config))
+      : (config.calendarStartDateField || getDefaultEventDateField(config));
+    const endField = config.viewType === "timeline"
+      ? (config.timelineEndDateField || config.calendarEndDateField)
+      : config.calendarEndDateField;
+    const startCol = this.getWritableDateColumn(config, startField);
+    if (!startCol) {
+      new Notice(t("calendar.noWritableDateField"));
+      return;
+    }
+    const endCol = this.getWritableDateColumn(config, endField);
+
+    // 单侧 datetime（一端 date 一端 datetime）或要写时间到 date 列 → 把 date 端转 datetime。
+    // 否则 mixed coerce 产生 00:00→00:00 零宽 invalid（A1 隐藏后用户看不到新建条目），
+    // 或带时间值污染 date 列、mixed 让 getCalendarEventTiming 判 all-day（进全天区而非时间网格）。
+    // changeColumnType 原地更新 col.type，下方 getColumnDisplayType 会读到转换后的 "datetime"。
+    // 用户拒绝则不创建。
+    const needStartConvert = startCol.type === "date" && (
+      options?.startTimeMinutes != null || (endCol != null && endCol.type === "datetime")
+    );
+    const needEndConvert = endCol != null && endCol.type === "date" && (
+      options?.endTimeMinutes != null || startCol.type === "datetime"
+    );
+    if (needStartConvert || needEndConvert) {
+      const ok = await this.ensureCalendarTimelineDateTimeFields([
+        needStartConvert ? startCol : null,
+        needEndConvert ? endCol : null,
+      ]);
+      if (!ok) return;
+    }
+
+    if (endCol) {
+      this.showCalendarTimelineSameDateFieldNotice(startCol, endCol);
+    }
+    // 月视图全天新增（无显式时间）对 datetime 列写显式时刻：开始 T00:00、结束 T23:59，
+    // 形成合法「全天 datetime」事件；date 列（两端都 date）写纯日期（全天条）。
+    // 显式 options（周/日视图拖拽创建带时间）优先。
+    const startIsDateTime = getColumnDisplayType(startCol, config.schema.computedFields) === "datetime";
+    const startMinutes = options?.startTimeMinutes ?? (startIsDateTime ? 0 : undefined);
+    const defaults: Record<string, unknown> = {
+      [this.getFrontmatterWriteKey(startCol)]: startMinutes != null
+        ? this.formatCalendarDateTimeValue(dateKey, startMinutes)
+        : dateKey,
+    };
+    if (endCol) {
+      const endDateKey = options?.endDateKey || dateKey;
+      const endIsDateTime = getColumnDisplayType(endCol, config.schema.computedFields) === "datetime";
+      // datetime 结束列 + 同天：默认 23:59（全天终点），与开始 00:00 形成合法区间。
+      const endMinutes = options?.endTimeMinutes ?? (endIsDateTime && endDateKey === dateKey ? 23 * 60 + 59 : undefined);
+      defaults[this.getFrontmatterWriteKey(endCol)] = endMinutes != null
+        ? this.formatCalendarDateTimeValue(endDateKey, endMinutes)
+        : endDateKey;
+    }
+    this.applyCalendarTimelineCreateGroupDefaults(config, defaults, options);
+    this.pendingCalendarTimelineCreates.add(createKey);
+    try {
+      await this.createBlankEntry(defaults);
+    } finally {
+      this.pendingCalendarTimelineCreates.delete(createKey);
+    }
+  }
+
+  private applyCalendarTimelineCreateGroupDefaults(config: ViewConfig, defaults: Record<string, unknown>, options: CalendarTimelineCreateOptions | undefined): void {
+    const field = options?.groupField;
+    const groupKey = options?.groupKey;
+    if (!field || groupKey == null) return;
+    const col = config.schema.columns.find((candidate) => candidate.key === field);
+    if (!col || col.type === "computed" || isReadonlyFileField(col.key)) return;
+    const writeKey = this.getFrontmatterWriteKey(col);
+    if (col.key === "file.tags") {
+      defaults[writeKey] = isEmptyGroupId(groupKey) ? [] : toValidObsidianTagValues(groupKey);
+      return;
+    }
+    if (col.type === "multi-select") {
+      defaults[writeKey] = isEmptyGroupId(groupKey) ? [] : toMultiSelectValuesForKey(col.key, normalizeOptionValueForKey(col.key, groupKey));
+      return;
+    }
+    if (isEmptyGroupId(groupKey)) {
+      defaults[writeKey] = null;
+      return;
+    }
+    if (col.type === "checkbox") {
+      defaults[writeKey] = toBooleanValue(groupKey);
+      return;
+    }
+    if (col.type === "select" || col.type === "status") {
+      defaults[writeKey] = normalizeOptionValueForKey(col.key, groupKey);
+      return;
+    }
+    defaults[writeKey] = groupKey;
+  }
+
+  private async updateCalendarTimelineDates(row: RowData, changes: CalendarTimelineDateChange): Promise<void> {
+    const config = this.getConfig();
+    if (!config) return;
+    const writeStart = changes.changedEdge !== "end";
+    const writeEnd = changes.changedEdge !== "start";
+    const startCol = writeStart ? this.getWritableDateColumn(config, changes.startField) : null;
+    if (writeStart && !startCol) {
+      new Notice(t("calendar.noWritableDateField"));
+      return;
+    }
+    const endCol = writeEnd ? this.getWritableDateColumn(config, changes.endField) : null;
+    if (writeEnd && changes.endField && changes.endDateKey && !endCol) {
+      new Notice(t("calendar.noWritableDateField"));
+      return;
+    }
+    const startColForNotice = this.getWritableDateColumn(config, changes.startField);
+    const endColForNotice = changes.endField ? this.getWritableDateColumn(config, changes.endField) : null;
+    this.showCalendarTimelineSameDateFieldNotice(startColForNotice, endColForNotice);
+    const writesTime = changes.startTimeMinutes != null || changes.endTimeMinutes != null;
+    if (writesTime && !await this.ensureCalendarTimelineDateTimeFields([writeStart ? startCol : null, writeEnd ? endCol : null])) return;
+
+    const cellChanges: CellEditChange[] = [];
+    if (writeStart && startCol) {
+      const startValue = changes.startTimeMinutes != null
+        ? this.formatCalendarDateTimeValue(changes.startDateKey, changes.startTimeMinutes)
+        : changes.startDateKey;
+      const startChange = this.createCurrentCellChange(row, startCol, startValue);
+      if (!this.areCellValuesEqual(startChange.oldValue, startChange.newValue)) cellChanges.push(startChange);
+    }
+
+    if (writeEnd && endCol && changes.endDateKey) {
+      const endValue = changes.endTimeMinutes != null
+        ? this.formatCalendarDateTimeValue(changes.endDateKey, changes.endTimeMinutes)
+        : changes.endDateKey;
+      const endChange = this.createCurrentCellChange(row, endCol, endValue);
+      if (!this.areCellValuesEqual(endChange.oldValue, endChange.newValue)) cellChanges.push(endChange);
+    }
+    if (cellChanges.length === 0) {
+      new Notice(t("calendar.noDateChange"));
+      return;
+    }
+    try {
+      await this.applyCellChanges(cellChanges, t("undo.timelineDates"));
+    } catch (err) {
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    }
+  }
+
+  private showCalendarTimelineSameDateFieldNotice(startCol: ColumnDef | null, endCol: ColumnDef | null): void {
+    if (!startCol || !endCol) return;
+    if (this.getFrontmatterWriteKey(startCol) !== this.getFrontmatterWriteKey(endCol)) return;
+    const now = Date.now();
+    if (now - this.lastCalendarTimelineSameDateFieldNoticeAt < 5000) return;
+    this.lastCalendarTimelineSameDateFieldNoticeAt = now;
+    new Notice(t("calendar.sameDateFieldNotice", { field: startCol.label || startCol.key }));
+  }
+
+  private async ensureCalendarTimelineDateTimeFields(columns: Array<ColumnDef | null>): Promise<boolean> {
+    const dateColumns = columns
+      .filter((col): col is ColumnDef => Boolean(col && col.type === "date"))
+      .filter((col, index, all) => all.findIndex((candidate) => candidate.key === col.key) === index);
+    if (dateColumns.length === 0) return true;
+    const fields = dateColumns.map((col) => col.label || col.key).join(", ");
+    if (!await confirmWithModal(this.app, {
+      title: t("calendar.convertDateTimeTitle"),
+      message: t("calendar.convertDateTimeMessage", { fields }),
+      confirmText: t("calendar.convertDateTimeConfirm"),
+    })) return false;
+    for (const col of dateColumns) {
+      await this.changeColumnType(col, "datetime");
+    }
+    return true;
+  }
+
+  private async ensureTimelineDayDateTimeFields(config: ViewConfig): Promise<boolean> {
+    const nonDateTimeColumns = getTimelineDayNonDateTimeColumns(config);
+    if (nonDateTimeColumns.length === 0) return true;
+    const hasReadonlyColumn = nonDateTimeColumns.some((col) => col.type !== "date" || !this.getWritableDateColumn(config, col.key));
+    if (hasReadonlyColumn) {
+      new Notice(t("calendar.noWritableDateField"));
+      return false;
+    }
+    return this.ensureCalendarTimelineDateTimeFields(nonDateTimeColumns);
+  }
+
+  private getWritableDateColumn(config: ViewConfig, field: string | undefined): ColumnDef | null {
+    if (!field) return null;
+    const col = config.schema.columns.find((candidate) => candidate.key === field);
+    if (!col || col.type === "computed" || isReadonlyFileField(col.key)) return null;
+    return isDateLikeColumnType(getColumnDisplayType(col, config.schema.computedFields)) ? col : null;
+  }
+
+  private formatCalendarDateTimeValue(dateKey: string, timeMinutes: number): string {
+    const clamped = Math.max(0, Math.min(1439, Math.round(timeMinutes)));
+    const hours = Math.floor(clamped / 60);
+    const minutes = clamped % 60;
+    return `${dateKey}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
   private getDefaultCellValue(col: ColumnDef): unknown {
@@ -2160,7 +2525,7 @@ export class DatabaseView extends ItemView {
 
     if (!newRank || !config.manualOrder.ranks) return;
     config.manualOrder.ranks[filePath] = newRank;
-    this.scheduleConfigSave();
+    this.scheduleConfigSave({ skipHistory: true });
   }
 
   private getAvailableStatusPresets(db: DatabaseConfig = this.getActiveDb(), view?: ViewConfig): StatusPresetDef[] {
@@ -2172,6 +2537,10 @@ export class DatabaseView extends ItemView {
     for (const preset of databasePresets) merged.set(preset.id, preset);
     for (const preset of viewPresets) merged.set(preset.id, preset);
     return Array.from(merged.values());
+  }
+
+  private getStatusPresetsForLevel(level: "database" | "view", db: DatabaseConfig = this.getActiveDb(), view: ViewConfig = this.getActiveView()): StatusPresetDef[] {
+    return normalizeStatusPresets(level === "database" ? (db.statusPresets || []) : (view.statusPresets || []), []);
   }
 
   private getDefaultStatusPresetId(db: DatabaseConfig = this.getActiveDb(), view: ViewConfig = this.getActiveView()): string {
@@ -2543,7 +2912,7 @@ export class DatabaseView extends ItemView {
       },
       refresh: () => {
         this.updateToolbarIndicators();
-        this.refresh();
+        this.refresh({ viewport: "reset-top" });
       },
       close: () => {
         this.pendingUndoLabel = t("undo.filterConfig");
@@ -2569,7 +2938,7 @@ export class DatabaseView extends ItemView {
       },
       refresh: () => {
         this.updateToolbarIndicators();
-        this.refresh();
+        this.refresh({ viewport: "reset-top" });
       },
       close: () => {
         this.pendingUndoLabel = t("undo.sortConfig");
@@ -2642,12 +3011,14 @@ export class DatabaseView extends ItemView {
     this.viewConfigPanelRenderer.render(this.containerEl_, this.showViewConfigPanel, config, {
       app: this.app,
       database: db,
-      onChange: () => {
+      onChange: (label) => {
+        this.pendingUndoLabel = label || t("undo.viewConfig");
         this.scheduleConfigSave();
         this.refresh();
       },
       onViewTypeChange: (value) => this.setViewType(value),
-      onDatabaseChange: () => {
+      onDatabaseChange: (label) => {
+        this.pendingUndoLabel = label || t("undo.viewConfig");
         this.scheduleConfigSave();
         this.updateDatabaseChrome();
         this.updateStickyOffsets();
@@ -2655,19 +3026,26 @@ export class DatabaseView extends ItemView {
       },
       onComputedSyncModeChange: () => this.rerenderToolbar(),
       onComputedFrontmatterCleanup: () => this.showComputedFrontmatterCleanupModal(),
-      statusPresets: this.getAvailableStatusPresets(db),
+      statusPresets: this.getStatusPresetsForLevel("database", db),
       defaultStatusPresetId: resolveDefaultStatusPresetId(
-        this.getAvailableStatusPresets(db),
-        db.defaultStatusPresetId || this.defaultStatusPresetId
+        this.getStatusPresetsForLevel("database", db),
+        db.defaultStatusPresetId
       ),
+      statusPresetHelpText: t("viewConfig.statusPreset.help"),
+      managedStatusPresetCount: db.statusPresets?.length || 0,
       onDefaultStatusPresetChange: (value) => {
         db.defaultStatusPresetId = value || undefined;
         this.pendingUndoLabel = t("undo.statusPresetConfig");
         this.scheduleConfigSave();
       },
       onManageStatusPresets: () => this.showDatabaseStatusPresetManager(),
-      viewStatusPresets: this.getAvailableStatusPresets(db, config),
-      defaultViewStatusPresetId: this.getDefaultStatusPresetId(db, config),
+      viewStatusPresets: this.getStatusPresetsForLevel("view", db, config),
+      defaultViewStatusPresetId: resolveDefaultStatusPresetId(
+        this.getStatusPresetsForLevel("view", db, config),
+        config.defaultStatusPresetId
+      ),
+      viewStatusPresetHelpText: t("viewConfig.statusPreset.help"),
+      managedViewStatusPresetCount: config.statusPresets?.length || 0,
       onDefaultViewStatusPresetChange: (value) => {
         config.defaultStatusPresetId = value || undefined;
         this.pendingUndoLabel = t("undo.statusPresetConfig");
@@ -2738,7 +3116,7 @@ export class DatabaseView extends ItemView {
       ? config.boardGroupField || state.groupByField
       : state.groupByField;
     if (groupField) keys.add(groupField);
-    if (config.viewType === "board" && config.boardSubgroupField) {
+    if (config.viewType === "board" && config.boardSubgroupEnabled !== false && config.boardSubgroupField) {
       keys.add(config.boardSubgroupField);
     }
     return keys;
@@ -3097,6 +3475,52 @@ export class DatabaseView extends ItemView {
     }
   }
 
+  /** 打开「无效时间事件」修复 Modal：列出开始 > 结束的事件，用户改值后写回。 */
+  /** 统计当前时间线来源范围内被隐藏的无效时间事件数量；导航栏图标和 popover warning 共用，缓存命中即时返回。 */
+  private getTimelineInvalidEventCount(): number | Promise<number> {
+    const config = this.getConfig();
+    if (!config) return 0;
+    // timeline 和 calendar 视图都接入 invalid 修复入口（A2）；collectInvalidTimelineEvents
+    // 本就用 timelineStartDateField || calendarStartDateField 检测，对 calendar config 同样生效。
+    if (config.viewType !== "timeline" && config.viewType !== "calendar") return 0;
+    const cached = this.timelineInvalidEventsScanner.getCachedOptions(this.rows, config, this.timelineInvalidRowsVersion);
+    if (cached) return cached.length;
+    return this.timelineInvalidEventsScanner.getOptions(this.rows, config, this.timelineInvalidRowsVersion).then((options) => options.length);
+  }
+
+  private async openInvalidEvents(): Promise<void> {
+    const config = this.getConfig();
+    if (!config) return;
+    const options = await this.timelineInvalidEventsScanner.getOptions(this.rows, config, this.timelineInvalidRowsVersion);
+    if (options.length === 0) {
+      new Notice(t("timeline.invalidEventsNone"));
+      return;
+    }
+    new InvalidTimeEventsModal(this.app, options, async (edits) => {
+      await this.applyInvalidEventEdits(edits, config);
+    }).open();
+  }
+
+  private async applyInvalidEventEdits(edits: InvalidTimeEventEdit[], config: ViewConfig): Promise<void> {
+    const changes: CellEditChange[] = [];
+    for (const edit of edits) {
+      const startCol = config.schema.columns.find((c) => c.key === edit.startField);
+      const endCol = config.schema.columns.find((c) => c.key === edit.endField);
+      // Modal 值恒为 datetime-local（YYYY-MM-DDTHH:mm）；写回纯 date 列时必须只取 YYYY-MM-DD，
+      // 否则会把日期列污染成 datetime（再被 types.json 重推断会导致判定口径漂移）。
+      const startIsDateOnly = startCol != null && getColumnDisplayType(startCol, config.schema.computedFields) === "date";
+      const endIsDateOnly = endCol != null && getColumnDisplayType(endCol, config.schema.computedFields) === "date";
+      if (startCol && edit.startValue) changes.push(this.createCurrentCellChange(edit.row, startCol, startIsDateOnly ? edit.startValue.slice(0, 10) : edit.startValue));
+      if (endCol && edit.endValue) changes.push(this.createCurrentCellChange(edit.row, endCol, endIsDateOnly ? edit.endValue.slice(0, 10) : edit.endValue));
+    }
+    if (changes.length === 0) return;
+    try {
+      await this.applyCellChanges(changes, t("undo.timelineInvalidEvents"));
+    } catch (err) {
+      new Notice(t("errors.updateFailed", { error: String(err) }));
+    }
+  }
+
   private async saveFormula(entry: ViewEntry, config: ViewConfig, col: ColumnDef, result: FormulaSaveResult): Promise<void> {
     col.type = "computed";
     col.computedKey = col.computedKey || col.key;
@@ -3205,6 +3629,10 @@ export class DatabaseView extends ItemView {
     const after = this.cloneDatabaseConfig(entry.config);
     const cellChanges = (metadata?.cellChanges || this.pendingConfigCellChanges)?.map((change) => this.cloneCellChange(change)) || [];
     if (!metadata) this.pendingConfigCellChanges = null;
+    if (metadata?.skipHistory && !metadata.undoLabel && cellChanges.length === 0) {
+      this.configSnapshots.set(key, after);
+      return;
+    }
     if (JSON.stringify(before) === JSON.stringify(after) && cellChanges.length === 0) return;
     const label = metadata?.undoLabel || this.pendingUndoLabel || t("undo.viewConfig");
     if (!metadata) this.pendingUndoLabel = null;
@@ -3244,17 +3672,22 @@ export class DatabaseView extends ItemView {
         ...(existing.cellChanges || []),
         ...(next.cellChanges || []),
       ],
+      skipHistory: (existing.skipHistory || next.skipHistory) &&
+        !existing.undoLabel &&
+        !next.undoLabel &&
+        !(existing.cellChanges?.length) &&
+        !(next.cellChanges?.length),
     };
   }
 
   /** Debounced config save: batch rapid changes (drag, resize) into one write */
-  private scheduleConfigSave(): void {
+  private scheduleConfigSave(metadataOverride?: Partial<ConfigSaveMetadata>): void {
     // Protect in-memory config mutations immediately. Frontmatter writes can emit
     // metadata events before the debounced view-definition write reaches disk.
     this.suppressDataReload(2500);
     const entry = this.getCurrentEntry();
     if (!entry) return;
-    const metadata = this.consumePendingConfigMetadata();
+    const metadata = { ...this.consumePendingConfigMetadata(), ...metadataOverride };
     const mutation = this.getCurrentMutationTarget();
     if (this.pendingConfigSave && this.pendingConfigSave.entry !== entry) {
       const pending = this.pendingConfigSave;
@@ -3296,7 +3729,12 @@ export class DatabaseView extends ItemView {
     }
     const config = this.getConfig();
     const dbConfig = this.getActiveDb();
-    this.applyViewTypeClass(config.viewType || "table");
+    const viewType = config.viewType || "table";
+    // Detect an actual view-type switch so we can reset the calendar/timeline
+    // scroll to the top. Filter/sort/data refreshes keep the same viewType and
+    // must preserve the user's scroll position.
+    const viewTypeChanged = this.lastRenderedViewType !== viewType;
+    this.applyViewTypeClass(viewType);
     if (!config.schema || !config.schema.columns || config.schema.columns.length === 0) {
       this.containerEl_?.createDiv({
         cls: "db-empty",
@@ -3337,9 +3775,13 @@ export class DatabaseView extends ItemView {
     }
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(), this.app);
+    this.timelineInvalidRowsVersion += 1;
     this.scheduleComputedSync(config, this.rows);
+    // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
+    setDateDisplayMode(config.yearDisplayMode || "always");
 
     if (config.viewType !== "chart") this.renderSummary(config);
+    if (!this.containerEl_) return;
 
     if (config.viewType === "board") {
       this.renderBoard(config);
@@ -3349,6 +3791,10 @@ export class DatabaseView extends ItemView {
       this.renderList(config);
     } else if (config.viewType === "chart") {
       this.renderChart(config);
+    } else if (config.viewType === "calendar") {
+      this.calendarRenderer.render(this.containerEl_, config, this.rows);
+    } else if (config.viewType === "timeline") {
+      this.calendarTimelineRenderer.renderTimeline(this.containerEl_, this.getTimelineRenderConfig(config), this.rows);
     } else if (this.vs().groupByField) {
       this.renderGroupedTable(config, this.vs().groupByField);
     } else {
@@ -3360,6 +3806,70 @@ export class DatabaseView extends ItemView {
     this.pendingShowColumns.clear();
     this.applyPendingColumnHighlight();
     this.revealPendingNewRow();
+    this.lastRenderedViewType = viewType;
+    if (viewTypeChanged && (viewType === "calendar" || viewType === "timeline")) {
+      this.resetCalendarTimelineScroll();
+    }
+  }
+
+  /** Reset the scroll container to the top when switching INTO a calendar or
+   * timeline view. These views are much taller than the viewport, so without an
+   * explicit reset the container keeps the previous view's scrollTop and the
+   * scrollbar parks in the middle. table/board/gallery/list are short enough that
+   * their content starts at the top naturally. */
+  private resetCalendarTimelineScroll(): void {
+    if (!this.containerEl_) return;
+    this.containerEl_.scrollTop = 0;
+  }
+
+  private getTimelineRenderConfig(config: ViewConfig): ViewConfig {
+    const state = this.vs();
+    return {
+      ...config,
+      // 时间线分组完全跟随 groupByField（ViewStateStore 的统一分组入口）。
+      // 不能用 `state.groupByField || config.timelineGroupField`：用户在分组 popover
+      // 选「无分组」时 groupByField 是空串（falsy），`||` 会回退到历史字段
+      // timelineGroupField，导致「未分组」无法生效。timelineGroupField 是无活跃写入
+      // 入口的历史字段（.base 导入和 setGroupByField 都只写 groupByField）。
+      timelineGroupField: state.groupByField,
+      sortColumn: state.sortColumn,
+      sortDirection: state.sortDirection,
+      sortRules: state.sortRules,
+    };
+  }
+
+  private updateTimelineAnchor(dateKey: string, label?: string, timeMinutes?: number): void {
+    const config = this.getConfig();
+    if (!config) return;
+    config.timelineAnchor = dateKey;
+    if (typeof timeMinutes === "number" && Number.isFinite(timeMinutes)) config.timelineAnchorTimeMinutes = timeMinutes;
+    else delete config.timelineAnchorTimeMinutes;
+    this.pendingUndoLabel = label || t("undo.timelineAnchorConfig");
+    this.scheduleConfigSave();
+    this.refresh({ viewport: "preserve-raw" });
+  }
+
+  private async updateTimelineScale(scale: NonNullable<ViewConfig["timelineScale"]>, label?: string): Promise<boolean> {
+    const config = this.getConfig();
+    if (!config || (config.timelineScale || "week") === scale) return false;
+    if (scale === "day" && !await this.ensureTimelineDayDateTimeFields(config)) return false;
+    config.timelineScale = scale;
+    this.pendingUndoLabel = label || t("undo.timelineScaleConfig");
+    this.scheduleConfigSave();
+    this.refresh();
+    return true;
+  }
+
+  private updateCalendarScale(scale: NonNullable<ViewConfig["calendarScale"]>, anchorDateKey: string, label?: string): void {
+    const config = this.getConfig();
+    if (!config || (config.calendarScale || "month") === scale) return;
+    config.calendarScale = scale;
+    config.calendarMonth = anchorDateKey.slice(0, 7);
+    config.calendarWeekStart = anchorDateKey;
+    config.calendarDay = anchorDateKey;
+    this.pendingUndoLabel = label || t("undo.calendarScaleConfig");
+    this.scheduleConfigSave();
+    this.refresh();
   }
 
   private renderEmptyDashboard(): void {
@@ -4627,6 +5137,8 @@ export class DatabaseView extends ItemView {
         await this.undoConfigEntry(entry);
         // Close stale cell option popovers that may survive the table refresh
         this.containerEl_?.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
+      } else if (entry.type === "created") {
+        await this.undoCreatedEntry(entry);
       } else {
         await this.undoCellEntry(entry);
       }
@@ -4658,6 +5170,16 @@ export class DatabaseView extends ItemView {
     this.renderSelectionStatusBar();
   }
 
+  private async undoCreatedEntry(entry: CreatedHistoryEntry): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(entry.path);
+    if (file instanceof TFile) {
+      await this.dataSource.trashNote(file);
+    }
+    if (this.pendingNewFilePath === entry.path) this.clearPendingNewRow();
+    await this.refreshAfterSave();
+    this.rerenderToolbar();
+  }
+
   private async undoConfigEntry(entry: ConfigHistoryEntry): Promise<void> {
     const index = this.viewEntries.findIndex((candidate) => candidate.sourcePath === entry.dbPath);
     if (index < 0) return;
@@ -4680,8 +5202,18 @@ export class DatabaseView extends ItemView {
       await this.applyFrontmatterChanges(entry.cellChanges, "old");
       await this.refreshAfterSave();
     }
+    // Undo swaps the view objects inside the database config (the snapshot is
+    // deep-cloned), so any open toolbar config popover (calendar / chart /
+    // timeline) now holds a detached pre-undo view reference — its edits would
+    // never reach the live config. Close them so the next open binds to the
+    // restored config. Filter/sort/column/view-config panels are left alone;
+    // they re-read live config on the refresh below.
+    this.toolbarRenderer.closePopovers();
+    this.chartToolbarRenderer.closePopover();
+    this.calendarToolbarRenderer.closePopover();
     this.rerenderToolbar();
     if (!entry.cellChanges?.length) this.refresh();
+    this.renderViewConfigPanel();
   }
 
   private replaceDatabaseConfig(target: DatabaseConfig, source: DatabaseConfig): void {
@@ -4712,7 +5244,7 @@ export class DatabaseView extends ItemView {
 
   private renderGroupedTable(config: ViewConfig, field: string): void {
     if (!this.containerEl_) return;
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     const sortedGroups = this.queryEngine.sortGroups(groups, order);
     this.tableRenderer.renderGroupedTable(this.containerEl_, this.getStatefulConfig(config), this.rows, sortedGroups, field);
@@ -4730,7 +5262,7 @@ export class DatabaseView extends ItemView {
     const renderConfig = this.getStatefulConfig(config);
     if (this.vs().groupByField) {
       const field = this.vs().groupByField;
-      const groups = this.queryEngine.groupBy(this.rows, field);
+      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
       const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
       this.galleryRenderer.renderGrouped(this.containerEl_, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       return;
@@ -4743,7 +5275,7 @@ export class DatabaseView extends ItemView {
     const renderConfig = this.getStatefulConfig(config);
     if (this.vs().groupByField) {
       const field = this.vs().groupByField;
-      const groups = this.queryEngine.groupBy(this.rows, field);
+      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
       const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
       this.listRenderer.renderGrouped(this.containerEl_, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       return;
@@ -4776,12 +5308,12 @@ export class DatabaseView extends ItemView {
   }
 
   private getBoardGroups(config: ViewConfig, field: string): BoardGroup[] {
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     const groupMap = new Map(groups.map((group) => [group.key, group]));
     const col = config.schema.columns.find((candidate) => candidate.key === field);
     const defaultKeys = getDefaultGroupOrder(config, field);
-    if (col && defaultKeys.length > 0 && (isOptionColumnType(col.type) || col.type === "checkbox")) {
+    if (col && defaultKeys.length > 0 && col.type === "checkbox") {
       for (const key of defaultKeys) {
         if (!groupMap.has(key)) {
           groupMap.set(key, { key, rows: [], count: 0 });
@@ -4802,7 +5334,7 @@ export class DatabaseView extends ItemView {
   }
 
   private applyBoardSubgroups(config: ViewConfig, groupField: string, groups: BoardGroup[]): void {
-    const subgroupField = config.boardSubgroupField;
+    const subgroupField = config.boardSubgroupEnabled !== false ? config.boardSubgroupField : undefined;
     if (!subgroupField || subgroupField === groupField) return;
     if (!config.schema.columns.some((col) => col.key === subgroupField)) return;
     for (const group of groups) {
@@ -4814,7 +5346,8 @@ export class DatabaseView extends ItemView {
     if (!this.containerEl_) return;
     this.chartRenderer.render(this.containerEl_, this.getStatefulConfig(config), this.rows, config.schema.columns, {
       onFilter: (rules) => this.applyChartFilters(config, rules),
-      onConfigChange: () => {
+      onConfigChange: (label) => {
+        this.pendingUndoLabel = label || t("undo.chartConfig");
         this.scheduleConfigSave();
         this.renderChart(config);
       },
@@ -4832,7 +5365,7 @@ export class DatabaseView extends ItemView {
     }
     if (!changed) return;
     state.filterLogic = "and";
-    this.pendingUndoLabel = t("undo.filterConfig");
+    this.pendingUndoLabel = t("undo.chartDrilldownFilterConfig");
     this.viewStateStore.persist(config, state);
     this.scheduleConfigSave();
     this.rerenderToolbar();
@@ -4840,7 +5373,7 @@ export class DatabaseView extends ItemView {
   }
 
   private getBoardSubgroups(config: ViewConfig, field: string, rows: RowData[]): BoardGroup["subgroups"] {
-    const groups = this.queryEngine.groupBy(rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(rows, field, [], config.schema.columns.find((c) => c.key === field)));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     return this.queryEngine.sortGroups(groups, order);
   }
@@ -4978,17 +5511,9 @@ export class DatabaseView extends ItemView {
     }
     const ranks = config.manualOrder.ranks;
     if (paths.every((path) => ranks[path] != null)) return false;
-    const orderedPaths = Object.entries(ranks)
-      .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([path]) => path);
-    const seen = new Set(orderedPaths);
-    for (const path of paths) {
-      if (!seen.has(path)) {
-        orderedPaths.push(path);
-        seen.add(path);
-      }
-    }
-    config.manualOrder.ranks = generateRanks(orderedPaths);
+    // 只追加缺失 record 的 rank（保留现有），不 generateRanks 重新生成——覆盖会破坏 setManualRank 的改动，
+    // 导致拖拽重排后内存 ranks 被重置、视图不刷新（见 ensureVisibleRowsHaveManualRanks 同类修复）。
+    this.appendMissingRanks(ranks, paths.filter((path) => ranks[path] == null));
     return true;
   }
 
@@ -4997,18 +5522,22 @@ export class DatabaseView extends ItemView {
     if (!ranks) return;
     const missing = this.rows.filter((row) => ranks[row.file.path] == null);
     if (missing.length === 0) return;
-    const existingOrdered = Object.entries(ranks)
-      .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([path]) => path);
-    const seen = new Set(existingOrdered);
-    const orderedPaths = [...existingOrdered];
-    for (const row of this.rows) {
-      if (!seen.has(row.file.path)) {
-        orderedPaths.push(row.file.path);
-        seen.add(row.file.path);
-      }
+    // 只追加缺失 record 的 rank（保留现有 rank 值），不重新生成——否则会覆盖 setManualRank 刚改的 rank，
+    // 导致拖拽重排后视图不刷新（rank 存了但内存被 generateRanks 重置，切换视图重新加载才正确）。
+    this.appendMissingRanks(ranks, missing.map((row) => row.file.path));
+  }
+
+  /** 把缺失的 path 追加到现有最大 rank 之后（用 rankBetween 递增），保留现有 rank 值不被覆盖。 */
+  private appendMissingRanks(ranks: Record<string, string>, missingPaths: string[]): void {
+    const sorted = Object.entries(ranks).sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0));
+    let lastRank = sorted[sorted.length - 1]?.[1];
+    for (const path of missingPaths) {
+      if (ranks[path] != null) continue;
+      const nextRank = lastRank ? rankBetween(lastRank, undefined) : rankBetween(undefined, undefined);
+      if (!nextRank) continue;
+      ranks[path] = nextRank;
+      lastRank = nextRank;
     }
-    config.manualOrder!.ranks = generateRanks(orderedPaths);
   }
 
   private updateBoardColumnWidth(width: number): void {
@@ -5086,9 +5615,9 @@ export class DatabaseView extends ItemView {
     try {
       this.setManualRank(config, row.file.path, beforePath, afterPath);
       this.pendingUndoLabel = t("undo.cardOrderConfig");
-      this.scheduleConfigSave();
 
       const rows = this.getRowsForGroupMove(row);
+      const cellChanges: CellEditChange[] = [];
       for (const targetRow of rows) {
         const frontmatterUpdates: Record<string, unknown> = {};
         for (const update of updates) {
@@ -5101,8 +5630,16 @@ export class DatabaseView extends ItemView {
             update.toGroupKey
           );
         }
+        // 在写回前捕获分组字段改动，使「撤销卡片顺序」能完整回退分组移动（不只回退 rank）。
+        for (const field of Object.keys(frontmatterUpdates)) {
+          const col = config.schema.columns.find((candidate) => candidate.key === field);
+          if (col) cellChanges.push(this.createCurrentCellChange(targetRow, col, frontmatterUpdates[field]));
+        }
         await this.dataSource.updateFrontmatter(targetRow.file, frontmatterUpdates);
       }
+      this.pendingConfigCellChanges = cellChanges.length > 0 ? cellChanges : null;
+      // 即时保存：把上面捕获的分组字段改动随 rank 一起写进同一条撤销记录（避免 debounce 期间被别的保存消费）。
+      await this.saveCurrentViewConfig();
       await this.refreshAfterSave();
     } catch (err) {
       new Notice(t("errors.updateFailed", { error: String(err) }));
@@ -5368,16 +5905,31 @@ export class DatabaseView extends ItemView {
     });
   }
 
-  refresh(): void {
+  refresh(options: { viewport?: DatabaseViewportRequest } = {}): void {
     if (!this.containerEl_) return;
+    const nextViewType = this.hasActiveDatabase() ? (this.getConfig()?.viewType || "table") : "table";
+    const viewportMode = resolveDatabaseViewportMode(this.lastRenderedViewType, nextViewType, options.viewport);
+    const viewport = viewportMode === "preserve-anchor" ? captureDatabaseViewport(this.containerEl_) : undefined;
+    const rawViewport = viewportMode === "preserve-raw"
+      ? { top: this.containerEl_.scrollTop, left: this.containerEl_.scrollLeft }
+      : undefined;
     // Remove only top-level rendered results; panels manage their own contents.
     // All view types use the same cleanup selector so that render() always
     // rebuilds elements in a fixed order (summary → chart/table/…).
     this.containerEl_.querySelectorAll(
-      ":scope > .db-table, :scope > .db-table-wrap, :scope > .db-grouped-table, :scope > .db-board, :scope > .db-gallery, :scope > .db-gallery-grouped, :scope > .db-gallery-total-header, :scope > .db-list, :scope > .db-list-grouped, :scope > .db-list-total-header, :scope > .db-chart, :scope > .db-chart-empty, :scope > .db-chart-number, :scope > .db-summary, :scope > .db-selection-status-bar, :scope > .db-empty"
+      ":scope > .db-table, :scope > .db-table-wrap, :scope > .db-grouped-table, :scope > .db-board, :scope > .db-gallery, :scope > .db-gallery-grouped, :scope > .db-gallery-total-header, :scope > .db-list, :scope > .db-list-grouped, :scope > .db-list-total-header, :scope > .db-chart, :scope > .db-chart-empty, :scope > .db-chart-number, :scope > .db-calendar, :scope > .db-timeline, :scope > .db-summary, :scope > .db-selection-status-bar, :scope > .db-empty"
     )
       .forEach(el => el.remove());
     this.render();
+    if (viewport && this.containerEl_) restoreDatabaseViewport(this.containerEl_, viewport);
+    if (rawViewport && this.containerEl_) {
+      this.containerEl_.scrollTop = rawViewport.top;
+      this.containerEl_.scrollLeft = rawViewport.left;
+    }
+    if (viewportMode === "reset-top" && this.containerEl_) {
+      this.containerEl_.scrollTop = 0;
+      this.containerEl_.scrollLeft = 0;
+    }
     this.updateStickyOffsets();
     if (this.showColumnManager) {
       this.renderColumnManager();
@@ -5392,6 +5944,7 @@ export class DatabaseView extends ItemView {
       this.renderViewConfigPanel();
     }
   }
+
 }
 
 function compareSourceRuleValue(value: unknown, rule: SourceRule, columns: ColumnDef[] | undefined, predicate: (result: number) => boolean): boolean {

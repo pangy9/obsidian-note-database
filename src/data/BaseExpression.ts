@@ -1,6 +1,7 @@
 import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian";
 import { hasObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { ComputedFieldEngine } from "./ComputedField";
+import { isDateLikeColumnType } from "./DateTimeFormat";
 import { safeEval } from "./SafeEval";
 import { safeString } from "./SafeString";
 import { ColumnDef, ComputedFieldDef } from "./types";
@@ -1148,7 +1149,7 @@ function normalizeBasePropertyValue(context: BaseExpressionContext, value: unkno
 }
 
 function isBaseDateProperty(context: BaseExpressionContext, key: string): boolean {
-  return context.columns?.some((column) => column.key === key && column.type === "date") || false;
+  return context.columns?.some((column) => column.key === key && isDateLikeColumnType(column.type)) || false;
 }
 
 function isWikiLinkText(value: string): boolean {

@@ -9,6 +9,7 @@ import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
 import { createDropdownField } from "../DropdownField";
 import { confirmWithModal } from "./ConfirmModal";
 import { safeString } from "../../data/SafeString";
+import { isDateLikeColumnType } from "../../data/DateTimeFormat";
 
 export interface FormulaSaveResult {
   expression: string;
@@ -87,12 +88,16 @@ const FUNCTIONS: FormulaFunctionHelp[] = [
   { categoryKey: "formula.catDate", name: "DATEADD", signature: 'DATEADD(date, amount, "days")', descriptionKey: "formula.fn.DATEADD.desc", example: '=DATEADD([date], 14, "days")' },
   { categoryKey: "formula.catDate", name: "WEEKDAY", signature: "WEEKDAY(date)", descriptionKey: "formula.fn.WEEKDAY.desc", example: "=WEEKDAY([date])" },
   { categoryKey: "formula.catDate", name: "WEEKNUM", signature: "WEEKNUM(date)", descriptionKey: "formula.fn.WEEKNUM.desc", example: "=WEEKNUM([date])" },
+  { categoryKey: "formula.catDate", name: "HOUR", signature: "HOUR(datetime)", descriptionKey: "formula.fn.HOUR.desc", example: "=HOUR([datetime])" },
+  { categoryKey: "formula.catDate", name: "MINUTE", signature: "MINUTE(datetime)", descriptionKey: "formula.fn.MINUTE.desc", example: "=MINUTE([datetime])" },
+  { categoryKey: "formula.catDate", name: "SECOND", signature: "SECOND(datetime)", descriptionKey: "formula.fn.SECOND.desc", example: "=SECOND([datetime])" },
+  { categoryKey: "formula.catDate", name: "TIME", signature: "TIME(hour, minute, second)", descriptionKey: "formula.fn.TIME.desc", example: "=TIME(14, 30, 0)" },
   { categoryKey: "formula.catStats", name: "COUNT", signature: "COUNT(value1, value2, ...)", descriptionKey: "formula.fn.COUNT.desc", example: "=COUNT([price], [fee])" },
   { categoryKey: "formula.catStats", name: "COUNTA", signature: "COUNTA(value1, value2, ...)", descriptionKey: "formula.fn.COUNTA.desc", example: "=COUNTA([title], [status])" },
   { categoryKey: "formula.catStats", name: "COUNTIF", signature: "COUNTIF(value_or_list, criterion)", descriptionKey: "formula.fn.COUNTIF.desc", example: '=COUNTIF([status], "done")' },
 ];
 
-const RESULT_TYPE_KEYS: Array<[ComputedFieldDef["type"], string]> = [["number", "formula.typeNumber"], ["text", "formula.typeText"], ["date", "formula.typeDate"], ["checkbox", "formula.typeCheckbox"]];
+const RESULT_TYPE_KEYS: Array<[ComputedFieldDef["type"], string]> = [["number", "formula.typeNumber"], ["text", "formula.typeText"], ["date", "formula.typeDate"], ["datetime", "formula.typeDatetime"], ["checkbox", "formula.typeCheckbox"]];
 const FUNCTION_CATEGORY_KEYS = ["formula.catLogic", "formula.catMath", "formula.catText", "formula.catDate", "formula.catStats"];
 const HELP_CATEGORY_KEYS = ["formula.catFields", "formula.catExamples", ...FUNCTION_CATEGORY_KEYS];
 const FUNCTION_NAMES = new Set(FUNCTIONS.flatMap((fn) => [fn.name, fn.name.toLowerCase()]));
@@ -624,8 +629,9 @@ export class FormulaModal extends Modal {
     const status = this.columns.find((candidate) => ["status", "select"].includes(candidate.type)) || this.columns.find((candidate) => candidate.key !== this.col.key);
     const number = this.columns.find((candidate) => ["number", "currency"].includes(candidate.type) && candidate.key !== this.col.key);
     const secondNumber = this.columns.find((candidate) => candidate !== number && ["number", "currency"].includes(candidate.type) && candidate.key !== this.col.key);
-    const date = this.columns.find((candidate) => candidate.type === "date" && candidate.key !== this.col.key);
-    const secondDate = this.columns.find((candidate) => candidate !== date && candidate.type === "date" && candidate.key !== this.col.key);
+    const date = this.columns.find((candidate) => isDateLikeColumnType(candidate.type) && candidate.key !== this.col.key);
+    const secondDate = this.columns.find((candidate) => candidate !== date && isDateLikeColumnType(candidate.type) && candidate.key !== this.col.key);
+    const datetime = this.columns.find((candidate) => candidate.type === "datetime" && candidate.key !== this.col.key);
     const text = this.columns.find((candidate) => candidate.type === "text" && candidate.key !== this.col.key);
     return [
       {
@@ -677,6 +683,11 @@ export class FormulaModal extends Modal {
         name: t("formula.ex.yearMonth.name"),
         description: t("formula.ex.yearMonth.desc"),
         expression: date ? `=CONCAT(YEAR([${date.key}]), "-", TEXT(MONTH([${date.key}]), "00"))` : '=CONCAT(YEAR([start_date]), "-", TEXT(MONTH([start_date]), "00"))',
+      },
+      {
+        name: t("formula.ex.dateTime.name"),
+        description: t("formula.ex.dateTime.desc"),
+        expression: datetime ? `=DATEADD([${datetime.key}], 2, "hours")` : '=DATEADD([datetime], 2, "hours")',
       },
     ];
   }
@@ -821,6 +832,13 @@ export class FormulaModal extends Modal {
       if (value instanceof Date) return null;
       if (typeof value !== "string" || !/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value) || Number.isNaN(Date.parse(value))) {
         return t("formula.resultTypeDate");
+      }
+    }
+    if (type === "datetime") {
+      if (value instanceof Date) return null;
+      // datetime 必须含日期 + 时间（HH:mm）分量。
+      if (typeof value !== "string" || !/^\d{4}[-/]\d{1,2}[-/]\d{1,2}.*\d{1,2}:\d{2}/.test(value)) {
+        return t("formula.resultTypeDatetime");
       }
     }
     if (type === "checkbox" && typeof value !== "boolean") return t("formula.resultTypeCheckbox");

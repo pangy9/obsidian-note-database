@@ -14,8 +14,10 @@ import {
 } from "../data/ColumnConfig";
 import { createOptionsFromValues, isOptionColumnType } from "../data/ColumnTypes";
 import { getDefaultChartDateBucket, getDefaultChartNumberBucket, isChartAggregationValueColumn, requiresChartValueField } from "../data/ChartAggregation";
+import { normalizeTimelineDayScale } from "../data/CalendarTimelineModel";
+import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
-import { getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig, StatusOptionDef, ViewConfig } from "../data/types";
 import { getFileFieldFixedType, isFileFieldKey, isSupportedFileField } from "../data/FileFields";
 import { ColumnRenameResult } from "./modals/ColumnRenameModal";
@@ -366,6 +368,15 @@ export class ColumnOperations {
     if (config.galleryImageField === key) config.galleryImageField = undefined;
     if (config.boardGroupField === key) config.boardGroupField = undefined;
     if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
+    if (config.calendarStartDateField === key) config.calendarStartDateField = undefined;
+    if (config.calendarEndDateField === key) config.calendarEndDateField = undefined;
+    if (config.calendarTitleField === key) config.calendarTitleField = undefined;
+    if (config.calendarColorField === key) config.calendarColorField = undefined;
+    if (config.timelineStartDateField === key) config.timelineStartDateField = undefined;
+    if (config.timelineEndDateField === key) config.timelineEndDateField = undefined;
+    if (config.timelineGroupField === key) config.timelineGroupField = undefined;
+    if (config.timelineTitleField === key) config.timelineTitleField = undefined;
+    if (config.timelineColorField === key) config.timelineColorField = undefined;
     if (config.chartGroupField === key) {
       config.chartGroupField = undefined;
       config.chartDateBucket = undefined;
@@ -379,6 +390,7 @@ export class ColumnOperations {
     this.removeSourceRuleReferences(config.sourceRules, key);
     config.sourceRuleTree = removeSourceRuleTreeReferences(config.sourceRuleTree, key);
     delete config.groupOrders?.[key];
+    delete config.showEmptyGroups?.[key];
     delete config.collapsedGroups?.[key];
     delete config.boardCardOrders?.[key];
     for (const viewState of Object.values(config.viewStates || {})) {
@@ -584,6 +596,8 @@ export class ColumnOperations {
       target.computedKey = undefined;
     }
     this.clearInvalidChartValueReferences(this.deps.getActiveDb(), target);
+    this.clearInvalidCalendarTimelineDateReferences(this.deps.getActiveDb(), target);
+    this.normalizeInvalidTimelineDayScales(this.deps.getActiveDb());
     this.updateChartDateBucketReferences(this.deps.getActiveDb(), target);
 
     try {
@@ -626,6 +640,22 @@ export class ColumnOperations {
       ) {
         view.chartSecondaryValueField = undefined;
       }
+    }
+  }
+
+  private clearInvalidCalendarTimelineDateReferences(db: DatabaseConfig, col: ColumnDef): void {
+    if (isDateLikeColumnType(getColumnDisplayType(col, db.schema.computedFields))) return;
+    for (const view of db.views || []) {
+      if (view.calendarStartDateField === col.key) view.calendarStartDateField = undefined;
+      if (view.calendarEndDateField === col.key) view.calendarEndDateField = undefined;
+      if (view.timelineStartDateField === col.key) view.timelineStartDateField = undefined;
+      if (view.timelineEndDateField === col.key) view.timelineEndDateField = undefined;
+    }
+  }
+
+  private normalizeInvalidTimelineDayScales(db: DatabaseConfig): void {
+    for (const view of db.views || []) {
+      normalizeTimelineDayScale(view);
     }
   }
 

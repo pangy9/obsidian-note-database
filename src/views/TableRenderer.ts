@@ -1,8 +1,10 @@
 import { Menu } from "obsidian";
 import { ColumnDef, CreateEntryPosition, RowData, ViewConfig } from "../data/types";
+import { isExplicitlySorted } from "../data/ManualOrder";
+import { formatGroupKeyDisplay } from "../data/GroupDisplay";
 import { toBooleanValue } from "../data/ColumnTypes";
 import { t } from "../i18n";
-import { isHTMLElement } from "./DomGuards";
+import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
@@ -48,6 +50,7 @@ export interface TableRendererActions {
 export class TableRenderer {
   private rowByPath = new Map<string, RowData>();
   private draggingPath: string | undefined;
+  private rowDropFeedback = new DragDropFeedbackState();
 
   constructor(private actions: TableRendererActions) {}
 
@@ -114,7 +117,7 @@ export class TableRenderer {
       }
       label.createSpan({
         cls: "db-group-title-text",
-        text: group.key || t("common.uncategorized"),
+        text: formatGroupKeyDisplay(config, groupField, group.key),
       });
       label.createSpan({ cls: "db-group-count", text: String(group.count) });
 
@@ -139,6 +142,7 @@ export class TableRenderer {
   }
 
   private clearTable(container: HTMLElement): void {
+    this.rowDropFeedback.clear();
     container.querySelectorAll(".db-table-wrap, .db-grouped-table, .db-empty").forEach((el) => el.remove());
   }
 
@@ -187,7 +191,7 @@ export class TableRenderer {
   }
 
   private getSelectionColumnWidth(): number {
-    return this.isPhoneLayout() ? 62 : 34;
+    return this.isPhoneLayout() ? 62 : 40;
   }
 
   private getAvailableTableWidth(tableWrap: HTMLElement): number {
@@ -204,7 +208,8 @@ export class TableRenderer {
     const headerRow = thead.createEl("tr");
     if (!this.actions.isReadOnly) {
       const selectTh = headerRow.createEl("th", { cls: "db-select-col" });
-      const selectAll = selectTh.createEl("input", { attr: { type: "checkbox" } });
+      const selectInner = selectTh.createDiv({ cls: "db-select-inner" });
+      const selectAll = selectInner.createEl("input", { attr: { type: "checkbox" } });
       selectAll.checked = this.actions.areAllRowsSelected(rows);
       selectAll.onchange = () => {
         this.actions.toggleRowsSelected(rows, selectAll.checked);
@@ -257,17 +262,21 @@ export class TableRenderer {
         attr: { "data-note-database-row-path": row.file.path },
       });
       this.actions.setupRow(tr, row);
-      this.setupRowDrag(tr, row, rows, config, groupField, groupKey);
+      let selectTd: HTMLElement | undefined;
       if (!this.actions.isReadOnly) {
-        const selectTd = tr.createEl("td", { cls: "db-select-col" });
-        const cb = selectTd.createEl("input", { attr: { type: "checkbox" } });
+        selectTd = tr.createEl("td", { cls: "db-select-col" });
+        const selectInner = selectTd.createDiv({ cls: "db-select-inner" });
+        // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
+        // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
+        this.setupRowDrag(selectInner, tr, row, rows, config, groupField, groupKey);
+        const cb = selectInner.createEl("input", { attr: { type: "checkbox" } });
         cb.checked = this.actions.isRowSelected(row);
         cb.onclick = (event) => {
           event.stopPropagation();
           this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
         };
         if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
-          this.renderMobileMoveButton(selectTd, config, row, rows, groupField, groupKey, groups);
+          this.renderMobileMoveButton(selectInner, config, row, rows, groupField, groupKey, groups);
         }
       }
       for (const col of columns) {
@@ -307,8 +316,9 @@ export class TableRenderer {
         if (this.canManualReorder(config)) menu.addSeparator();
         for (const group of groups) {
           if (group.key === groupKey) continue;
+          const groupLabel = formatGroupKeyDisplay(config, groupField, group.key);
           menu.addItem((item) => item
-            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setTitle(`${t("mobile.moveTo")} ${groupLabel}`)
             .setIcon("folder-input")
             .onClick(() => {
               const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
@@ -359,6 +369,7 @@ export class TableRenderer {
   }
 
   private setupRowDrag(
+    handleParent: HTMLElement | undefined,
     tr: HTMLElement,
     row: RowData,
     rows: RowData[],
@@ -370,28 +381,41 @@ export class TableRenderer {
     const canReorder = this.canManualReorder(config);
     if (this.actions.isReadOnly || (!canMoveGroup && !canReorder)) return;
     if (this.isPhoneLayout()) return;
+    if (!handleParent) return;
 
-    tr.draggable = true;
+    const handle = handleParent.createEl("button", {
+      cls: "db-table-row-drag-handle",
+      text: "⋮⋮",
+      attr: { type: "button", title: t("panel.dragToSort"), "aria-label": t("panel.dragToSort") },
+    });
+    handle.draggable = true;
     tr.addClass("is-manual-row-draggable");
-    tr.addEventListener("dragstart", (event) => {
-      if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button, .db-cell-fill-handle")) {
-        event.preventDefault();
-        return;
-      }
+    handle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    handle.addEventListener("dragstart", (event) => {
+      event.stopPropagation();
       event.dataTransfer?.setData(ROW_MIME, row.file.path);
       event.dataTransfer?.setData("text/plain", row.file.path);
       if (groupKey != null) event.dataTransfer?.setData(ROW_FROM_GROUP_MIME, groupKey);
       if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      // 以整行作为拖拽预览（参考列管理面板拖拽整项），避免只看到一个手柄在飞；
+      // 在加 is-dragging 之前截取，保证预览是不透明的完整行。
+      if (event.dataTransfer) {
+        const rect = tr.getBoundingClientRect();
+        event.dataTransfer.setDragImage(tr, event.clientX - rect.left, event.clientY - rect.top);
+      }
       this.draggingPath = row.file.path;
       this.setRowDraggingMode(tr, true);
       tr.addClass("is-dragging");
     });
 
-    tr.addEventListener("dragend", () => {
+    handle.addEventListener("dragend", () => {
       this.draggingPath = undefined;
       this.setRowDraggingMode(tr, false);
       tr.removeClass("is-dragging");
-      this.clearRowDropTargets(tr.closest(".db-table-wrap") || tr.parentElement);
+      this.rowDropFeedback.clear();
     });
 
     if (!canReorder) return;
@@ -402,15 +426,11 @@ export class TableRenderer {
       if (!this.isRowDrag(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      this.clearRowDropTargets(tr.parentElement, tr);
-      const rect = tr.getBoundingClientRect();
-      const isAfter = event.clientY > rect.top + rect.height / 2;
-      tr.toggleClass("is-drop-after", isAfter);
-      tr.toggleClass("is-drop-before", !isAfter);
+      this.rowDropFeedback.update(tr, resolveDropPlacement(tr, event, "vertical"));
     });
 
     tr.addEventListener("dragleave", () => {
-      tr.removeClass("is-drop-before", "is-drop-after");
+      this.rowDropFeedback.clearTarget(tr);
     });
 
     tr.addEventListener("drop", (event) => {
@@ -422,10 +442,10 @@ export class TableRenderer {
       event.stopPropagation();
       this.draggingPath = undefined;
       this.setRowDraggingMode(tr, false);
-      this.clearRowDropTargets(tr.parentElement);
 
-      const rect = tr.getBoundingClientRect();
-      const isAfter = event.clientY > rect.top + rect.height / 2;
+      const placement = this.rowDropFeedback.getPlacement(tr) || resolveDropPlacement(tr, event, "vertical");
+      this.rowDropFeedback.clear();
+      const isAfter = placement === "after";
       const position = this.getDropPosition(rows, dragPath, row.file.path, isAfter);
       void this.moveRowToDropPosition(draggedRow, dragPath, groupField, groupKey, event, position.beforePath, position.afterPath);
     });
@@ -464,8 +484,7 @@ export class TableRenderer {
 
   private canManualReorder(config: ViewConfig): boolean {
     if (!this.actions.moveRowToPosition) return false;
-    if (config.sortColumn) return false;
-    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
+    return !isExplicitlySorted(config);
   }
 
   private getDropPosition(
@@ -507,13 +526,6 @@ export class TableRenderer {
       await this.actions.moveRowsToGroup?.(row, groupField, fromGroupKey, groupKey);
     }
     this.actions.moveRowToPosition?.(dragPath, beforePath, afterPath);
-  }
-
-  private clearRowDropTargets(scope: Element | null, except?: HTMLElement): void {
-    if (!scope) return;
-    scope.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
-      if (el !== except) el.classList.remove("is-drop-before", "is-drop-after");
-    });
   }
 
   private setRowDraggingMode(rowEl: HTMLElement, active: boolean): void {

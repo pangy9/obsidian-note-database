@@ -45,6 +45,90 @@ describe("drag preview targets", () => {
     expect(groupOrder).toContain("box-shadow");
     expect(rule).toContain("box-shadow");
   });
+
+  it("keeps the table row drag handle visually aligned with column manager handles", () => {
+    const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    const tableHandle = cssRule(styles, ".note-database-container .db-table .db-table-row-drag-handle");
+
+    expect(tableHandle).toContain("appearance: none");
+    expect(tableHandle).toContain("width: 18px");
+    expect(tableHandle).toContain("min-width: 18px");
+    expect(tableHandle).toContain("min-height: 0");
+    expect(tableHandle).toContain("border: 0");
+    expect(tableHandle).toContain("border-radius: 0");
+    expect(tableHandle).toContain("box-shadow: none");
+    expect(tableHandle).toContain("font-size: 13px");
+    expect(tableHandle).toContain("opacity: 0");
+    expect(tableHandle).toContain("transition: opacity 120ms ease, color 120ms ease");
+    expect(styles).toContain(".note-database-container .db-table tr:hover .db-table-row-drag-handle");
+    expect(styles).toContain(".note-database-container .db-table tr.is-dragging .db-table-row-drag-handle");
+    expect(styles).toContain("opacity: 1");
+  });
+
+  it("reserves enough table selection-column width for the row drag handle and checkbox", () => {
+    const tableRenderer = readFileSync(new URL("../views/TableRenderer.ts", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    const selectCol = cssRule(styles, ".note-database-container .db-table col.db-select-colgroup");
+    const selectCell = cssRule(styles, ".note-database-container .db-table th.db-select-col,\n.note-database-container .db-table td.db-select-col");
+    const headerReserve = cssRule(styles, ".note-database-container .db-table th.db-select-col .db-select-inner::before");
+
+    expect(tableRenderer).toContain("return this.isPhoneLayout() ? 62 : 40");
+    expect(selectCol).toContain("width: 40px");
+    expect(selectCell).toContain("width: 40px");
+    expect(headerReserve).toContain('content: ""');
+    expect(headerReserve).toContain("flex: 0 0 20px");
+  });
+
+  it("uses shared targeted drop feedback for table, list, and gallery item reordering", () => {
+    const files = [
+      "../views/TableRenderer.ts",
+      "../views/ListRenderer.ts",
+      "../views/GalleryRenderer.ts",
+    ];
+
+    for (const file of files) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(source).toContain('from "./DragDropFeedback"');
+      expect(source).toContain("new DragDropFeedbackState()");
+      expect(source).toContain("resolveDropPlacement(");
+      expect(source).toContain(".update(");
+      expect(source).toContain(".clear()");
+      expect(source).not.toMatch(/dragover[\s\S]{0,500}querySelectorAll\("\.is-drop-before, \.is-drop-after"\)/);
+    }
+
+    const board = readFileSync(new URL("../views/BoardRenderer.ts", import.meta.url), "utf8");
+    expect(board).not.toContain('from "./DragDropFeedback"');
+  });
+
+  it("shows a floating target-group preview while dragging board cards", () => {
+    const board = readFileSync(new URL("../views/BoardRenderer.ts", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+
+    // 方案 A：拖拽期间让列等高（align-items: stretch），使列标题的 sticky 失效点推迟到看板底部
+    expect(board).toContain('addClass("is-card-dragging")');
+    expect(board).toContain('removeClass("is-card-dragging")');
+    expect(styles).toContain(".note-database-container .db-board.is-card-dragging");
+    const stretchRule = cssRule(styles, ".note-database-container .db-board.is-card-dragging");
+    expect(stretchRule).toContain("align-items: stretch");
+
+    // 方案 B：鼠标附近浮动列名 preview，复用列命中与列名 helper（不重复造轮子）
+    expect(board).toContain("db-board-drag-group-preview");
+    expect(board).toContain("resolveBoardColumnByPoint");
+    expect(board).toContain("formatGroupKeyDisplay");
+    expect(board).toContain("collectBoardDropTargets");
+    // popout 兼容：preview 与 dragover 监听都走 activeDocument，且成对移除防泄漏
+    expect(board).toContain("window.activeDocument");
+    expect(board).toContain('addEventListener("dragover"');
+    expect(board).toContain('removeEventListener("dragover"');
+
+    const previewRule = cssRule(styles, ".db-board-drag-group-preview");
+    expect(previewRule).toContain("position: fixed");
+    expect(previewRule).toContain("pointer-events: none");
+    expect(previewRule).toContain("var(--interactive-accent)");
+    expect(previewRule).toContain("border-radius: 999px");
+    // body 级元素：禁止嵌套在 .note-database-container 作用域，否则会被滚动祖先裁切
+    expect(styles).not.toContain(".note-database-container .db-board-drag-group-preview");
+  });
 });
 
 function cssRule(source: string, selector: string): string {

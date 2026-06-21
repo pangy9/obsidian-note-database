@@ -51,7 +51,7 @@ type ChartRenderResult = ChartAggregateResult | ChartStackedAggregateResult;
 
 export interface ChartRendererActions {
   onFilter?(rules: FilterRule[]): void;
-  onConfigChange?(): void;
+  onConfigChange?(label?: string): void;
 }
 
 interface ChartResizeObserver {
@@ -563,7 +563,7 @@ export class ChartRenderer {
       const button = empty.createEl("button", { cls: "db-chart-empty-action", text: t("chart.showAllGroups"), attr: { type: "button" } });
       button.onclick = () => {
         config.chartHiddenGroups = undefined;
-        actions.onConfigChange?.();
+        actions.onConfigChange?.(t("undo.chartVisibleGroupsConfig"));
       };
       return;
     }
@@ -577,7 +577,7 @@ export class ChartRenderer {
         config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, defaultField, config.schema.computedFields);
         if (!config.chartNumberBucket) config.chartNumberBucketSize = undefined;
         config.chartHiddenGroups = undefined;
-        actions.onConfigChange?.();
+        actions.onConfigChange?.(t("undo.chartGroupConfig"));
       };
       return;
     }
@@ -588,7 +588,7 @@ export class ChartRenderer {
       button.onclick = () => {
         config.chartValueField = defaultField;
         normalizeChartAggregationForValueField(config, defaultField);
-        actions.onConfigChange?.();
+        actions.onConfigChange?.(t("undo.chartValueFieldConfig"));
       };
       return;
     }
@@ -598,7 +598,7 @@ export class ChartRenderer {
         config.chartValueAxisRange = "auto";
         config.chartValueAxisMin = undefined;
         config.chartValueAxisMax = undefined;
-        actions.onConfigChange?.();
+        actions.onConfigChange?.(t("undo.chartAxisRangeConfig"));
       };
     }
   }
@@ -654,7 +654,7 @@ export class ChartRenderer {
     config.chartHiddenGroups = config.chartHiddenGroups || {};
     if (config.chartHiddenGroups[key]) delete config.chartHiddenGroups[key];
     else config.chartHiddenGroups[key] = true;
-    this.lastRender?.actions?.onConfigChange?.();
+    this.lastRender?.actions?.onConfigChange?.(t("undo.chartVisibleGroupsConfig"));
   }
 
   private renderNumber(container: HTMLElement, result: ChartAggregateResult): void {

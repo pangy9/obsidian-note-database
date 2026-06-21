@@ -144,6 +144,15 @@ export function updateColumnKeyReferences(
   config.chartSeriesField = replaceValue(config.chartSeriesField);
   config.chartValueField = replaceValue(config.chartValueField);
   config.chartSecondaryValueField = replaceValue(config.chartSecondaryValueField);
+  config.calendarStartDateField = replaceValue(config.calendarStartDateField);
+  config.calendarEndDateField = replaceValue(config.calendarEndDateField);
+  config.calendarTitleField = replaceValue(config.calendarTitleField);
+  config.calendarColorField = replaceValue(config.calendarColorField);
+  config.timelineStartDateField = replaceValue(config.timelineStartDateField);
+  config.timelineEndDateField = replaceValue(config.timelineEndDateField);
+  config.timelineGroupField = replaceValue(config.timelineGroupField);
+  config.timelineTitleField = replaceValue(config.timelineTitleField);
+  config.timelineColorField = replaceValue(config.timelineColorField);
   config.groupByField = replaceValue(config.groupByField);
   config.sortColumn = replaceValue(config.sortColumn);
   config.sortColumnOrder = replaceValue(config.sortColumnOrder);
@@ -166,6 +175,11 @@ export function updateColumnKeyReferences(
   if (config.groupOrders?.[oldKey]) {
     config.groupOrders[newKey] = config.groupOrders[oldKey];
     delete config.groupOrders[oldKey];
+    changed = true;
+  }
+  if (config.showEmptyGroups && oldKey in config.showEmptyGroups) {
+    config.showEmptyGroups[newKey] = config.showEmptyGroups[oldKey];
+    delete config.showEmptyGroups[oldKey];
     changed = true;
   }
   if (config.collapsedGroups?.[oldKey]) {

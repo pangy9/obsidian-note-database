@@ -1,9 +1,22 @@
+import type { DatabaseViewType } from "../data/types";
+
 export interface DatabaseViewportSnapshot {
   top: number;
   left: number;
   rowAnchor?: { path: string; offset: number };
   columnAnchor?: { key: string; offset: number };
 }
+
+export interface EmbeddedHostViewportSnapshot {
+  scroller: HTMLElement;
+  top: number;
+  left: number;
+  embedTop: number;
+  embedLeft: number;
+}
+
+export type DatabaseViewportRequest = "auto" | "preserve-anchor" | "preserve-raw" | "reset-top" | "none";
+export type DatabaseViewportMode = Exclude<DatabaseViewportRequest, "auto">;
 
 interface AnchorCandidate {
   id: string;
@@ -42,6 +55,53 @@ export function restoreDatabaseViewport(container: HTMLElement, snapshot: Databa
   if (column) {
     container.scrollLeft += column.getBoundingClientRect().left - bounds.left - snapshot.columnAnchor!.offset;
   }
+}
+
+export function findEmbeddedHostScroller(embed: HTMLElement): HTMLElement | null {
+  const sourceView = embed.closest<HTMLElement>(".markdown-source-view");
+  const sourceScroller = sourceView?.querySelector<HTMLElement>(".cm-scroller");
+  if (sourceScroller) return sourceScroller;
+
+  const previewView = embed.closest<HTMLElement>(".markdown-preview-view");
+  if (previewView) return previewView;
+
+  const readingView = embed.closest<HTMLElement>(".markdown-reading-view");
+  const readingPreview = readingView?.querySelector<HTMLElement>(".markdown-preview-view");
+  if (readingPreview) return readingPreview;
+  if (readingView) return readingView;
+
+  return embed.closest<HTMLElement>(".view-content")
+    || embed.closest<HTMLElement>(".workspace-leaf-content");
+}
+
+export function captureEmbeddedHostViewport(embed: HTMLElement): EmbeddedHostViewportSnapshot | null {
+  const scroller = findEmbeddedHostScroller(embed);
+  if (!scroller) return null;
+  const rect = embed.getBoundingClientRect();
+  return {
+    scroller,
+    top: scroller.scrollTop,
+    left: scroller.scrollLeft,
+    embedTop: rect.top,
+    embedLeft: rect.left,
+  };
+}
+
+export function restoreEmbeddedHostViewport(snapshot: EmbeddedHostViewportSnapshot | null): void {
+  if (!snapshot) return;
+  snapshot.scroller.scrollTop = snapshot.top;
+  snapshot.scroller.scrollLeft = snapshot.left;
+}
+
+export function resolveDatabaseViewportMode(
+  previousViewType: DatabaseViewType | null | undefined,
+  nextViewType: DatabaseViewType | null | undefined,
+  request: DatabaseViewportRequest = "auto"
+): DatabaseViewportMode {
+  if (request !== "auto") return request;
+  return previousViewType && nextViewType && previousViewType === nextViewType
+    ? "preserve-anchor"
+    : "none";
 }
 
 function findVisibleAnchor(

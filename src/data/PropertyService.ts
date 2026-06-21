@@ -1,6 +1,7 @@
 import { App, TFile } from "obsidian";
 import { getDefaultCellValue, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "./ColumnTypes";
 import type { FrontmatterMutator } from "./DataSource";
+import { parseDateTimeParts } from "./DateTimeFormat";
 import { isFileFieldKey } from "./FileFields";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef } from "./types";
@@ -230,14 +231,14 @@ export class PropertyService {
         return Number.isFinite(parsed) ? parsed : "";
       }
       case "date": {
-        if (value instanceof Date && !isNaN(value.getTime())) {
-          return value.toISOString().substring(0, 10);
-        }
-        const text = stringifyValue(value).trim();
-        const match = text.match(/^\d{4}-\d{2}-\d{2}/);
-        if (match) return match[0];
-        const parsed = new Date(text);
-        return isNaN(parsed.getTime()) ? "" : parsed.toISOString().substring(0, 10);
+        // 统一用 parseDateTimeParts 取本地 dateKey，避免 toISOString 的 UTC 跨日漂移。
+        const parts = parseDateTimeParts(value);
+        return parts ? parts.dateKey : "";
+      }
+      case "datetime": {
+        const parts = parseDateTimeParts(value);
+        if (!parts) return "";
+        return `${parts.dateKey}T${parts.time || "00:00"}`;
       }
       case "text":
         return stringifyValue(value);
@@ -266,6 +267,8 @@ export class PropertyService {
         return "number";
       case "date":
         return "date";
+      case "datetime":
+        return "datetime";
       case "checkbox":
         return "checkbox";
       case "multi-select":

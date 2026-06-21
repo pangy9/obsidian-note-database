@@ -1,5 +1,5 @@
 import { setIcon } from "obsidian";
-import { ColumnDef, DatabaseConfig, DatabaseViewType, GroupOrderMode, ViewConfig } from "../data/types";
+import { ColumnDef, DatabaseConfig, DatabaseViewType, GroupOrderMode, TimelineScale, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
@@ -8,6 +8,9 @@ import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { openDropdownMenu } from "./DropdownField";
+import { CalendarTimelineToolbarRenderer } from "./CalendarTimelineToolbarRenderer";
+import { isDateLikeColumnType } from "../data/DateTimeFormat";
+import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "../data/GroupVisibility";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -39,15 +42,21 @@ export interface ToolbarActions {
   openDatabaseFile?(): void;
   exportData?(format: "csv" | "markdown"): void;
   exportCsvMarkdownZip?(): void;
-  setViewType(value: DatabaseViewType): void;
+  setViewType(value: DatabaseViewType, viewIndex?: number): void;
   setDisplayWidth(value: "default" | "wide"): void;
   setSearchText(value: string): void;
   setGroupByField(value: string): void;
   setGroupOrderMode(mode: GroupOrderMode): void;
+  setShowEmptyGroups(field: string, value: boolean): void;
+  setBoardSubgroupEnabled(enabled: boolean): void;
+  setBoardSubgroupField(value: string): void;
   toggleViewConfig(anchorEl: HTMLElement): void;
   configureGroupOrder(): void;
   toggleSortPanel(anchorEl: HTMLElement): void;
   toggleChartOptions?(anchorEl: HTMLElement): void;
+  toggleCalendarOptions?(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig): void;
+  updateViewConfig?(label?: string): void;
+  updateTimelineScale?(scale: TimelineScale, label?: string): boolean | Promise<boolean> | void;
   syncComputedFields?(): void;
   toggleFilterPanel(anchorEl: HTMLElement): void;
   toggleColumnManager(anchorEl: HTMLElement): void;
@@ -64,6 +73,10 @@ export interface ToolbarActions {
   /** When true, render only the database content and skip title, tabs, and toolbar chrome. */
   readonly hideHeaderChrome?: boolean;
   readonly showChartOptions?: boolean;
+  /** Async count of hidden negative-interval timeline events (drives the timeline options notice). */
+  getTimelineInvalidEventCount?(): number | Promise<number>;
+  /** Open the modal to review/fix negative-interval timeline events. */
+  openTimelineInvalidEvents?(): void;
 }
 
 export class ToolbarRenderer {
@@ -86,6 +99,7 @@ export class ToolbarRenderer {
   private titleActionsPopover?: HTMLElement;
   private removeTitleActionsPopoverListener?: () => void;
   private descriptionScrollTimers = new WeakMap<HTMLElement, number>();
+  private calendarTimelineToolbarRenderer = new CalendarTimelineToolbarRenderer();
 
   render(
     containerEl: HTMLElement,
@@ -100,11 +114,17 @@ export class ToolbarRenderer {
     this.closeViewTabPopover();
     this.closeExportPopover();
     this.closeTitleActionsPopover();
+    this.calendarTimelineToolbarRenderer.closePopover();
     const currentEntry = viewEntries[currentDbIndex];
     const currentDb = currentEntry?.config;
     const currentView = currentDb?.views[currentViewIndex] || currentDb?.views[0];
     const phoneLayout = this.isPhoneLayout();
-    const isChartView = currentView?.viewType === "chart";
+    const viewType = currentView?.viewType || "table";
+    const isChartView = viewType === "chart";
+    const isCalendarTimelineView = viewType === "calendar" || viewType === "timeline";
+    const showSortButton = viewType !== "chart";
+    const showGroupButton = viewType !== "chart" && viewType !== "calendar";
+    const showColumnButton = viewType !== "chart" && viewType !== "timeline" && viewType !== "calendar";
 
     if (actions.hideHeaderChrome) return;
 
@@ -212,10 +232,12 @@ export class ToolbarRenderer {
 
     if (!actions.hideWidthSelect) this.renderWidthSelect(right, currentEntry, currentView, actions);
     this.renderFilterButton(right, state, actions);
-    if (!isChartView) this.renderSortButton(right, state, actions);
+    if (showSortButton) this.renderSortButton(right, state, actions);
     this.renderViewConfigButton(right, actions);
-    if (!isChartView) {
+    if (showGroupButton) {
       this.renderGroupSelect(right, currentView, state, actions);
+      if (showColumnButton) this.renderColumnButton(right, currentView, state, actions);
+    } else if (showColumnButton) {
       this.renderColumnButton(right, currentView, state, actions);
     }
     if (!actions.isReadOnly && normalizeComputedSyncMode(currentDb?.computedSyncMode) === "manual") {
@@ -224,6 +246,9 @@ export class ToolbarRenderer {
     this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && !actions.hideDatabaseActions && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
     if (isChartView && actions.toggleChartOptions && actions.showChartOptions === true) this.renderChartOptionsButton(right, actions);
+    if (isCalendarTimelineView && currentView && actions.updateViewConfig) {
+      this.renderCalendarTimelineOptionsButton(right, currentView, actions);
+    }
     if (!phoneLayout) this.renderSearch(right, state, actions);
     if (!actions.isReadOnly && !isChartView) this.renderNewButton(right, actions);
   }
@@ -237,6 +262,40 @@ export class ToolbarRenderer {
     const btn = this.createIconButton(toolbar, "", t("viewConfig.saveComputedResults"));
     appendSvg(btn, ToolbarRenderer.ICONS.refresh_fx);
     btn.onclick = () => actions.syncComputedFields?.();
+  }
+
+  private renderCalendarTimelineOptionsButton(toolbar: HTMLElement, config: ViewConfig, actions: ToolbarActions): void {
+    const label = config.viewType === "timeline" ? t("timeline.options") : t("calendar.options");
+    const btn = this.createIconButton(toolbar, "", label);
+    btn.addClass("db-calendar-timeline-options-toolbar-btn");
+    this.appendViewSettingsIcon(btn, this.getViewTypeIcon(config.viewType || "calendar"));
+    btn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actions.closeToolbarPopovers?.();
+      this.closeDatabasePopover();
+      this.closeGroupPopover();
+      this.closeViewTabPopover();
+      this.closeExportPopover();
+      this.closeTitleActionsPopover();
+      if (config.viewType === "calendar" && actions.toggleCalendarOptions) {
+        const container = toolbar.closest(".note-database-container") as HTMLElement || toolbar;
+        actions.toggleCalendarOptions(container, btn, config);
+      } else {
+        this.toggleCalendarTimelineOptions(toolbar, btn, config, actions);
+      }
+    };
+  }
+
+  private toggleCalendarTimelineOptions(toolbar: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: ToolbarActions): void {
+    this.calendarTimelineToolbarRenderer.togglePopover(toolbar.closest(".note-database-container") as HTMLElement || toolbar, anchor, config, {
+      onChange: (label) => actions.updateViewConfig?.(label),
+      updateTimelineScale: (scale, label) => actions.updateTimelineScale?.(scale, label),
+      getInvalidEventCount: actions.getTimelineInvalidEventCount
+        ? () => actions.getTimelineInvalidEventCount?.() ?? 0
+        : undefined,
+      openInvalidEvents: () => actions.openTimelineInvalidEvents?.(),
+    });
   }
 
   // ── Database selector popover ──
@@ -511,7 +570,7 @@ export class ToolbarRenderer {
       };
       if (canReorder) this.setupViewTabDrag(tab, i, actions);
       if (!readOnly) {
-        tab.oncontextmenu = (e) => this.showViewTabMenu(e, i, db.views.length, actions, tab);
+        tab.oncontextmenu = (e) => this.showViewTabMenu(e, i, db.views.length, actions, tab, view.viewType || "table");
         tab.ondblclick = () => this.startRenameView(tab, i, actions);
       }
       tabEls.push({ el: tab, index: i });
@@ -662,7 +721,8 @@ export class ToolbarRenderer {
     viewIndex: number,
     totalViews: number,
     actions: ToolbarActions,
-    tab: HTMLElement
+    tab: HTMLElement,
+    viewType: DatabaseViewType
   ): void {
     event.preventDefault();
     event.stopPropagation();
@@ -689,6 +749,7 @@ export class ToolbarRenderer {
     if (actions.copyViewCode) {
       this.renderViewTabPopoverRow(panel, t("toolbar.copyViewCode"), "code-xml", () => actions.copyViewCode?.(viewIndex));
     }
+    this.renderViewTypeChangeRow(panel, viewIndex, viewType, actions);
     if (this.isPhoneLayout() && actions.moveView && totalViews > 1) {
       if (viewIndex > 0) {
         this.renderViewTabPopoverRow(panel, t("toolbar.moveViewFirst"), "chevrons-left", () => actions.moveView?.(viewIndex, 0));
@@ -718,6 +779,47 @@ export class ToolbarRenderer {
       window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
+  }
+
+  private renderViewTypeChangeRow(panel: HTMLElement, viewIndex: number, viewType: DatabaseViewType, actions: ToolbarActions): void {
+    const row = panel.createEl("button", {
+      cls: "db-view-tab-popover-row",
+      attr: { type: "button" },
+    });
+    setIcon(row.createSpan({ cls: "db-view-tab-popover-marker" }), "replace");
+    row.createSpan({ cls: "db-view-tab-popover-label", text: t("toolbar.changeViewType") });
+    setIcon(row.createSpan({ cls: "db-view-tab-popover-chevron" }), "chevron-right");
+    row.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.showViewTypeChangeMenu(row, viewIndex, viewType, actions);
+    };
+  }
+
+  private showViewTypeChangeMenu(anchor: HTMLElement, viewIndex: number, viewType: DatabaseViewType, actions: ToolbarActions): void {
+    openDropdownMenu({
+      anchor,
+      label: t("toolbar.changeViewType"),
+      value: viewType,
+      popoverClassName: "db-view-tabs-dropdown-popover",
+      options: this.getViewTypeOptions(),
+      onChange: (value) => {
+        this.closeViewTabPopover();
+        actions.setViewType(value as DatabaseViewType, viewIndex);
+      },
+    });
+  }
+
+  private getViewTypeOptions(): Array<{ value: DatabaseViewType; text: string; icon: string }> {
+    return [
+      { value: "table", text: t("common.tableView"), icon: this.getViewTypeIcon("table") },
+      { value: "board", text: t("common.boardView"), icon: this.getViewTypeIcon("board") },
+      { value: "gallery", text: t("common.galleryView"), icon: this.getViewTypeIcon("gallery") },
+      { value: "list", text: t("common.listView"), icon: this.getViewTypeIcon("list") },
+      { value: "chart", text: t("common.chartView"), icon: this.getViewTypeIcon("chart") },
+      { value: "calendar", text: t("common.calendarView"), icon: this.getViewTypeIcon("calendar") },
+      { value: "timeline", text: t("common.timelineView"), icon: this.getViewTypeIcon("timeline") },
+    ];
   }
 
   private renderViewTabPopoverRow(
@@ -765,6 +867,8 @@ export class ToolbarRenderer {
     this.renderViewTabPopoverRow(panel, t("common.galleryView"), this.getViewTypeIcon("gallery"), () => actions.addView("gallery"));
     this.renderViewTabPopoverRow(panel, t("common.listView"), this.getViewTypeIcon("list"), () => actions.addView("list"));
     this.renderViewTabPopoverRow(panel, t("common.chartView"), this.getViewTypeIcon("chart"), () => actions.addView("chart"));
+    this.renderViewTabPopoverRow(panel, t("common.calendarView"), this.getViewTypeIcon("calendar"), () => actions.addView("calendar"));
+    this.renderViewTabPopoverRow(panel, t("common.timelineView"), this.getViewTypeIcon("timeline"), () => actions.addView("timeline"));
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (outsideEvent: MouseEvent) => {
       const target = outsideEvent.target as Node | null;
@@ -785,6 +889,8 @@ export class ToolbarRenderer {
     if (viewType === "gallery") return "image";
     if (viewType === "list") return "list";
     if (viewType === "chart") return "bar-chart";
+    if (viewType === "calendar") return "calendar-days";
+    if (viewType === "timeline") return "chart-gantt";
     return "table";
   }
 
@@ -820,15 +926,17 @@ export class ToolbarRenderer {
   ): void {
     event.preventDefault();
     event.stopPropagation();
+    const initialHeight = Math.ceil(el.getBoundingClientRect().height);
     const input = multiline ? window.activeDocument.createElement("textarea") : window.activeDocument.createElement("input");
     input.className = multiline ? "db-heading-edit db-heading-edit-description" : "db-heading-edit";
     if (!multiline) (input as HTMLInputElement).type = "text";
+    if (multiline && input instanceof HTMLTextAreaElement) input.rows = 1;
     input.value = value;
     el.replaceWith(input);
     if (multiline && input instanceof HTMLTextAreaElement) {
-      this.autoGrowTextarea(input, 200);
-      input.addEventListener("input", () => this.autoGrowTextarea(input, 200));
-      window.requestAnimationFrame(() => this.autoGrowTextarea(input, 200));
+      this.syncDatabaseDescriptionEditHeight(input, initialHeight);
+      const maxHeight = this.getDatabaseDescriptionEditMaxHeight(input, initialHeight);
+      input.addEventListener("input", () => this.autoGrowTextarea(input, maxHeight, initialHeight));
     }
     input.focus();
     input.select();
@@ -850,11 +958,25 @@ export class ToolbarRenderer {
     };
   }
 
-  private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
+  private autoGrowTextarea(textarea: HTMLTextAreaElement, maxHeight: number, minHeight = 0): void {
     textarea.setCssProps({ height: "auto" });
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
     textarea.setCssProps({ height: `${nextHeight}px` });
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  private syncDatabaseDescriptionEditHeight(textarea: HTMLTextAreaElement, height: number): void {
+    const nextHeight = Math.max(0, height);
+    if (nextHeight > 0) textarea.setCssProps({ height: `${nextHeight}px` });
+    textarea.style.overflowY = textarea.scrollHeight > nextHeight ? "auto" : "hidden";
+  }
+
+  private getDatabaseDescriptionEditMaxHeight(textarea: HTMLTextAreaElement, initialHeight: number): number {
+    const view = textarea.ownerDocument.defaultView || window;
+    const rawMaxHeight = view.getComputedStyle(textarea).maxHeight;
+    const parsedMaxHeight = Number.parseFloat(rawMaxHeight);
+    const cssMaxHeight = Number.isFinite(parsedMaxHeight) ? parsedMaxHeight : 200;
+    return Math.max(initialHeight || 0, cssMaxHeight);
   }
 
   // ── Row 2: Toolbar buttons ──
@@ -927,9 +1049,7 @@ export class ToolbarRenderer {
     actions: ToolbarActions
   ): string {
     const currentViewType = config?.viewType || "table";
-    const groupValue = currentViewType === "board"
-      ? config?.boardGroupField || state.groupByField
-      : state.groupByField;
+    const groupValue = config ? this.resolveGroupValue(config, currentViewType, state) : state.groupByField;
     const btn = this.createIconButton(toolbar, "", t("toolbar.group"), "db-group-btn");
     appendSvg(btn, ToolbarRenderer.ICONS.group);
     if (groupValue) btn.addClass("is-active");
@@ -942,16 +1062,25 @@ export class ToolbarRenderer {
       this.closeViewTabPopover();
       this.closeExportPopover();
       this.closeTitleActionsPopover();
-      this.renderGroupPopover(btn, config, currentViewType, groupValue || "", actions, state);
+      this.renderGroupPopover(btn, config, currentViewType, actions, state);
     };
     return groupValue || "";
+  }
+
+  private resolveGroupValue(
+    config: ViewConfig,
+    viewType: DatabaseViewType,
+    state: DatabaseViewState
+  ): string {
+    return viewType === "board"
+      ? config.boardGroupField || ""
+      : state.groupByField || "";
   }
 
   private renderGroupPopover(
     anchorEl: HTMLElement,
     config: ViewConfig,
     currentViewType: DatabaseViewType,
-    groupValue: string,
     actions: ToolbarActions,
     state: DatabaseViewState
   ): void {
@@ -969,6 +1098,7 @@ export class ToolbarRenderer {
     this.groupPopoverActions = actions;
     this.groupPopoverState = state;
 
+    const groupValue = this.resolveGroupValue(config, currentViewType, state);
     this.populateGroupPopover(panel, config, currentViewType, groupValue, actions);
 
     positionToolbarPopover(panel, anchorEl);
@@ -998,7 +1128,13 @@ export class ToolbarRenderer {
 
     const groupColumn = config.schema.columns.find((col) => col.key === groupValue);
     if (groupValue && groupColumn) {
-      this.renderGroupPopoverSection(panel, t("toolbar.groupOrder"));
+      this.renderGroupPopoverSection(panel, t("toolbar.groupOptions"));
+      if (isEmptyGroupVisibilityColumn(config, groupColumn)) {
+        this.renderGroupVisibilitySwitch(panel, config, groupValue, actions);
+      }
+      if (currentViewType === "board") {
+        this.renderBoardSubgroupSwitch(panel, config, actions);
+      }
       this.addGroupOrderRows(panel, config, groupColumn, actions);
     }
 
@@ -1019,6 +1155,9 @@ export class ToolbarRenderer {
         onClick: () => actions.setGroupByField(col.key),
       });
     }
+    if (currentViewType === "board" && this.isBoardSubgroupEnabled(config)) {
+      this.renderBoardSubgroupSection(panel, config, groupValue, actions);
+    }
   }
 
   private rebuildGroupPopover(): void {
@@ -1033,9 +1172,7 @@ export class ToolbarRenderer {
     const scrollTop = panel.scrollTop;
     panel.empty();
 
-    const groupValue = viewType === "board"
-      ? config.boardGroupField || ""
-      : state.groupByField || "";
+    const groupValue = this.resolveGroupValue(config, viewType, state);
 
     this.populateGroupPopover(panel, config, viewType, groupValue, actions);
     panel.scrollTop = scrollTop;
@@ -1065,6 +1202,87 @@ export class ToolbarRenderer {
     };
   }
 
+  private renderGroupVisibilitySwitch(
+    panel: HTMLElement,
+    config: ViewConfig,
+    field: string,
+    actions: ToolbarActions
+  ): void {
+    const row = panel.createEl("label", { cls: "db-group-popover-row db-group-popover-switch-row" });
+    const marker = row.createSpan({ cls: "db-group-popover-marker" });
+    setIcon(marker, "eye");
+    row.createSpan({ cls: "db-group-popover-label", text: t("toolbar.showEmptyGroup") });
+    const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });
+    input.checked = shouldShowEmptyGroups(config, field);
+    input.onchange = (event) => {
+      event.stopPropagation();
+      actions.setShowEmptyGroups(field, input.checked);
+      this.rebuildGroupPopover();
+    };
+    input.onclick = (event) => event.stopPropagation();
+  }
+
+  private renderBoardSubgroupSwitch(
+    panel: HTMLElement,
+    config: ViewConfig,
+    actions: ToolbarActions
+  ): void {
+    const row = panel.createEl("label", { cls: "db-group-popover-row db-group-popover-switch-row" });
+    const marker = row.createSpan({ cls: "db-group-popover-marker" });
+    setIcon(marker, "layout-list");
+    row.createSpan({ cls: "db-group-popover-label", text: t("toolbar.enableBoardSubgroups") });
+    const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });
+    input.checked = this.isBoardSubgroupEnabled(config);
+    input.onchange = (event) => {
+      event.stopPropagation();
+      actions.setBoardSubgroupEnabled(input.checked);
+      this.rebuildGroupPopover();
+    };
+    input.onclick = (event) => event.stopPropagation();
+  }
+
+  private renderBoardSubgroupSection(
+    panel: HTMLElement,
+    config: ViewConfig,
+    groupValue: string,
+    actions: ToolbarActions
+  ): void {
+    this.renderGroupPopoverSection(panel, t("toolbar.subgroupBy"));
+    const candidates = this.getBoardSubgroupCandidates(config, groupValue);
+    const subgroupField = config.boardSubgroupField || "";
+    const hasActiveSubgroup = candidates.some((col) => col.key === subgroupField);
+    if (candidates.length === 0) {
+      this.renderGroupPopoverNotice(panel, t("toolbar.noAvailableBoardSubgroupFields"), "info");
+      return;
+    }
+    if (!hasActiveSubgroup) {
+      this.renderGroupPopoverNotice(panel, t("toolbar.selectBoardSubgroupField"), "info");
+    }
+    for (const col of candidates) {
+      this.renderGroupPopoverRow(panel, {
+        label: col.label,
+        column: col,
+        active: subgroupField === col.key,
+        onClick: () => actions.setBoardSubgroupField(col.key),
+      });
+    }
+  }
+
+  private renderGroupPopoverNotice(panel: HTMLElement, label: string, icon: string): void {
+    const row = panel.createDiv({ cls: "db-group-popover-row is-disabled" });
+    const marker = row.createSpan({ cls: "db-group-popover-marker" });
+    setIcon(marker, icon);
+    row.createSpan({ cls: "db-group-popover-label", text: label });
+  }
+
+  private isBoardSubgroupEnabled(config: ViewConfig): boolean {
+    return config.boardSubgroupEnabled === true || Boolean(config.boardSubgroupField);
+  }
+
+  private getBoardSubgroupCandidates(config: ViewConfig, groupValue: string): ColumnDef[] {
+    return config.schema.columns.filter((col) => col.key !== "file.name" && col.key !== groupValue);
+  }
+
   private addGroupOrderRows(panel: HTMLElement, config: ViewConfig, col: ColumnDef, actions: ToolbarActions): void {
     const add = (title: string, mode: GroupOrderMode, icon: string) => {
       this.renderGroupPopoverRow(panel, { label: title, icon, onClick: () => actions.setGroupOrderMode(mode) });
@@ -1076,7 +1294,7 @@ export class ToolbarRenderer {
     } else if (type === "currency") {
       add(t("groupOrder.currencyAsc"), "number-asc", "arrow-up-0-1");
       add(t("groupOrder.currencyDesc"), "number-desc", "arrow-down-1-0");
-    } else if (type === "date") {
+    } else if (isDateLikeColumnType(type)) {
       add(t("groupOrder.dateAsc"), "date-asc", "calendar-arrow-up");
       add(t("groupOrder.dateDesc"), "date-desc", "calendar-arrow-down");
     } else if (type === "checkbox") {
@@ -1182,7 +1400,8 @@ export class ToolbarRenderer {
 
   private renderChartOptionsButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     const btn = this.createIconButton(toolbar, "", t("chart.options"), "db-chart-options-toolbar-btn");
-    appendSvg(btn, ToolbarRenderer.ICONS.chartSettings);
+    this.appendViewSettingsIcon(btn, this.getViewTypeIcon("chart"));
+
     btn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1326,6 +1545,29 @@ export class ToolbarRenderer {
     return btn;
   }
 
+  private appendCompositeIcon(
+    button: HTMLElement,
+    mainIcon: string,
+    badgeSvg: string,
+    extraClass = ""
+  ): void {
+    const wrap = button.createSpan({
+      cls: `db-composite-icon ${extraClass}`.trim(),
+    });
+
+    setIcon(wrap.createSpan({ cls: "db-composite-icon-main" }), mainIcon);
+    appendSvg(wrap.createSpan({ cls: "db-composite-icon-badge" }), badgeSvg);
+  }
+
+  private appendViewSettingsIcon(button: HTMLElement, viewIcon: string): void {
+    this.appendCompositeIcon(
+      button,
+      viewIcon,
+      ToolbarRenderer.ICONS.settingsBadge,
+      "db-view-settings-icon"
+    );
+  }
+
   private setBadge(button: HTMLElement, count: number): void {
     if (count <= 0) return;
     button.createSpan({ cls: "db-toolbar-badge", text: String(count) });
@@ -1351,6 +1593,7 @@ export class ToolbarRenderer {
     this.closeViewTabPopover();
     this.closeExportPopover();
     this.closeTitleActionsPopover();
+    this.calendarTimelineToolbarRenderer.closePopover();
   }
 
   private static readonly ICONS = {
@@ -1361,7 +1604,7 @@ export class ToolbarRenderer {
     csv: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-table"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/><path d="M9 5v14"/><path d="M15 5v14"/></svg>`,
     markdown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-markdown"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15v-6l3 4l3-4v6"/><path d="M16 9v6"/><path d="M14 13l2 2l2-2"/></svg>`,
     settings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-settings-cog"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" /></svg>',
-    chartSettings: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="icon icon-tabler icons-tabler-filled icon-tabler-chart-settings"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 3h14a2 2 0 0 1 2 2v9.25a5.5 5.5 0 0 0 -2 -1.14v-8.11h-14v14h8.11a5.5 5.5 0 0 0 1.14 2h-9.25a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2" /><path d="M8 14a1 1 0 0 1 1 1v1a1 1 0 0 1 -2 0v-1a1 1 0 0 1 1 -1" /><path d="M12 10a1 1 0 0 1 1 1v5a1 1 0 0 1 -2 0v-5a1 1 0 0 1 1 -1" /><path d="M16 7a1 1 0 0 1 1 1v4.1a5.5 5.5 0 0 0 -2 .9v-5a1 1 0 0 1 1 -1" /><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" /></g></svg>',
+    settingsBadge: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-gear"> <path d="M3.001 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /> <path d="M5.001 1.5v1.5" /> <path d="M5.001 7v1.5" /> <path d="M8.032 3.25l-1.299 .75" /> <path d="M3.27 6l-1.3 .75" /> <path d="M1.97 3.25l1.3 .75" /> <path d="M6.733 6l1.3 .75" /></svg>',
     group: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-group-fields"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 6v12" /><path d="M5 9h3" /><path d="M5 15h3" /><rect x="9" y="5" width="10" height="5" rx="1.5" /><rect x="9" y="14" width="10" height="5" rx="1.5" /></svg>',
     refresh_fx: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="icon icon-custom-recalculate-badge"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M15 7a7 7 0 1 0 2 5"/><path d="M15 4v4h-4"/><g transform="translate(12 10)"><g transform="scale(0.6)" stroke-width="4"><path d="M6.5 5.5h10.5l-5.5 6.5l5.5 6.5h-10.5"/></g></g></svg>',
   };

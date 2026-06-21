@@ -110,6 +110,7 @@ export function COLUMN_TYPE_LABELS(): Record<ColumnDef["type"], string> {
     text: t("columnType.text"),
     number: t("columnType.number"),
     date: t("columnType.date"),
+    datetime: t("columnType.datetime"),
     currency: t("columnType.currency"),
     select: t("columnType.select"),
     "multi-select": t("columnType.multiSelect"),

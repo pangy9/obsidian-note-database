@@ -3,6 +3,7 @@ import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleNode } from "./types";
 import { hasObsidianTagValue, isObsidianTagsKey, toObsidianTagValues } from "./ColumnTypes";
+import { hasDateTimeValue } from "./DateTimeFormat";
 import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { fileHasLink, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey } from "./FileFields";
 import { stringifyValue } from "./Stringify";
@@ -325,7 +326,9 @@ export function inferColumnType(key: string, sampleValues: unknown[] = []): Colu
 		if (nonNull.length > 0) {
 			if (isObsidianTagsKey(key)) return "multi-select";
 			if (nonNull.some((v) => Array.isArray(v))) return "multi-select";
-			if (nonNull.every((v) => v instanceof Date || (typeof v === "string" && /\d{4}-\d{2}-\d{2}/.test(v) && !isNaN(Date.parse(v))))) return "date";
+			if (nonNull.every((v) => v instanceof Date || (typeof v === "string" && /\d{4}-\d{2}-\d{2}/.test(v) && !isNaN(Date.parse(v))))) {
+				return nonNull.some((v) => hasDateTimeValue(v)) ? "datetime" : "date";
+			}
 			if (nonNull.every((v) => typeof v === "number" || (typeof v === "string" && !isNaN(Number(v)) && v.trim() !== ""))) return "number";
 			if (nonNull.every((v) => typeof v === "boolean")) return "checkbox";
 		}
@@ -333,6 +336,7 @@ export function inferColumnType(key: string, sampleValues: unknown[] = []): Colu
 
 	const lower = key.toLowerCase();
 	if (isFileFieldKey(lower)) return getFileFieldFixedType(lower);
+	if (lower.includes("datetime") || lower.includes("date_time") || lower.includes("date-time")) return "datetime";
 	if (lower.includes("date") || lower.includes("time") || key.includes("日期") || key.includes("时间")) return "date";
 	if (lower.includes("price") || lower.includes("cost") || lower.includes("amount") || key.includes("费用") || key.includes("金额") || key.includes("花费")) return "currency";
 	if (lower.includes("count") || lower.includes("days") || key.includes("天数")) return "number";

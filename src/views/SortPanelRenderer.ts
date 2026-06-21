@@ -41,6 +41,11 @@ export class SortPanelRenderer {
 
     const top = panel.createDiv({ cls: "db-panel-header" });
     top.createSpan({ cls: "db-panel-title", text: t("toolbar.sort") });
+    // Calendar layouts reserve lanes/columns for spanning, all-day, and
+    // overlapping timed events before applying user sort as a layout tiebreak.
+    if (config.viewType === "calendar") {
+      panel.createDiv({ cls: "db-panel-hint", text: t("sortPanel.calendarHint") });
+    }
 
     const rules = state.sortRules || [];
     if (rules.length === 0) {

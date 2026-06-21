@@ -346,6 +346,7 @@ export class DataSource {
           defaultStatusPresetId: safeString(source["viewDefaultStatusPresetId"]) || undefined,
           displayWidth: source["displayWidth"] === "wide" ? "wide" : "default",
           boardGroupField: safeString(source["boardGroupField"]) || undefined,
+          boardSubgroupEnabled: this.parseBoardSubgroupEnabled(source),
           boardSubgroupField: safeString(source["boardSubgroupField"]) || undefined,
           boardColumnWidth: typeof source["boardColumnWidth"] === "number" ? source["boardColumnWidth"] : undefined,
           defaultColumnWidth: typeof source["defaultColumnWidth"] === "number" ? source["defaultColumnWidth"] : undefined,
@@ -365,6 +366,7 @@ export class DataSource {
           groupOrders: source["groupOrders"] && typeof source["groupOrders"] === "object"
             ? source["groupOrders"] as Record<string, string[]>
             : undefined,
+          showEmptyGroups: this.parseBooleanMap(source["showEmptyGroups"]),
           collapsedGroups: source["collapsedGroups"] && typeof source["collapsedGroups"] === "object"
             ? source["collapsedGroups"] as Record<string, string[]>
             : undefined,
@@ -412,6 +414,19 @@ export class DataSource {
           chartValueAxisMin: this.parseFiniteNumber(source["chartValueAxisMin"]),
           chartValueAxisMax: this.parseFiniteNumber(source["chartValueAxisMax"]),
           chartReferenceLines: this.parseChartReferenceLines(source["chartReferenceLines"]),
+          calendarMonth: this.parseCalendarMonth(source["calendarMonth"]),
+          calendarStartDateField: safeString(source["calendarStartDateField"]) || undefined,
+          calendarEndDateField: safeString(source["calendarEndDateField"]) || undefined,
+          calendarTitleField: safeString(source["calendarTitleField"]) || undefined,
+          calendarColorField: safeString(source["calendarColorField"]) || undefined,
+          calendarCellMinHeight: this.parsePositiveNumber(source["calendarCellMinHeight"]),
+          calendarKeepCellAspectRatio: source["calendarKeepCellAspectRatio"] === true,
+          calendarScale: this.parseCalendarScale(source["calendarScale"]),
+          calendarDay: this.parseCalendarDay(source["calendarDay"]),
+          calendarStartHour: this.parseCalendarHour(source["calendarStartHour"], 0, 23),
+          calendarEndHour: this.parseCalendarHour(source["calendarEndHour"], 1, 24),
+          calendarHourHeight: this.parsePositiveNumber(source["calendarHourHeight"]),
+          calendarWeekSlotDuration: this.parseCalendarSlotDuration(source["calendarWeekSlotDuration"]),
           sortColumn: safeString(source["sortColumn"]) || undefined,
           sortDirection: source["sortDirection"] === "desc" ? "desc" : "asc" as const,
           sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as SortRule[] : undefined,
@@ -460,6 +475,7 @@ export class DataSource {
       defaultStatusPresetId: safeString(v["defaultStatusPresetId"]) || undefined,
       displayWidth: v["displayWidth"] === "wide" ? "wide" : "default",
       boardGroupField: safeString(v["boardGroupField"]) || undefined,
+      boardSubgroupEnabled: this.parseBoardSubgroupEnabled(v),
       boardSubgroupField: safeString(v["boardSubgroupField"]) || undefined,
       boardColumnWidth: typeof v["boardColumnWidth"] === "number" ? v["boardColumnWidth"] : undefined,
       defaultColumnWidth: typeof v["defaultColumnWidth"] === "number" ? v["defaultColumnWidth"] : undefined,
@@ -479,6 +495,7 @@ export class DataSource {
       groupOrders: v["groupOrders"] && typeof v["groupOrders"] === "object"
         ? v["groupOrders"] as Record<string, string[]>
         : undefined,
+      showEmptyGroups: this.parseBooleanMap(v["showEmptyGroups"]),
       collapsedGroups: v["collapsedGroups"] && typeof v["collapsedGroups"] === "object"
         ? v["collapsedGroups"] as Record<string, string[]>
         : undefined,
@@ -526,6 +543,38 @@ export class DataSource {
       chartValueAxisMin: this.parseFiniteNumber(v["chartValueAxisMin"]),
       chartValueAxisMax: this.parseFiniteNumber(v["chartValueAxisMax"]),
       chartReferenceLines: this.parseChartReferenceLines(v["chartReferenceLines"]),
+      calendarMonth: this.parseCalendarMonth(v["calendarMonth"]),
+      calendarStartDateField: safeString(v["calendarStartDateField"]) || undefined,
+      calendarEndDateField: safeString(v["calendarEndDateField"]) || undefined,
+      calendarTitleField: safeString(v["calendarTitleField"]) || undefined,
+      calendarColorField: safeString(v["calendarColorField"]) || undefined,
+      calendarCellMinHeight: this.parsePositiveNumber(v["calendarCellMinHeight"]),
+      calendarKeepCellAspectRatio: v["calendarKeepCellAspectRatio"] === true,
+      calendarScale: this.parseCalendarScale(v["calendarScale"]),
+      calendarDay: this.parseCalendarDay(v["calendarDay"]),
+      calendarStartHour: this.parseCalendarHour(v["calendarStartHour"], 0, 23),
+      calendarEndHour: this.parseCalendarHour(v["calendarEndHour"], 1, 24),
+      calendarHourHeight: this.parsePositiveNumber(v["calendarHourHeight"]),
+      calendarWeekSlotDuration: this.parseCalendarSlotDuration(v["calendarWeekSlotDuration"]),
+      calendarColumnSizeMode: v["calendarColumnSizeMode"] === "custom" ? "custom" : undefined,
+      calendarCustomColumnWidth: this.parsePositiveNumber(v["calendarCustomColumnWidth"]),
+      calendarRowSizeMode: v["calendarRowSizeMode"] === "custom" ? "custom" : undefined,
+      calendarCustomRowHeights: this.parseNumberMap(v["calendarCustomRowHeights"]),
+      calendarWeekStart: safeString(v["calendarWeekStart"]) || undefined,
+      calendarAllDayMaxLanes: this.parsePositiveNumber(v["calendarAllDayMaxLanes"]),
+      calendarFirstDayOfWeek: v["calendarFirstDayOfWeek"] === 0 ? 0 : v["calendarFirstDayOfWeek"] === 1 ? 1 : v["calendarFirstDayOfWeek"] === 6 ? 6 : undefined,
+      yearDisplayMode: v["yearDisplayMode"] === "always" ? "always" : v["yearDisplayMode"] === "smart" ? "smart" : v["yearDisplayMode"] === "never" ? "never" : undefined,
+      calendarMonthVisibleLanes: this.parsePositiveNumber(v["calendarMonthVisibleLanes"]),
+      timelineStartDateField: safeString(v["timelineStartDateField"]) || undefined,
+      timelineEndDateField: safeString(v["timelineEndDateField"]) || undefined,
+      timelineGroupField: safeString(v["timelineGroupField"]) || undefined,
+      timelineTitleField: safeString(v["timelineTitleField"]) || undefined,
+      timelineColorField: safeString(v["timelineColorField"]) || undefined,
+      timelineScale: this.parseTimelineScale(v["timelineScale"]),
+      timelineAnchor: safeString(v["timelineAnchor"]) || undefined,
+      timelineAnchorTimeMinutes: this.parseCalendarMinute(v["timelineAnchorTimeMinutes"]),
+      timelineColumnSizeMode: v["timelineColumnSizeMode"] === "custom" ? "custom" : undefined,
+      timelineCustomUnitWidth: typeof v["timelineCustomUnitWidth"] === "number" ? v["timelineCustomUnitWidth"] : undefined,
       sortColumn: safeString(v["sortColumn"]) || undefined,
       sortDirection: v["sortDirection"] === "desc" ? "desc" : "asc" as const,
       sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as SortRule[] : undefined,
@@ -621,8 +670,10 @@ export class DataSource {
       searchText: view.searchText || "",
       groupByField: view.groupByField || "",
       groupOrders: view.groupOrders || {},
+      showEmptyGroups: view.showEmptyGroups || {},
       collapsedGroups: view.collapsedGroups || {},
       boardGroupField: view.boardGroupField || "",
+      boardSubgroupEnabled: view.boardSubgroupEnabled ?? Boolean(view.boardSubgroupField),
       boardSubgroupField: view.boardSubgroupField || "",
       boardColumnWidth: view.boardColumnWidth || 280,
       defaultColumnWidth: view.defaultColumnWidth || 150,
@@ -676,6 +727,38 @@ export class DataSource {
       chartValueAxisMin: view.chartValueAxisMin,
       chartValueAxisMax: view.chartValueAxisMax,
       chartReferenceLines: view.chartReferenceLines || [],
+      calendarMonth: view.calendarMonth || "",
+      calendarStartDateField: view.calendarStartDateField || "",
+      calendarEndDateField: view.calendarEndDateField || "",
+      calendarTitleField: view.calendarTitleField || "",
+      calendarColorField: view.calendarColorField || "",
+      calendarCellMinHeight: view.calendarCellMinHeight || undefined,
+      calendarKeepCellAspectRatio: view.calendarKeepCellAspectRatio === true,
+      calendarScale: view.calendarScale || "",
+      calendarDay: view.calendarDay || "",
+      calendarStartHour: view.calendarStartHour,
+      calendarEndHour: view.calendarEndHour,
+      calendarHourHeight: view.calendarHourHeight,
+      calendarWeekSlotDuration: view.calendarWeekSlotDuration,
+      calendarColumnSizeMode: view.calendarColumnSizeMode === "custom" ? "custom" : undefined,
+      calendarCustomColumnWidth: typeof view.calendarCustomColumnWidth === "number" ? view.calendarCustomColumnWidth : undefined,
+      calendarRowSizeMode: view.calendarRowSizeMode === "custom" ? "custom" : undefined,
+      calendarCustomRowHeights: view.calendarCustomRowHeights && typeof view.calendarCustomRowHeights === "object" ? view.calendarCustomRowHeights : undefined,
+      calendarWeekStart: view.calendarWeekStart || "",
+      calendarAllDayMaxLanes: typeof view.calendarAllDayMaxLanes === "number" ? view.calendarAllDayMaxLanes : undefined,
+      calendarFirstDayOfWeek: view.calendarFirstDayOfWeek === 0 || view.calendarFirstDayOfWeek === 1 || view.calendarFirstDayOfWeek === 6 ? view.calendarFirstDayOfWeek : undefined,
+      yearDisplayMode: view.yearDisplayMode === "always" || view.yearDisplayMode === "smart" || view.yearDisplayMode === "never" ? view.yearDisplayMode : undefined,
+      calendarMonthVisibleLanes: typeof view.calendarMonthVisibleLanes === "number" ? view.calendarMonthVisibleLanes : undefined,
+      timelineStartDateField: view.timelineStartDateField || "",
+      timelineEndDateField: view.timelineEndDateField || "",
+      timelineGroupField: view.timelineGroupField || "",
+      timelineTitleField: view.timelineTitleField || "",
+      timelineColorField: view.timelineColorField || "",
+      timelineScale: view.timelineScale || "",
+      timelineAnchor: view.timelineAnchor || "",
+      timelineAnchorTimeMinutes: view.timelineAnchorTimeMinutes,
+      timelineColumnSizeMode: view.timelineColumnSizeMode || "",
+      timelineCustomUnitWidth: typeof view.timelineCustomUnitWidth === "number" ? view.timelineCustomUnitWidth : undefined,
       viewStates: view.viewStates || {},
     };
   }
@@ -700,6 +783,7 @@ export class DataSource {
       "viewType",
       "displayWidth",
       "boardGroupField",
+      "boardSubgroupEnabled",
       "boardSubgroupField",
       "boardColumnWidth",
       "defaultColumnWidth",
@@ -718,6 +802,7 @@ export class DataSource {
       "searchText",
       "groupByField",
       "groupOrders",
+      "showEmptyGroups",
       "collapsedGroups",
       "boardCardOrders",
       "filterLogic",
@@ -757,6 +842,29 @@ export class DataSource {
       "chartValueAxisMin",
       "chartValueAxisMax",
       "chartReferenceLines",
+      "calendarMonth",
+      "calendarStartDateField",
+      "calendarEndDateField",
+      "calendarTitleField",
+      "calendarColorField",
+      "calendarCellMinHeight",
+      "calendarKeepCellAspectRatio",
+      "calendarScale",
+      "calendarDay",
+      "calendarStartHour",
+      "calendarEndHour",
+      "calendarHourHeight",
+      "calendarWeekSlotDuration",
+      "timelineStartDateField",
+      "timelineEndDateField",
+      "timelineGroupField",
+      "timelineTitleField",
+      "timelineColorField",
+      "timelineScale",
+      "timelineAnchor",
+      "timelineAnchorTimeMinutes",
+      "timelineColumnSizeMode",
+      "timelineCustomUnitWidth",
       "viewStates",
     ];
   }
@@ -800,8 +908,21 @@ export class DataSource {
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
 
+  private parseBooleanMap(value: unknown): Record<string, boolean> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key, item]) => key.trim() && typeof item === "boolean")
+      .map(([key, item]) => [key, item as boolean] as const);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  private parseBoardSubgroupEnabled(value: Record<string, unknown>): boolean | undefined {
+    if (typeof value["boardSubgroupEnabled"] === "boolean") return value["boardSubgroupEnabled"];
+    return safeString(value["boardSubgroupField"]) ? true : undefined;
+  }
+
   private parseViewType(value: unknown): ViewConfig["viewType"] {
-    if (value === "board" || value === "gallery" || value === "list" || value === "chart") return value;
+    if (value === "board" || value === "gallery" || value === "list" || value === "chart" || value === "calendar" || value === "timeline") return value;
     return "table";
   }
 
@@ -910,6 +1031,40 @@ export class DataSource {
     return undefined;
   }
 
+  private parseTimelineScale(value: unknown): ViewConfig["timelineScale"] {
+    if (value === "day" || value === "week" || value === "month" || value === "quarter") return value;
+    return undefined;
+  }
+
+  private parseCalendarScale(value: unknown): ViewConfig["calendarScale"] {
+    if (value === "month" || value === "week" || value === "day") return value;
+    return undefined;
+  }
+
+  private parseCalendarDay(value: unknown): string | undefined {
+    const text = safeString(value);
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined;
+  }
+
+  private parseCalendarHour(value: unknown, min: number, max: number): number | undefined {
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    const hour = Math.round(n);
+    return hour >= min && hour <= max ? hour : undefined;
+  }
+
+  private parseCalendarMinute(value: unknown): number | undefined {
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    const minute = Math.round(n);
+    return minute >= 0 && minute < 1440 ? minute : undefined;
+  }
+
+  private parseCalendarSlotDuration(value: unknown): ViewConfig["calendarWeekSlotDuration"] {
+    const n = typeof value === "number" ? value : Number(value);
+    return n === 15 || n === 30 || n === 60 ? n : undefined;
+  }
+
   private parseChartReferenceLines(value: unknown): ChartReferenceLine[] | undefined {
     if (!Array.isArray(value)) return undefined;
     const lines = value
@@ -936,11 +1091,18 @@ export class DataSource {
     };
   }
 
+  private parseCalendarMonth(value: unknown): string | undefined {
+    const text = safeString(value);
+    return /^\d{4}-\d{2}$/.test(text) ? text : undefined;
+  }
+
   private getDefaultViewName(viewType: ViewConfig["viewType"]): string {
     if (viewType === "board") return t("common.boardView");
     if (viewType === "gallery") return t("common.galleryView");
     if (viewType === "list") return t("common.listView");
     if (viewType === "chart") return t("common.chartView");
+    if (viewType === "calendar") return t("common.calendarView");
+    if (viewType === "timeline") return t("common.timelineView");
     return t("common.tableView");
   }
 

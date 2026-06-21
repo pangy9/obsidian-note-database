@@ -197,12 +197,13 @@ describe("chart view UI wiring", () => {
 
     expect(toolbar).toContain("actions.addView(\"chart\")");
     expect(toolbar).toContain("viewType === \"chart\"");
-    expect(toolbar).toContain("if (!isChartView) this.renderSortButton");
+    expect(toolbar).toContain("const showSortButton = viewType !== \"chart\";");
+    expect(toolbar).not.toContain("const showSortButton = viewType !== \"chart\" && viewType !== \"timeline\";");
+    expect(toolbar).toContain("if (showSortButton) this.renderSortButton");
     expect(toolbar).toContain("renderChartOptionsButton");
     expect(toolbar).toContain("actions.toggleChartOptions");
     expect(toolbar).toContain("return \"bar-chart\"");
     expect(viewConfig).toContain("{ value: \"chart\", text: t(\"common.chartView\"), icon: \"bar-chart\" }");
-    expect(viewConfig).not.toContain("renderChartSettings");
     expect(viewConfig).toContain("createDropdownField");
     expect(viewConfig).not.toContain("const select = row.createEl(\"select\", { cls: \"db-control-select\" })");
     expect(chartToolbar).toContain("togglePopover");
@@ -416,9 +417,85 @@ describe("chart view UI wiring", () => {
       dashboard.indexOf("private getBoardSubgroups")
     );
 
-    expect(applyChartFilters).toContain("this.pendingUndoLabel = t(\"undo.filterConfig\")");
+    expect(applyChartFilters).toContain("this.pendingUndoLabel = t(\"undo.chartDrilldownFilterConfig\")");
     expect(applyChartFilters).toContain("this.viewStateStore.persist(config, state)");
     expect(applyChartFilters).toContain("this.scheduleConfigSave()");
+  });
+
+  it("uses specific undo labels for chart-only settings and drilldown actions", () => {
+    const dashboard = readFileSync(new URL("../views/DatabaseView.ts", import.meta.url), "utf8");
+    const toolbar = readFileSync(new URL("../views/ChartToolbarRenderer.ts", import.meta.url), "utf8");
+    const renderer = readFileSync(new URL("../views/ChartRenderer.ts", import.meta.url), "utf8");
+    const i18n = readFileSync(new URL("../i18n.ts", import.meta.url), "utf8");
+
+    expect(toolbar).toContain("onChange(label?: string): void");
+    expect(renderer).toContain("onConfigChange?(label?: string): void");
+    expect(dashboard).toContain("onChange: (label) => {");
+    expect(dashboard).toContain("this.pendingUndoLabel = label || t(\"undo.chartConfig\")");
+    expect(dashboard).toContain("this.pendingUndoLabel = t(\"undo.chartDrilldownFilterConfig\")");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartTypeConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartGroupConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartSubgroupConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartSortConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartOmitZeroValuesConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartValueFieldConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartAggregationConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartColorPaletteConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartTitleConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartHeightConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartGridLinesConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartAxisRangeConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartDataLabelsConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartLegendConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartDonutCenterConfig\"))");
+    expect(toolbar).toContain("actions.onChange(t(\"undo.chartReferenceLineColorConfig\"))");
+    expect(renderer).toContain("actions.onConfigChange?.(t(\"undo.chartVisibleGroupsConfig\"))");
+
+    for (const key of [
+      "undo.chartConfig",
+      "undo.chartTypeConfig",
+      "undo.chartGroupConfig",
+      "undo.chartMeasureConfig",
+      "undo.chartStyleConfig",
+      "undo.chartReferenceLinesConfig",
+      "undo.chartVisibleGroupsConfig",
+      "undo.chartDrilldownFilterConfig",
+      "undo.chartDateBucketConfig",
+      "undo.chartNumberBucketConfig",
+      "undo.chartNumberBucketSizeConfig",
+      "undo.chartSubgroupConfig",
+      "undo.chartSortConfig",
+      "undo.chartOmitZeroValuesConfig",
+      "undo.chartCumulativeConfig",
+      "undo.chartValueFieldConfig",
+      "undo.chartAggregationConfig",
+      "undo.chartColorPaletteConfig",
+      "undo.chartColorByValueConfig",
+      "undo.chartTitleConfig",
+      "undo.chartHeightConfig",
+      "undo.chartGridLinesConfig",
+      "undo.chartAxisNamesConfig",
+      "undo.chartAxisRangeConfig",
+      "undo.chartAxisMinConfig",
+      "undo.chartAxisMaxConfig",
+      "undo.chartShowTitleConfig",
+      "undo.chartDataLabelsConfig",
+      "undo.chartDataLabelModeConfig",
+      "undo.chartDataLabelColorConfig",
+      "undo.chartLegendConfig",
+      "undo.chartSmoothLineConfig",
+      "undo.chartGradientAreaConfig",
+      "undo.chartDonutCenterConfig",
+      "undo.chartReferenceLineAddConfig",
+      "undo.chartReferenceLineTypeConfig",
+      "undo.chartReferenceLineTitleConfig",
+      "undo.chartReferenceLineValueConfig",
+      "undo.chartReferenceLineStyleConfig",
+      "undo.chartReferenceLineColorConfig",
+      "undo.chartReferenceLineRemoveConfig",
+    ]) {
+      expect(i18n).toContain(`"${key}"`);
+    }
   });
 
   it("defines all chart i18n keys in English and Chinese locales", () => {
@@ -443,6 +520,10 @@ describe("chart view UI wiring", () => {
     expect(styles).toContain(".note-database-container .db-dropdown-section-title");
     expect(styles).toContain(".note-database-container .db-chart-subpopover");
     expect(styles).toContain(".note-database-container .db-toggle-switch");
+    expect(cssRule(styles, ".note-database-container .db-toggle-switch")).toContain("flex: 0 0 34px");
+    expect(cssRule(styles, ".note-database-container .db-chart-options-row")).toContain("min-width: 0");
+    expect(cssRule(styles, ".note-database-container .db-chart-options-row-icon,\n.note-database-container .db-chart-options-chevron")).toContain("flex: 0 0 auto");
+    expect(cssRule(styles, ".note-database-container .db-chart-options-row-label")).toContain("white-space: nowrap");
     expect(styles).toContain(".note-database-container .db-chart-empty");
     expect(styles).toContain(".note-database-container .db-chart-number");
     expect(styles).toContain("border: 0");
@@ -470,6 +551,9 @@ describe("chart view UI wiring", () => {
     expect(embedded).toContain("shouldHideHeaderChrome");
     expect(embedded).toContain("renderHeaderChromeToggle");
     expect(embedded).toContain("toggleHeaderChrome");
+    expect(embedded).toContain("markEmbedCodeBlockHost");
+    expect(embedded).toContain("clearEmbedCodeBlockHost");
+    expect(embedded).toContain("note-database-embed-codeblock-host");
     expect(embedded).toContain("saveDescriptionScroll");
     expect(embedded).toContain("restoreDescriptionScroll");
     expect(dashboard).toContain("saveDescriptionScrollPosition");
@@ -496,8 +580,11 @@ describe("chart view UI wiring", () => {
     expect(toolbar).toContain("searchInput.setSelectionRange");
     expect(styles).toContain(".note-database-embed-headerless.note-database-container");
     expect(styles).toContain(".note-database-embed.note-database-container > .db-header");
-    expect(styles).toContain("background: transparent");
+    expect(cssRule(styles, ".note-database-embed.note-database-container > .db-header")).toContain("background: var(--background-primary)");
+    expect(cssRule(styles, ".note-database-embed.note-database-container > .db-header")).not.toContain("background: transparent");
     expect(styles).toContain("pointer-events: none");
+    expect(cssRule(styles, ".note-database-embed-codeblock-host .edit-block-button")).toContain("z-index: 80");
+    expect(cssRule(styles, ".markdown-rendered:has(.note-database-embed) .edit-block-button")).toContain("z-index: 80");
     expect(styles).toContain(".note-database-embed.note-database-container > .db-header > *");
     expect(styles).toContain(".note-database-embed.note-database-container > .db-embed-header-toggle");
     expect(styles).toContain(".note-database-container .db-description:not(.is-scrolling):not(:hover)::-webkit-scrollbar-thumb");
@@ -515,3 +602,9 @@ describe("chart view UI wiring", () => {
     setLocale("system");
   });
 });
+
+function cssRule(source: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  return match?.[1] || "";
+}

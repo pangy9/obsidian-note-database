@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import { ColumnDef, ComputedFieldDef } from "../data/types";
 
@@ -101,5 +102,28 @@ describe("evaluateComputedFields", () => {
     })).toEqual({
       summary: "source.base:task.md",
     });
+  });
+});
+
+describe("computed datetime functions and result type (source-level)", () => {
+  it("registers HOUR/MINUTE/SECOND/TIME and keeps time on DATEADD for datetime inputs", () => {
+    const engine = readFileSync(new URL("../data/ComputedField.ts", import.meta.url), "utf8");
+    expect(engine).toContain("hour:");
+    expect(engine).toContain("HOUR: context.hour");
+    expect(engine).toContain("MINUTE: context.minute");
+    expect(engine).toContain("SECOND: context.second");
+    expect(engine).toContain("TIME: context.time");
+    // 原值带时间时保留时间精度；dateAdd 支持 hour/minute/second unit。
+    expect(engine).toContain("formatMoment");
+    expect(engine).toContain('"hours"');
+    expect(engine).toContain("hasDateTimeValue(originalDate)");
+  });
+
+  it("exposes datetime result type, validation and examples in FormulaModal", () => {
+    const modal = readFileSync(new URL("../views/modals/FormulaModal.ts", import.meta.url), "utf8");
+    expect(modal).toContain('"datetime", "formula.typeDatetime"');
+    expect(modal).toContain('type === "datetime"');
+    expect(modal).toContain('name: "HOUR"');
+    expect(modal).toContain("formula.ex.dateTime");
   });
 });

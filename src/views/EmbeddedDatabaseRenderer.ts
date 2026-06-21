@@ -6,15 +6,17 @@ import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
 import { ColumnDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
 import { ComputedFieldEngine } from "../data/ComputedField";
+import { setDateDisplayMode } from "../data/DateTimeFormat";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import {
   isObsidianTagsKey,
-  isOptionColumnType,
   normalizeObsidianTagValue,
   toBooleanValue,
   toMultiSelectValuesForKey,
 } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
+import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { setShowEmptyGroups, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
 import { createCsvMarkdownZip } from "../data/CsvMarkdownZipExport";
@@ -33,8 +35,13 @@ import { SummaryRenderer } from "./SummaryRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
 import { ChartRenderer } from "./ChartRenderer";
+import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ChartToolbarRenderer } from "./ChartToolbarRenderer";
 import { getDefaultChartDateBucket, getDefaultChartField, getDefaultChartNumberBucket } from "../data/ChartAggregation";
+import { getDefaultEventDateField, getTimelineDayNonDateTimeColumns } from "../data/CalendarTimelineModel";
+import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
+import { CalendarRenderer } from "./CalendarRenderer";
+import { CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
 import { isHTMLElement } from "./DomGuards";
@@ -45,6 +52,7 @@ import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey } from "../data/ColumnDisplay";
 import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
@@ -71,6 +79,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private queryEngine = new QueryEngine();
   private rowPipeline = new RowPipeline();
   private rows: RowData[] = [];
+  private timelineInvalidRowsVersion = 0;
+  private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
   private stateStore = new ViewStateStore();
   private state?: DatabaseViewState;
   private pendingShowColumns = new Set<string>();
@@ -82,7 +92,34 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private galleryRenderer: GalleryRenderer;
   private listRenderer: ListRenderer;
   private chartRenderer = new ChartRenderer();
+  private calendarToolbarRenderer = new CalendarToolbarRenderer();
   private chartToolbarRenderer = new ChartToolbarRenderer();
+  private calendarRenderer = new CalendarRenderer({
+    openRow: (row) => this.dataSource.openNote(row.file),
+    isReadOnly: true,
+    updateCalendarScale: (scale, anchorDateKey) => this.updateCalendarScale(scale, anchorDateKey),
+    onConfigChange: () => {
+      if (!this.config) return;
+      this.persistEmbeddedConfigLocally(this.config);
+      this.renderResults(this.config);
+      this.saveEmbeddedConfigInBackground();
+    },
+    getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
+  });
+  private calendarTimelineRenderer = new CalendarTimelineRenderer({
+    openRow: (row) => this.dataSource.openNote(row.file),
+    isReadOnly: true,
+    isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
+    toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
+    updateTimelineAnchor: (dateKey, _label, timeMinutes) => this.updateTimelineAnchor(dateKey, timeMinutes),
+    updateTimelineScale: (scale) => this.updateTimelineScale(scale),
+    onConfigChange: () => {
+      if (!this.config) return;
+      this.persistEmbeddedConfigLocally(this.config);
+      this.renderResults(this.config);
+      this.saveEmbeddedConfigInBackground();
+    },
+  });
   private toolbarRenderer = new ToolbarRenderer();
   private filterPanelRenderer = new FilterPanelRenderer();
   private columnManagerRenderer = new ColumnManagerRenderer();
@@ -93,6 +130,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private showColumnManager = false;
   private showSortPanel = false;
   private showViewConfigPanel = false;
+  /** Last view type we finished rendering, so we reset the scroll to the top
+   * only on a real view-type switch — not on filter/sort/data refreshes. */
+  private lastRenderedViewType: string | null = null;
   private activeHeaderPopover?: HeaderPopoverKind;
   private headerPopoverAnchorEl?: HTMLElement;
   private removeHeaderPopoverAutoClose?: () => void;
@@ -111,15 +151,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private pendingDataChange = false;
   private suppressDataReloadUntil = 0;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
-  private readonly handleWindowFocusBound = () => this.refreshOnActivation();
+  private readonly handleWindowFocusBound = () => this.handleWindowFocus();
   private readonly instanceId = generateId();
   private intersectionObserver?: IntersectionObserver;
   private isIntersecting = false;
+  private hasObservedVisibility = false;
+  private pendingRefreshWhileHidden = false;
   private pendingDatabaseOverride?: EmbeddedDatabaseEntry;
   private unsubscribe?: () => void;
   private unsubscribeViewConfig?: () => void;
   private configHistoryStack: DatabaseConfig[] = [];
   private headerChromeHiddenOverride: boolean | null = null;
+  private embedCodeBlockHosts: HTMLElement[] = [];
 
   constructor(
     private app: App,
@@ -246,6 +289,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   onload(): void {
     this.containerEl.addClass("note-database-container");
     this.containerEl.addClass("note-database-embed");
+    this.markEmbedCodeBlockHost();
     this.unsubscribe = this.dataSource.onDataChanged(() => this.handleDataChanged());
     this.unsubscribeViewConfig = this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation));
     window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
@@ -259,6 +303,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   onunload(): void {
     this.chartRenderer.destroy();
+    // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免卸载后泄漏
+    this.calendarTimelineRenderer.destroy();
     this.chartToolbarRenderer.closePopover();
     this.clearComputedSyncTimer();
     this.removeHeaderPopoverAutoClose?.();
@@ -272,16 +318,48 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.containerEl.removeEventListener("keydown", this.handleEmbedKeydownBound);
     this.intersectionObserver?.disconnect();
     this.clearFileViewWidthClass();
+    this.clearEmbedCodeBlockHost();
+    // 取消可能仍在调度的无效时间事件分块扫描，避免卸载后继续占用 idle 回调
+    this.timelineInvalidEventsScanner.clear();
+  }
+
+  private markEmbedCodeBlockHost(): void {
+    if (this.persistMode !== "codeblock") return;
+    this.clearEmbedCodeBlockHost();
+
+    let el = this.containerEl.parentElement;
+    for (let depth = 0; depth < 8 && isHTMLElement(el); depth++) {
+      if (el.hasClass("markdown-rendered") || el.hasClass("markdown-preview-view")) break;
+      el.addClass("note-database-embed-codeblock-host");
+      this.embedCodeBlockHosts.push(el);
+      el = el.parentElement;
+    }
+  }
+
+  private clearEmbedCodeBlockHost(): void {
+    for (const host of this.embedCodeBlockHosts) {
+      host.removeClass("note-database-embed-codeblock-host");
+    }
+    this.embedCodeBlockHosts = [];
   }
 
   private observeVisibility(): void {
     if (typeof IntersectionObserver === "undefined") return;
     this.intersectionObserver = new IntersectionObserver((entries) => {
       const visible = entries.some((entry) => entry.isIntersecting);
-      if (visible && !this.isIntersecting) this.refreshOnActivation();
+      this.hasObservedVisibility = true;
+      if (visible && this.pendingRefreshWhileHidden) {
+        this.pendingRefreshWhileHidden = false;
+        this.refreshOnActivation();
+      }
       this.isIntersecting = visible;
     });
     this.intersectionObserver.observe(this.containerEl);
+  }
+
+  private handleWindowFocus(): void {
+    if (this.deferRefreshUntilVisible()) return;
+    this.refreshOnActivation();
   }
 
   private refreshOnActivation(): void {
@@ -307,6 +385,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private render(scroll?: { top: number; left: number }): void {
+    const hostViewport = captureEmbeddedHostViewport(this.containerEl);
     const pos = scroll ?? this.saveScroll();
     const descriptionScroll = this.saveDescriptionScroll();
     this.containerEl.empty();
@@ -314,8 +393,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const config = this.getEmbeddedConfig();
     if (!config) {
       this.containerEl.createDiv({ cls: "db-empty", text: t("errors.databaseViewNotFound") });
+      this.restoreEmbeddedHostViewport(hostViewport);
       return;
     }
+    // Reset scroll to the top on an actual view-type switch: switching into a
+    // tall calendar/timeline embed must start at the top instead of keeping the
+    // previous view's mid-page scroll. Filter/sort/data refreshes reuse the same
+    // viewType and keep the saved position.
+    const viewType = config.viewType || "table";
+    // Read-only here: renderResults() owns the lastRenderedViewType update so
+    // that both the render() path and the direct renderResults() path
+    // (selectViewInView / setViewType) agree on what counts as a view-type switch.
+    const viewTypeChanged = this.lastRenderedViewType !== viewType;
     this.renderToolbar(config);
     this.renderHeaderChromeToggle(config);
     this.renderFilterPanel(config);
@@ -324,8 +413,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.renderViewConfigPanel(config);
     this.renderResults(config);
     this.updateStickyOffsets();
-    this.restoreScroll(pos);
+    this.restoreScroll(viewTypeChanged ? { top: 0, left: pos.left } : pos);
     this.restoreDescriptionScroll(descriptionScroll);
+    this.restoreEmbeddedHostViewport(hostViewport);
   }
 
   private saveScroll(): { top: number; left: number } {
@@ -351,6 +441,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     window.requestAnimationFrame(restore);
   }
 
+  private restoreEmbeddedHostViewport(snapshot: EmbeddedHostViewportSnapshot | null): void {
+    restoreEmbeddedHostViewport(snapshot);
+    window.requestAnimationFrame(() => restoreEmbeddedHostViewport(snapshot));
+  }
+
   private handleDataChanged(): void {
     if (this.syncingComputed) {
       this.pendingDataChange = true;
@@ -359,11 +454,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (this.config && Date.now() < this.suppressDataReloadUntil) {
       return;
     }
+    if (this.deferRefreshUntilVisible()) return;
     if (this.config && this.shouldPreserveChrome()) {
       this.renderResults(this.config);
       return;
     }
     this.render();
+  }
+
+  private deferRefreshUntilVisible(): boolean {
+    if (!this.hasObservedVisibility || this.isIntersecting) return false;
+    this.pendingRefreshWhileHidden = true;
+    return true;
   }
 
   private shouldPreserveChrome(): boolean {
@@ -400,6 +502,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private closePopovers(): void {
     this.toolbarRenderer.closePopovers();
+    this.calendarToolbarRenderer.closePopover();
     this.chartToolbarRenderer.closePopover();
     this.closeGroupOrderPopover();
     if (!this.config) return;
@@ -474,18 +577,29 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return !mutation.viewId || view.id === mutation.viewId;
   }
 
-  private renderResults(config: ViewConfig): void {
+  private renderResults(config: ViewConfig, options: { viewport?: DatabaseViewportRequest } = {}): void {
+    const hostViewport = captureEmbeddedHostViewport(this.containerEl);
+    // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
+    setDateDisplayMode(config.yearDisplayMode || "always");
     const scroll = this.saveScroll();
+    // renderResults() is the single owner of lastRenderedViewType so the scroll
+    // reset fires for every entry into a different view type — whether the caller
+    // went through render() (full re-render) or called renderResults() directly
+    // (selectViewInView / setViewType / onViewTypeChange).
+    const viewType = config.viewType || "table";
+    const viewTypeChanged = this.lastRenderedViewType !== viewType;
+    this.lastRenderedViewType = viewType;
     this.containerEl.toggleClass("db-width-wide", config.displayWidth === "wide");
     this.updateFileViewWidthClass(config);
     this.applyViewTypeClass(config.viewType || "table");
     const target = this.containerEl;
     const staleViewSelector = config.viewType === "chart"
-      ? ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-empty"
-      : ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-chart, .db-chart-empty, .db-chart-number, .db-empty";
+      ? ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-calendar, .db-timeline, .db-empty"
+      : ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-chart, .db-chart-empty, .db-chart-number, .db-calendar, .db-timeline, .db-empty";
     target.querySelectorAll(staleViewSelector).forEach((el) => el.remove());
     if (!config.schema.columns || config.schema.columns.length === 0) {
       target.createDiv({ cls: "db-empty", text: t("errors.noColumns") });
+      this.restoreEmbeddedHostViewport(hostViewport);
       return;
     }
     let records: NoteRecord[];
@@ -493,11 +607,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(config));
     } catch (err) {
       target.createDiv({ cls: "db-empty", text: t("errors.dataReadFailed", { error: String(err) }) });
+      this.restoreEmbeddedHostViewport(hostViewport);
       return;
     }
 
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(config), this.app);
+    this.timelineInvalidRowsVersion += 1;
     this.scheduleComputedSync(config, this.rows);
     if (config.viewType !== "chart") {
       this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig, {
@@ -515,7 +631,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     } else if (config.viewType === "gallery") {
       if (this.vs(config).groupByField) {
         const field = this.vs(config).groupByField;
-        const groups = this.queryEngine.groupBy(this.rows, field);
+        const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
         const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
         this.galleryRenderer.renderGrouped(target, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       } else {
@@ -524,7 +640,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     } else if (config.viewType === "list") {
       if (this.vs(config).groupByField) {
         const field = this.vs(config).groupByField;
-        const groups = this.queryEngine.groupBy(this.rows, field);
+        const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
         const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
         this.listRenderer.renderGrouped(target, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       } else {
@@ -539,9 +655,22 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           this.saveEmbeddedConfigInBackground();
         },
       });
+    } else if (config.viewType === "calendar") {
+      this.calendarRenderer.render(target, renderConfig, this.rows);
+    } else if (config.viewType === "timeline") {
+      const state = this.vs(config);
+      this.calendarTimelineRenderer.renderTimeline(target, {
+        ...renderConfig,
+        // 同 DatabaseView.getTimelineRenderConfig：分组只跟 state.groupByField，
+        // 避免「无分组」空串被 `||` 回退到历史 timelineGroupField。
+        timelineGroupField: state.groupByField,
+        sortColumn: state.sortColumn,
+        sortDirection: state.sortDirection,
+        sortRules: state.sortRules,
+      }, this.rows);
     } else if (this.vs(config).groupByField) {
       const field = this.vs(config).groupByField;
-      const groups = this.queryEngine.groupBy(this.rows, field);
+      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
       const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
       this.tableRenderer.renderGroupedTable(target, renderConfig, this.rows, this.queryEngine.sortGroups(groups, order), field);
     } else {
@@ -557,24 +686,37 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         },
       });
     }
-    this.restoreScroll(scroll);
+    if (options.viewport === "reset-top") {
+      this.restoreScroll({ top: 0, left: 0 });
+    } else if (options.viewport !== "none") {
+      this.restoreScroll(viewTypeChanged && options.viewport !== "preserve-raw" ? { top: 0, left: scroll.left } : scroll);
+    }
+    this.restoreEmbeddedHostViewport(hostViewport);
   }
 
   private applyViewTypeClass(viewType: NonNullable<ViewConfig["viewType"]>): void {
-    for (const type of ["table", "board", "gallery", "list", "chart"] as const) {
+    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline"] as const) {
       this.containerEl.toggleClass(`db-view-${type}`, viewType === type);
     }
   }
 
   private renderToolbar(config: ViewConfig): void {
     // Use the currentDbConfig if available (for multi-view support)
-    const dbConfig = this.currentDbConfig || {
+    const baseDbConfig = this.currentDbConfig || {
       id: "embedded",
       name: config.name,
       sourceFolder: config.sourceFolder,
       schema: config.schema,
       views: [config],
     };
+    // ToolbarRenderer mutates the current view by reference. Pass our working
+    // copy (this.config) as the current view so option edits land on it and
+    // persistEmbeddedConfigLocally/renderResults observe them — otherwise the
+    // renderer would mutate the source view while the working copy stays stale
+    // and the next persist would overwrite the edit with the stale copy.
+    const dbConfig = baseDbConfig.views[this.currentViewIndex] === config
+      ? baseDbConfig
+      : { ...baseDbConfig, views: baseDbConfig.views.map((view, idx) => (idx === this.currentViewIndex ? config : view)) };
     this.toolbarRenderer.render(this.containerEl, [{ config: dbConfig, sourcePath: this.currentSourcePath }], 0, this.currentViewIndex, this.vs(config), {
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
@@ -587,7 +729,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.state = undefined;
         const newConfig = this.getEmbeddedConfig()!;
         this.rerenderToolbar(newConfig);
-        this.renderResults(newConfig);
+        this.renderResults(newConfig, { viewport: "reset-top" });
         this.restoreDescriptionScroll(descriptionScroll);
         this.persistEmbeddedConfigLocally(newConfig);
         this.saveEmbeddedConfigInBackground();
@@ -603,30 +745,27 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.currentViewIndex = Math.min(viewIndex, this.currentDbConfig.views.length - 2);
         this.config = undefined;
         this.rerenderToolbar(config);
-        this.renderResults(this.getEmbeddedConfig()!);
+        this.renderResults(this.getEmbeddedConfig()!, { viewport: "reset-top" });
       },
       renameView: () => {
         new Notice(t("notice.editInFullView", { action: t("toolbar.rename") }));
       },
-      setViewType: (value) => {
+      setViewType: (value, viewIndex) => {
+        if (viewIndex != null && viewIndex !== this.currentViewIndex && this.currentDbConfig?.views[viewIndex]) {
+          const view = this.currentDbConfig.views[viewIndex];
+          this.setEmbeddedViewType(view, value);
+          this.initializeEmbeddedViewTypeDefaults(view, value);
+          this.persistEmbeddedConfigLocally(config);
+          this.rerenderToolbar(config);
+          this.saveEmbeddedConfigInBackground();
+          return;
+        }
         const descriptionScroll = this.saveDescriptionScroll();
         this.setEmbeddedViewType(config, value);
-        if (value === "gallery") {
-          config.galleryImageField = config.galleryImageField || this.getDefaultGalleryImageField(config);
-          config.galleryCardSize = config.galleryCardSize || 250;
-          config.galleryImageAspectRatio = config.galleryImageAspectRatio || 0.75;
-          config.galleryImageFit = config.galleryImageFit || "cover";
-        }
-        if (value === "chart") {
-          config.chartType = config.chartType || "bar";
-          config.chartAggregation = config.chartAggregation || "count";
-          if (!config.chartGroupField) config.chartGroupField = getDefaultChartField(config.schema.columns, config.schema.computedFields);
-          config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
-          config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
-        }
+        this.initializeEmbeddedViewTypeDefaults(config, value);
         this.persistEmbeddedConfigLocally(config);
         this.rerenderToolbar(config);
-        this.renderResults(config);
+        this.renderResults(config, { viewport: "reset-top" });
         this.restoreDescriptionScroll(descriptionScroll);
         this.saveEmbeddedConfigInBackground();
       },
@@ -641,24 +780,77 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.vs(config).searchText = value;
         this.persistEmbeddedConfigLocally(config);
         this.updateToolbarIndicators(config);
-        this.renderResults(config);
+        this.renderResults(config, { viewport: "reset-top" });
       },
       setGroupByField: (value) => {
         if (config.viewType === "board") {
           if (!value) return;
           config.boardGroupField = value;
+          this.normalizeBoardSubgroupAfterGroupChange(config, value);
         } else {
           this.vs(config).groupByField = value;
         }
         this.persistEmbeddedConfigLocally(config);
-        this.rerenderToolbar(config);
-        this.renderResults(config);
+        this.updateToolbarIndicators(config);
+        this.renderResults(config, { viewport: "reset-top" });
+        this.saveEmbeddedConfigInBackground();
+      },
+      setShowEmptyGroups: (field, value) => {
+        setShowEmptyGroups(config, field, value);
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config, { viewport: "reset-top" });
+        this.saveEmbeddedConfigInBackground();
+      },
+      setBoardSubgroupEnabled: (enabled) => {
+        config.boardSubgroupEnabled = enabled;
+        if (!enabled) config.boardSubgroupField = undefined;
+        this.persistEmbeddedConfigLocally(config);
+        this.updateToolbarIndicators(config);
+        this.renderResults(config, { viewport: "reset-top" });
+        this.saveEmbeddedConfigInBackground();
+      },
+      setBoardSubgroupField: (value) => {
+        const groupField = config.boardGroupField || this.vs(config).groupByField || this.getDefaultBoardField(config);
+        const subgroupField = value && value !== groupField && value !== "file.name" ? value : "";
+        config.boardSubgroupEnabled = true;
+        config.boardSubgroupField = subgroupField || undefined;
+        this.persistEmbeddedConfigLocally(config);
+        this.updateToolbarIndicators(config);
+        this.renderResults(config, { viewport: "reset-top" });
         this.saveEmbeddedConfigInBackground();
       },
       configureGroupOrder: () => this.showGroupOrderPopover(config),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(config, mode),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover(config, "sort", anchorEl),
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(config, anchorEl),
+      toggleCalendarOptions: (containerEl, anchor, cfg) => {
+        this.calendarToolbarRenderer.togglePopover(containerEl, anchor, cfg, {
+          onChange: () => {
+            this.persistEmbeddedConfigLocally(cfg);
+            this.renderResults(cfg);
+            this.saveEmbeddedConfigInBackground();
+          },
+        });
+      },
+      updateViewConfig: () => {
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config);
+        this.saveEmbeddedConfigInBackground();
+      },
+      updateTimelineScale: (scale) => this.updateTimelineScale(scale),
+      getTimelineInvalidEventCount: () => {
+        if (config.viewType !== "timeline") return 0;
+        const cached = this.timelineInvalidEventsScanner.getCachedOptions(this.rows, config, this.timelineInvalidRowsVersion);
+        if (cached) return cached.length;
+        return this.timelineInvalidEventsScanner.getOptions(this.rows, config, this.timelineInvalidRowsVersion).then((options) => options.length);
+      },
+      openTimelineInvalidEvents: () => {
+        if (this.persistMode === "codeblock") {
+          new Notice(t("notice.editInFullView", { action: t("timeline.viewInvalidEvents") }));
+          return;
+        }
+        void this.openFullDatabaseView(config);
+      },
       syncComputedFields: this.persistMode === "codeblock"
         ? undefined
         : () => { this.syncComputedFieldsInBackground(config, this.rows, true, true); },
@@ -819,7 +1011,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       },
       refresh: () => {
         this.updateToolbarIndicators(config);
-        this.renderResults(config);
+        this.renderResults(config, { viewport: "reset-top" });
       },
       close: () => {
         this.showFilterPanel = false;
@@ -840,7 +1032,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       },
       refresh: () => {
         this.updateToolbarIndicators(config);
-        this.renderResults(config);
+        this.renderResults(config, { viewport: "reset-top" });
       },
       close: () => {
         this.showSortPanel = false;
@@ -960,6 +1152,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
           config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
         }
+        if (value === "calendar") {
+          config.calendarStartDateField = config.calendarStartDateField || getDefaultEventDateField(config);
+        }
+        if (value === "timeline") {
+          const defaultDateField = getDefaultEventDateField(config);
+          config.timelineStartDateField = config.timelineStartDateField || defaultDateField;
+          config.calendarStartDateField = config.calendarStartDateField || defaultDateField;
+        }
         this.persistEmbeddedConfigLocally(config);
         this.render();
         this.saveEmbeddedConfigInBackground();
@@ -984,7 +1184,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!changed) return;
     state.filterLogic = "and";
     this.persistEmbeddedConfigLocally(config);
-    this.renderResults(config);
+    this.renderResults(config, { viewport: "reset-top" });
     this.saveEmbeddedConfigInBackground();
   }
 
@@ -1031,6 +1231,30 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     config.viewType = value;
     this.stateStore.delete(0, this.currentViewIndex);
     this.state = undefined;
+  }
+
+  private initializeEmbeddedViewTypeDefaults(config: ViewConfig, value: NonNullable<ViewConfig["viewType"]>): void {
+    if (value === "gallery") {
+      config.galleryImageField = config.galleryImageField || this.getDefaultGalleryImageField(config);
+      config.galleryCardSize = config.galleryCardSize || 250;
+      config.galleryImageAspectRatio = config.galleryImageAspectRatio || 0.75;
+      config.galleryImageFit = config.galleryImageFit || "cover";
+    }
+    if (value === "chart") {
+      config.chartType = config.chartType || "bar";
+      config.chartAggregation = config.chartAggregation || "count";
+      if (!config.chartGroupField) config.chartGroupField = getDefaultChartField(config.schema.columns, config.schema.computedFields);
+      config.chartDateBucket = getDefaultChartDateBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+      config.chartNumberBucket = getDefaultChartNumberBucket(config.schema.columns, config.chartGroupField, config.schema.computedFields);
+    }
+    if (value === "calendar") {
+      config.calendarStartDateField = config.calendarStartDateField || getDefaultEventDateField(config);
+    }
+    if (value === "timeline") {
+      const defaultDateField = getDefaultEventDateField(config);
+      config.timelineStartDateField = config.timelineStartDateField || defaultDateField;
+      config.calendarStartDateField = config.calendarStartDateField || defaultDateField;
+    }
   }
 
   private async openFullDatabaseView(config: ViewConfig): Promise<void> {
@@ -1169,7 +1393,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       ? config.boardGroupField || state.groupByField
       : state.groupByField;
     if (groupField) keys.add(groupField);
-    if (config.viewType === "board" && config.boardSubgroupField) {
+    if (config.viewType === "board" && config.boardSubgroupEnabled !== false && config.boardSubgroupField) {
       keys.add(config.boardSubgroupField);
     }
     return keys;
@@ -1305,7 +1529,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
     this.persistEmbeddedConfigLocally(config);
     this.updateToolbarIndicators(config);
-    this.renderResults(config);
+    this.renderResults(config, { viewport: "reset-top" });
     this.saveEmbeddedConfigInBackground();
   }
 
@@ -1326,7 +1550,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
     this.persistEmbeddedConfigLocally(config);
     this.updateToolbarIndicators(config);
-    this.renderResults(config);
+    this.renderResults(config, { viewport: "reset-top" });
     this.saveEmbeddedConfigInBackground();
   }
 
@@ -1343,12 +1567,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private getBoardGroups(config: ViewConfig, field: string): BoardGroup[] {
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     const map = new Map(groups.map((group) => [group.key, group]));
     const col = getColumnsInOrder(config).find((candidate) => candidate.key === field);
     const defaultKeys = getDefaultGroupOrder(config, field);
-    if (col && defaultKeys.length > 0 && (isOptionColumnType(col.type) || col.type === "checkbox")) {
+    if (col && defaultKeys.length > 0 && col.type === "checkbox") {
       for (const key of defaultKeys) {
         if (!map.has(key)) map.set(key, { key, rows: [], count: 0 });
       }
@@ -1362,11 +1586,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private applyBoardSubgroups(config: ViewConfig, groupField: string, groups: BoardGroup[]): void {
-    const subgroupField = config.boardSubgroupField;
+    const subgroupField = config.boardSubgroupEnabled !== false ? config.boardSubgroupField : undefined;
     if (!subgroupField || subgroupField === groupField) return;
     if (!config.schema.columns.some((col) => col.key === subgroupField)) return;
     for (const group of groups) {
-      const subgroups = this.queryEngine.groupBy(group.rows, subgroupField);
+      const subgroups = withEmptyOptionGroups(config, subgroupField, this.queryEngine.groupBy(group.rows, subgroupField, [], config.schema.columns.find((c) => c.key === subgroupField)));
       const order = getEffectiveGroupOrder(config, subgroupField, subgroups.map((subgroup) => subgroup.key));
       group.subgroups = this.queryEngine.sortGroups(subgroups, order);
     }
@@ -1474,6 +1698,43 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.saveEmbeddedConfigInBackground();
   }
 
+  private updateTimelineAnchor(dateKey: string, timeMinutes?: number): void {
+    const config = this.config;
+    if (!config) return;
+    config.timelineAnchor = dateKey;
+    if (typeof timeMinutes === "number" && Number.isFinite(timeMinutes)) config.timelineAnchorTimeMinutes = timeMinutes;
+    else delete config.timelineAnchorTimeMinutes;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config, { viewport: "preserve-raw" });
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private updateTimelineScale(scale: NonNullable<ViewConfig["timelineScale"]>): boolean {
+    const config = this.config;
+    if (!config || (config.timelineScale || "week") === scale) return false;
+    if (scale === "day" && getTimelineDayNonDateTimeColumns(config).length > 0) {
+      new Notice(t("timeline.dayRequiresDateTime"));
+      return false;
+    }
+    config.timelineScale = scale;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+    return true;
+  }
+
+  private updateCalendarScale(scale: NonNullable<ViewConfig["calendarScale"]>, anchorDateKey: string): void {
+    const config = this.config;
+    if (!config || (config.calendarScale || "month") === scale) return;
+    config.calendarScale = scale;
+    config.calendarMonth = anchorDateKey.slice(0, 7);
+    config.calendarWeekStart = anchorDateKey;
+    config.calendarDay = anchorDateKey;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+  }
+
   private updateGalleryCardSize(width: number): void {
     const config = this.config;
     if (!config) return;
@@ -1490,7 +1751,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       return;
     }
     const col = getColumnsInOrder(config).find((candidate) => candidate.key === field);
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col));
     const keys = groups.map((group) => group.key);
     const defaultOrder = getDefaultGroupOrder(config, field);
     const knownKeys = new Set([...defaultOrder, ...keys]);
@@ -1589,7 +1850,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         };
 
         row.createSpan({ cls: "db-group-order-drag", text: "⋮⋮" });
-        row.createSpan({ cls: "db-group-order-name", text: key || t("common.uncategorized") });
+        row.createSpan({ cls: "db-group-order-name", text: formatGroupKeyDisplay(config, field, key) });
         const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
         const upBtn = moveControls.createEl("button", {
           attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
@@ -1651,7 +1912,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private setGroupOrderMode(config: ViewConfig, mode: GroupOrderMode): void {
     const field = this.getActiveGroupField(config);
     if (!field) return;
-    const groups = this.queryEngine.groupBy(this.rows, field);
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
     const keys = groups.map((group) => group.key);
     const optionOrder = getDefaultGroupOrder(config, field).filter((key) => keys.includes(key));
     const appendMissing = (order: string[]) => [...order, ...keys.filter((key) => !order.includes(key))];
@@ -1692,7 +1953,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
     config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
     this.persistEmbeddedConfigLocally(config);
-    this.renderResults(config);
+    this.renderResults(config, { viewport: "reset-top" });
     this.saveEmbeddedConfigInBackground();
   }
 
@@ -1984,6 +2245,17 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
     const colBtn = this.containerEl.querySelector(".db-col-manager-btn");
     if (isHTMLElement(colBtn)) this.updateToolbarBadge(colBtn, Math.max(0, (config.schema.columns.length || 0) - state.hiddenColumns.size));
+    const groupBtn = this.containerEl.querySelector(".db-group-btn");
+    if (isHTMLElement(groupBtn)) {
+      const groupValue = config.viewType === "board"
+        ? config.boardGroupField || state.groupByField
+        : state.groupByField;
+      groupBtn.toggleClass("is-active", Boolean(groupValue));
+    }
+  }
+
+  private normalizeBoardSubgroupAfterGroupChange(config: ViewConfig, groupField: string): void {
+    if (config.boardSubgroupField === groupField) config.boardSubgroupField = undefined;
   }
 
   private updateToolbarBadge(button: HTMLElement, count: number): void {
@@ -2250,9 +2522,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.displayWidth = this.config.displayWidth;
     origView.boardColumnWidth = this.config.boardColumnWidth;
     origView.boardGroupField = this.config.boardGroupField;
+    origView.boardSubgroupEnabled = this.config.boardSubgroupEnabled;
     origView.boardSubgroupField = this.config.boardSubgroupField;
     origView.defaultColumnWidth = this.config.defaultColumnWidth;
     origView.groupOrders = this.config.groupOrders;
+    origView.showEmptyGroups = this.config.showEmptyGroups;
     origView.collapsedGroups = this.config.collapsedGroups;
     origView.boardCardOrders = this.config.boardCardOrders;
     origView.manualOrder = this.config.manualOrder;
@@ -2278,6 +2552,38 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.chartValueAxisMin = this.config.chartValueAxisMin;
     origView.chartValueAxisMax = this.config.chartValueAxisMax;
     origView.chartReferenceLines = this.config.chartReferenceLines;
+    origView.calendarMonth = this.config.calendarMonth;
+    origView.calendarStartDateField = this.config.calendarStartDateField;
+    origView.calendarEndDateField = this.config.calendarEndDateField;
+    origView.calendarTitleField = this.config.calendarTitleField;
+    origView.calendarColorField = this.config.calendarColorField;
+    origView.calendarCellMinHeight = this.config.calendarCellMinHeight;
+    origView.calendarKeepCellAspectRatio = this.config.calendarKeepCellAspectRatio;
+    origView.calendarScale = this.config.calendarScale;
+    origView.calendarDay = this.config.calendarDay;
+    origView.calendarStartHour = this.config.calendarStartHour;
+    origView.calendarEndHour = this.config.calendarEndHour;
+    origView.calendarHourHeight = this.config.calendarHourHeight;
+    origView.calendarWeekSlotDuration = this.config.calendarWeekSlotDuration;
+    origView.calendarColumnSizeMode = this.config.calendarColumnSizeMode;
+    origView.calendarCustomColumnWidth = this.config.calendarCustomColumnWidth;
+    origView.calendarRowSizeMode = this.config.calendarRowSizeMode;
+    origView.calendarCustomRowHeights = this.config.calendarCustomRowHeights;
+    origView.calendarWeekStart = this.config.calendarWeekStart;
+    origView.calendarAllDayMaxLanes = this.config.calendarAllDayMaxLanes;
+    origView.calendarFirstDayOfWeek = this.config.calendarFirstDayOfWeek;
+    origView.yearDisplayMode = this.config.yearDisplayMode;
+    origView.calendarMonthVisibleLanes = this.config.calendarMonthVisibleLanes;
+    origView.timelineStartDateField = this.config.timelineStartDateField;
+    origView.timelineEndDateField = this.config.timelineEndDateField;
+    origView.timelineGroupField = this.config.timelineGroupField;
+    origView.timelineTitleField = this.config.timelineTitleField;
+    origView.timelineColorField = this.config.timelineColorField;
+    origView.timelineScale = this.config.timelineScale;
+    origView.timelineAnchor = this.config.timelineAnchor;
+    origView.timelineAnchorTimeMinutes = this.config.timelineAnchorTimeMinutes;
+    origView.timelineColumnSizeMode = this.config.timelineColumnSizeMode;
+    origView.timelineCustomUnitWidth = this.config.timelineCustomUnitWidth;
     origView.showEmptyFields = this.config.showEmptyFields;
     origView.columnOrder = this.config.columnOrder;
     origView.columnWidths = this.config.columnWidths;

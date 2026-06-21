@@ -3,6 +3,7 @@ import { ColumnDef, ComputedSyncMode, DatabaseConfig, DatabaseViewType, NO_TITLE
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { isObsidianTagsKey } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { BASE_FILE_FIELD_KEYS, getBaseFileFieldType, isBaseFileField } from "../data/FileFields";
 import { getSourceRuleTree, isSourceRuleExpression, isSourceRuleGroup, isSourceRuleNot } from "../data/SourceRules";
 import { t } from "../i18n";
@@ -72,7 +73,7 @@ export function getDefaultSourceRuleIsTypeValue(database: DatabaseConfig, field:
   const displayType = getSourceRuleFieldDisplayType(database, field);
   if (displayType === "checkbox") return "boolean";
   if (displayType === "multi-select") return "list";
-  if (displayType === "date") return "date";
+  if (isDateLikeColumnType(displayType)) return "date";
   if (displayType === "number" || displayType === "currency") return "number";
   return "string";
 }
@@ -105,7 +106,7 @@ function getRecommendedSourceRuleOperatorGroups(database: DatabaseConfig, field:
   if (isPropertyPresenceRuleField(field)) fileOps.push("hasProperty");
   if (fileOps.length > 0) groups.push({ label: t(SOURCE_RULE_OPERATOR_LABEL_KEYS.file), operators: fileOps });
 
-  if (displayType === "number" || displayType === "currency" || displayType === "date") {
+  if (displayType === "number" || displayType === "currency" || isDateLikeColumnType(displayType)) {
     groups.push(
       { label: t(SOURCE_RULE_OPERATOR_LABEL_KEYS.value), operators: VALUE_OPERATORS },
       { label: t(SOURCE_RULE_OPERATOR_LABEL_KEYS.compare), operators: RANGE_OPERATORS },
@@ -200,18 +201,22 @@ function isPropertyPresenceRuleField(field: string): boolean {
 
 export interface ViewConfigPanelActions {
   app: App;
-  onChange(): void;
+  onChange(label?: string): void;
   onViewTypeChange?(viewType: DatabaseViewType): void;
-  onDatabaseChange?(): void;
+  onDatabaseChange?(label?: string): void;
   onComputedSyncModeChange?(): void;
   onComputedFrontmatterCleanup?(): void;
   database?: DatabaseConfig;
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
+  statusPresetHelpText?: string;
+  managedStatusPresetCount?: number;
   onDefaultStatusPresetChange?(presetId: string): void;
   onManageStatusPresets?(): void;
   viewStatusPresets?: StatusPresetDef[];
   defaultViewStatusPresetId?: string;
+  viewStatusPresetHelpText?: string;
+  managedViewStatusPresetCount?: number;
   onDefaultViewStatusPresetChange?(presetId: string): void;
   onManageViewStatusPresets?(): void;
   readonly isDatabaseReadOnly?: boolean;
@@ -244,20 +249,34 @@ export class ViewConfigPanelRenderer {
 
     this.renderSectionTitle(panel, t("viewConfig.viewSection"));
     this.renderViewType(panel, config, actions);
-    this.renderStatusPresetSettings(panel, {
-      presets: actions.viewStatusPresets || [],
-      defaultPresetId: actions.defaultViewStatusPresetId,
-      onDefaultPresetChange: (presetId) => actions.onDefaultViewStatusPresetChange?.(presetId),
-      onManagePresets: () => actions.onManageViewStatusPresets?.(),
-    });
-    if (config.viewType !== "chart") {
-      this.renderDefaultColumnWidth(panel, config, actions);
+    const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
+    if (showViewStatusPresets) {
+      this.renderStatusPresetSettings(panel, {
+        presets: actions.viewStatusPresets || [],
+        defaultPresetId: actions.defaultViewStatusPresetId,
+        helpText: actions.viewStatusPresetHelpText,
+        managedPresetCount: actions.managedViewStatusPresetCount,
+        onDefaultPresetChange: (presetId) => actions.onDefaultViewStatusPresetChange?.(presetId),
+        onManagePresets: () => actions.onManageViewStatusPresets?.(),
+      });
     }
-    if (config.viewType !== "table" && config.viewType !== "chart") {
+    const isCalendarTimelineView = config.viewType === "calendar" || config.viewType === "timeline";
+    if (config.viewType !== "chart" && !isCalendarTimelineView) {
+      this.renderDefaultColumnWidth(panel, config, actions);
+      this.renderSelect(panel, t("viewConfig.yearDisplayMode"), [
+        { value: "always", text: t("viewConfig.yearDisplayMode.always") },
+        { value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
+        { value: "never", text: t("viewConfig.yearDisplayMode.never") },
+      ], config.yearDisplayMode || "always", (value) => {
+        config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
+        actions.onChange(t("undo.yearDisplayModeConfig"));
+      });
+    }
+    if (config.viewType !== "table" && config.viewType !== "chart" && !isCalendarTimelineView) {
       this.renderTitleField(panel, config, actions);
       this.renderSwitch(panel, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
         config.showEmptyFields = value || undefined;
-        actions.onChange();
+        actions.onChange(t("undo.showEmptyFieldsConfig"));
       });
     }
     if (config.viewType === "gallery") {
@@ -268,6 +287,16 @@ export class ViewConfigPanelRenderer {
     }
     if (config.viewType === "board") {
       this.renderBoardSettings(panel, config, actions);
+      positionToolbarPopover(panel, anchorEl);
+      if (savedScroll) panel.scrollTop = savedScroll;
+      return;
+    }
+    if (config.viewType === "calendar") {
+      positionToolbarPopover(panel, anchorEl);
+      if (savedScroll) panel.scrollTop = savedScroll;
+      return;
+    }
+    if (config.viewType === "timeline") {
       positionToolbarPopover(panel, anchorEl);
       if (savedScroll) panel.scrollTop = savedScroll;
       return;
@@ -290,6 +319,8 @@ export class ViewConfigPanelRenderer {
         { value: "gallery", text: t("common.galleryView"), icon: "image" },
         { value: "list", text: t("common.listView"), icon: "list" },
         { value: "chart", text: t("common.chartView"), icon: "bar-chart" },
+        { value: "calendar", text: t("common.calendarView"), icon: "calendar-days" },
+        { value: "timeline", text: t("common.timelineView"), icon: "chart-gantt" },
       ],
       config.viewType || "table",
       (value) => {
@@ -299,7 +330,7 @@ export class ViewConfigPanelRenderer {
           return;
         }
         config.viewType = next;
-        actions.onChange();
+        actions.onChange(t("undo.viewTypeConfig"));
       }
     );
   }
@@ -311,19 +342,19 @@ export class ViewConfigPanelRenderer {
     };
     this.renderText(panel, t("viewConfig.databaseName"), database.name || "", t("settings.databaseName"), (value) => {
       database.name = value || t("common.untitledDatabase");
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.databaseNameConfig"));
     }, readOnly, undefined, (value) => {
       database.name = value || t("common.untitledDatabase");
     });
     this.renderTextarea(panel, t("viewConfig.databaseDescription"), database.description || "", t("viewConfig.descriptionPlaceholder"), (value) => {
       database.description = value || undefined;
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.databaseDescriptionConfig"));
     }, readOnly, (value) => {
       database.description = value || undefined;
     });
     this.renderText(panel, t("viewConfig.sourceFolder"), database.sourceFolder || "", t("settings.sourceFolder.placeholder"), (value) => {
       syncSourceFolder(value);
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.sourceFolderConfig"));
     }, readOnly, t("settings.sourceFolder.desc"), (value) => {
       syncSourceFolder(value);
     });
@@ -331,7 +362,7 @@ export class ViewConfigPanelRenderer {
     this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
     this.renderText(panel, t("viewConfig.typeFilter"), database.typeFilter || "", t("settings.typeFilter.placeholder"), (value) => {
       database.typeFilter = value || undefined;
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.typeFilterConfig"));
     }, readOnly, t("settings.typeFilter.desc"), (value) => {
       database.typeFilter = value || undefined;
     });
@@ -339,6 +370,8 @@ export class ViewConfigPanelRenderer {
     this.renderStatusPresetSettings(panel, {
       presets: actions.statusPresets || [],
       defaultPresetId: actions.defaultStatusPresetId,
+      helpText: actions.statusPresetHelpText,
+      managedPresetCount: actions.managedStatusPresetCount,
       onDefaultPresetChange: (presetId) => actions.onDefaultStatusPresetChange?.(presetId),
       onManagePresets: () => actions.onManageStatusPresets?.(),
     }, readOnly);
@@ -365,7 +398,7 @@ export class ViewConfigPanelRenderer {
       database.sourceRuleTree = next;
       database.sourceRules = undefined;
       database.sourceLogic = undefined;
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.sourceRulesConfig"));
     };
     if (tree) {
       this.renderSourceRuleNode(editor, tree, commit, !!readOnly, database);
@@ -785,7 +818,7 @@ export class ViewConfigPanelRenderer {
         if (!confirmed) return false;
       }
       database.computedSyncMode = nextMode;
-      actions.onDatabaseChange?.();
+      actions.onDatabaseChange?.(t("undo.computedSyncModeConfig"));
       actions.onComputedSyncModeChange?.();
       if (previousMode === "display-only" && nextMode === "manual") {
         new Notice(t("viewConfig.computedSync.manualHint"));
@@ -828,32 +861,46 @@ export class ViewConfigPanelRenderer {
     options: {
       presets: StatusPresetDef[];
       defaultPresetId?: string;
+      helpText?: string;
+      managedPresetCount?: number;
       onDefaultPresetChange?(presetId: string): void;
       onManagePresets?(): void;
     },
     readOnly?: boolean
   ): void {
     const presets = options.presets || [];
-    if (presets.length === 0) return;
+    if (presets.length === 0 && !options.onManagePresets) return;
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: t("viewConfig.statusPreset") });
     const field = row.createDiv({ cls: "db-view-config-field db-view-config-inline-controls" });
     if (readOnly) {
       const current = presets.find((preset) => preset.id === options.defaultPresetId) || presets[0];
       field.createDiv({ cls: "db-view-config-readonly-value", text: current?.name || t("common.notSet") });
+      if (options.helpText) field.createDiv({ cls: "db-view-config-help", text: options.helpText });
       return;
     }
-    createDropdownField({
-      parent: field,
-      label: t("viewConfig.statusPreset"),
-      options: presets.map((preset) => ({ value: preset.id, text: preset.name })),
-      value: options.defaultPresetId || presets[0]?.id || "",
-      className: "db-view-config-dropdown db-status-preset-setting-dropdown",
-      hideLabel: true,
-      onChange: (value) => options.onDefaultPresetChange?.(value),
+    if (presets.length > 0) {
+      createDropdownField({
+        parent: field,
+        label: t("viewConfig.statusPreset"),
+        options: presets.map((preset) => ({ value: preset.id, text: preset.name })),
+        value: options.defaultPresetId || presets[0]?.id || "",
+        className: "db-view-config-dropdown db-status-preset-setting-dropdown",
+        hideLabel: true,
+        onChange: (value) => options.onDefaultPresetChange?.(value),
+      });
+    } else {
+      field.createDiv({ cls: "db-view-config-readonly-value", text: t("statusPresets.none") });
+    }
+    const button = field.createEl("button", {
+      text: t("statusPresets.manage"),
+      attr: {
+        type: "button",
+        "aria-label": `${t("statusPresets.manage")} (${options.managedPresetCount ?? presets.length})`,
+      },
     });
-    const button = field.createEl("button", { text: t("statusPresets.manage"), attr: { type: "button" } });
     button.onclick = () => options.onManagePresets?.();
+    if (options.helpText) field.createDiv({ cls: "db-view-config-help", text: options.helpText });
   }
 
   private renderNewRecordFolderSetting(
@@ -873,18 +920,18 @@ export class ViewConfigPanelRenderer {
       });
       return;
     }
-      const input = field.createEl("input", {
-        cls: "db-view-config-text",
-        attr: { type: "text", placeholder: t("settings.sourceFolder.placeholder") },
-      });
-      input.value = database.newRecordFolder || "";
-      input.oninput = () => {
-        database.newRecordFolder = input.value.trim() || undefined;
-      };
-      input.onchange = () => {
-        database.newRecordFolder = input.value.trim() || undefined;
-        actions.onDatabaseChange?.();
-      };
+    const input = field.createEl("input", {
+      cls: "db-view-config-text",
+      attr: { type: "text", placeholder: t("settings.sourceFolder.placeholder") },
+    });
+    input.value = database.newRecordFolder || "";
+    input.oninput = () => {
+      database.newRecordFolder = input.value.trim() || undefined;
+    };
+    input.onchange = () => {
+      database.newRecordFolder = input.value.trim() || undefined;
+      actions.onDatabaseChange?.(t("undo.newRecordFolderConfig"));
+    };
     field.createDiv({ cls: "db-view-config-help", text: t("viewConfig.newRecordFolderLocked") });
   }
 
@@ -901,7 +948,7 @@ export class ViewConfigPanelRenderer {
       config.galleryImageField || "",
       (value) => {
         config.galleryImageField = value || undefined;
-        actions.onChange();
+        actions.onChange(t("undo.galleryCoverFieldConfig"));
       }
     );
 
@@ -915,7 +962,7 @@ export class ViewConfigPanelRenderer {
       config.galleryImageFit || "cover",
       (value) => {
         config.galleryImageFit = value === "contain" ? "contain" : "cover";
-        actions.onChange();
+        actions.onChange(t("undo.galleryImageFitConfig"));
       }
     );
 
@@ -924,7 +971,7 @@ export class ViewConfigPanelRenderer {
     };
     this.renderRange(panel, t("viewConfig.cardSize"), config.galleryCardSize || 250, 160, 420, 10, (value) => {
       setGalleryCardSize(value);
-      actions.onChange();
+      actions.onChange(t("undo.cardSizeConfig"));
     }, setGalleryCardSize);
 
     const ratioOptions = [
@@ -942,7 +989,7 @@ export class ViewConfigPanelRenderer {
       const next = Number(value);
       if (Number.isFinite(next)) {
         config.galleryImageAspectRatio = next;
-        actions.onChange();
+        actions.onChange(t("undo.galleryCoverRatioConfig"));
       }
     });
   }
@@ -959,7 +1006,7 @@ export class ViewConfigPanelRenderer {
       config.titleField || "",
       (value) => {
         config.titleField = value || undefined;
-        actions.onChange();
+        actions.onChange(t("undo.titleFieldConfig"));
       }
     );
   }
@@ -975,10 +1022,11 @@ export class ViewConfigPanelRenderer {
           .filter((col) => col.key !== "file.name" && col.key !== groupField)
           .map((col) => ({ value: col.key, text: col.label })),
       ],
-      config.boardSubgroupField || "",
+      config.boardSubgroupEnabled === true || config.boardSubgroupField ? config.boardSubgroupField || "" : "",
       (value) => {
+        config.boardSubgroupEnabled = Boolean(value);
         config.boardSubgroupField = value || undefined;
-        actions.onChange();
+        actions.onChange(t("undo.boardSubgroupConfig"));
       }
     );
     const setBoardColumnWidth = (value: number) => {
@@ -986,7 +1034,7 @@ export class ViewConfigPanelRenderer {
     };
     this.renderRange(panel, t("viewConfig.boardColumnWidth"), config.boardColumnWidth || 280, 220, 520, 10, (value) => {
       setBoardColumnWidth(value);
-      actions.onChange();
+      actions.onChange(t("undo.boardColumnWidthConfig"));
     }, setBoardColumnWidth);
   }
 
@@ -1012,7 +1060,7 @@ export class ViewConfigPanelRenderer {
     };
     this.renderRange(panel, t("viewConfig.defaultColumnWidth"), this.getDefaultColumnWidth(config), 80, 800, 10, (value) => {
       setDefaultColumnWidth(value);
-      actions.onChange();
+      actions.onChange(t("undo.defaultColumnWidthConfig"));
     }, setDefaultColumnWidth);
   }
 

@@ -1152,7 +1152,7 @@ describe("ChartRenderer", () => {
       expect(source).toContain("this.chartRenderer.render");
       expect(source).toContain("this.chartRenderer.destroy()");
       expect(source).toContain("this.chartRenderer.refreshTheme()");
-      expect(source).toContain("[\"table\", \"board\", \"gallery\", \"list\", \"chart\"]");
+      expect(source).toContain("[\"table\", \"board\", \"gallery\", \"list\", \"chart\", \"calendar\", \"timeline\"]");
       expect(source).toContain("manualOrder: undefined");
     }
     const databaseFileView = readFileSync(new URL("../views/DatabaseFileView.ts", import.meta.url), "utf8");

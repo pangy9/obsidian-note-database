@@ -4,15 +4,17 @@
 
 Local database views for Markdown notes in Obsidian.
 
-Note Database turns Markdown files and frontmatter properties into editable table, board, gallery, list, and chart views. It stays local-first, works with plain Markdown files, and keeps database configuration inside your vault.
+Note Database turns Markdown files and frontmatter properties into editable table, board, gallery, list, chart, calendar, and timeline views. It stays local-first, works with plain Markdown files, and keeps database configuration inside your vault.
 
 ## Highlights
 
-- **Five database views**: switch the same notes between table, board, gallery, list, and chart layouts.
+- **Seven database views**: switch the same notes between table, board, gallery, list, chart, calendar, and timeline layouts.
 - **Markdown-first storage**: every database is saved as a normal `db_view: true` Markdown file in your vault.
 - **Inline property editing**: edit text, numbers, dates, currency, checkboxes, selects, multi-selects, statuses, and file names directly from the view.
 - **Flexible filtering and grouping**: combine filters, sorting, grouping, hidden fields, title fields, manual order, and per-view layout settings.
 - **Chart view**: visualize the current filtered records with bar, line, area, donut, number, stacked, grouped, and mixed charts.
+- **Calendar and timeline views**: schedule date and datetime properties with month, week, day, and long-range timeline scales.
+- **Board subgroups and drag feedback**: organize board columns with secondary grouping and clearer drag targets.
 - **Computed fields**: build formulas with field references, helper functions, live previews, and optional frontmatter sync.
 - **Embedded views**: embed read-only database views inside any note while keeping view switching, filters, sorting, grouping, visible fields, and export tools available.
 - **Database-file tab controls**: choose whether database files always open in new tabs and whether duplicate database-file tabs are prevented.
@@ -31,18 +33,21 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 | ![Gallery view](assets/screenshots/en-gallery-view.png) | ![List view](assets/screenshots/en-list-view.png) |
 | Visual browsing for reading plans, references, portfolios, and card-style content libraries. | Compact indexes for tasks, directories, research notes, and long lists that need fast scanning. |
 
-| Chart |
-| --- |
-| ![Chart view](assets/screenshots/en-chart-view.png) |
-| Aggregate the current search and filter result into configurable charts with summaries, drilldown, palettes, and export. |
+| Chart | Timeline |
+| --- | --- |
+| ![Chart view](assets/screenshots/en-chart-view.png) | ![Timeline view](assets/screenshots/en-timeline-view.png) |
+| Aggregate the current search and filter result into configurable charts with summaries, drilldown, palettes, and export. | Near-term review and compressed long-range planning with day, week, month, and quarter scales, grouping, drag, and resize. |
+
+| Calendar (Month) | Calendar (Week) |
+| --- | --- |
+| ![Calendar month view](assets/screenshots/en-calendar-view-month.png) | ![Calendar week view](assets/screenshots/en-calendar-view-week.png) |
+| Month-level scheduling for all-day spans, multi-day plans, and direct drag or resize date changes. | Near-term scheduling with an all-day lane and a time grid for date and datetime events. |
 
 Each view can keep its own filters, sorting, grouping, visible fields, title field, and layout settings.
 
 ## Chart Views
 
 Chart views use the same records as the current database after search, filters, and result limits. They support count and numeric aggregations, date and number buckets, visible group controls, cumulative series, reference lines, data labels, legends, and PNG export.
-
-![Chart options](assets/screenshots/en-chart-options.png)
 
 Click a chart mark to inspect the matching records before applying it as a filter.
 
@@ -51,6 +56,12 @@ Click a chart mark to inspect the matching records before applying it as a filte
 Summary rules can combine count-style, numeric, date, checkbox, and unique-value calculations.
 
 ![Summary bar](assets/screenshots/en-summary-bar.png)
+
+## Calendar And Timeline Views
+
+Calendar views turn date and datetime fields into month, week, and day schedules. Multi-day events stay readable across cells, all-day spans can be moved or resized, and week/day time grids support timed event creation and editing.
+
+Timeline views focus on planning across short and long ranges. Use day scale for datetime detail, week scale for near-term review, month scale for multi-day overview, and quarter scale for compressed long-range planning. Events can be grouped, dragged, resized, and inspected with compact range labels.
 
 ## Getting Started
 
@@ -179,6 +190,15 @@ If Note Database helps you, a star or donation helps support continued developme
 <img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## Changelog
+
+### 1.2.0
+
+- Added calendar and timeline views for date and datetime properties, including month/week/day calendar scales and day/week/month/quarter timeline scales.
+- Added richer date and datetime handling: localized display, datetime formulas, cross-day labels, consistent invalid-range handling, and repair prompts.
+- Improved calendar and timeline interaction details, including drag/resize behavior, current-range highlighting, mini-calendar navigation, clipped event fades, and responsive timeline windows.
+- Fixed day-based calendar and timeline drags so datetime events keep their original clock times.
+- Improved drag/drop feedback for board cards, groups, rows, and timeline events.
+- Improved embedded views so refreshing database blocks does not pull the surrounding Markdown note back to the embed.
 
 ### 1.1.0
 

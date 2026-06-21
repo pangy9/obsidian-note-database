@@ -10,6 +10,7 @@ import {
 } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { DataSource } from "../data/DataSource";
+import { formatDateTimeValueDisplay, formatDateValueDisplay, parseDateTimeParts } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
 import { t } from "../i18n";
@@ -158,7 +159,10 @@ export class CellRenderer {
         break;
       }
       case "date":
-        this.renderDate(td, row, col, value);
+        this.renderDate(td, row, col, value, false);
+        break;
+      case "datetime":
+        this.renderDate(td, row, col, value, true);
         break;
       default:
         td.textContent = String(value);
@@ -236,9 +240,11 @@ export class CellRenderer {
     };
   }
 
-  private renderDate(td: HTMLElement, row: RowData, col: ColumnDef, value: unknown): void {
-    const str = String(value);
-    td.textContent = str.substring(0, 10);
+  private renderDate(td: HTMLElement, row: RowData, col: ColumnDef, value: unknown, includeTime: boolean): void {
+    td.addClass("db-date-value");
+    td.textContent = includeTime
+      ? formatDateTimeValueDisplay(value, { mode: "full", showTimeWhenMissing: true })
+      : formatDateValueDisplay(value);
 
     if (!col.urgency?.enabled) return;
     const daysKey =
@@ -348,8 +354,8 @@ export class CellRenderer {
       return;
     }
 
-    if (col.type === "date") {
-      this.editDatePopover(target, row, col, currentValue);
+    if (col.type === "date" || col.type === "datetime") {
+      this.editDatePopover(target, row, col, currentValue, col.type === "datetime");
       return;
     }
 
@@ -968,6 +974,7 @@ export class CellRenderer {
     row: RowData,
     col: ColumnDef,
     currentValue: unknown,
+    includeTime = false,
   ): void {
     const rawContainer = td.closest(".note-database-container");
     const container = isHTMLElement(rawContainer) ? rawContainer : null;
@@ -977,10 +984,12 @@ export class CellRenderer {
     this.activeTextEditClose?.();
     td.addClass("db-cell-editing");
 
-    const parts = safeString(currentValue).substring(0, 10).split("-");
-    const initYear = parts[0] || "";
-    const initMonth = parts[1] || "";
-    const initDay = parts[2] || "";
+    const dateParts = parseDateTimeParts(currentValue);
+    const fallbackParts = safeString(currentValue).substring(0, 10).split("-");
+    const initYear = dateParts ? String(dateParts.year) : fallbackParts[0] || "";
+    const initMonth = dateParts?.month || fallbackParts[1] || "";
+    const initDay = dateParts?.day || fallbackParts[2] || "";
+    const initTime = dateParts?.time || "";
 
     let popover: HTMLElement;
     let closeBtn: HTMLButtonElement | undefined;
@@ -1008,6 +1017,7 @@ export class CellRenderer {
     } else {
       popover = (host as HTMLElement).createDiv({ cls: "db-cell-edit-popover db-date-edit-popover" });
     }
+    if (includeTime) popover.addClass("is-datetime");
 
     const segments = popover.createDiv({ cls: "db-date-segments" });
     const yearInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "4", placeholder: "YYYY" } });
@@ -1015,8 +1025,14 @@ export class CellRenderer {
     const monthInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "MM" } });
     segments.createSpan({ cls: "db-date-sep", text: "-" });
     const dayInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
+    let timeInp: HTMLInputElement | undefined;
+    if (includeTime) {
+      segments.createSpan({ cls: "db-date-sep db-time-sep", text: " " });
+      const timePlaceholder = "HH" + ":mm";
+      timeInp = segments.createEl("input", { cls: "db-date-seg db-time-seg", attr: { maxlength: "5", placeholder: timePlaceholder } });
+    }
 
-    const inputs = [yearInp, monthInp, dayInp];
+    const inputs = [yearInp, monthInp, dayInp, timeInp].filter((input): input is HTMLInputElement => Boolean(input));
     let committed = false;
 
     const pad2 = (v: string) => v.length === 1 ? `0${v}` : v;
@@ -1044,7 +1060,7 @@ export class CellRenderer {
       const rawD = dayInp.value;
       const allEmpty = !y && !rawM && !rawD;
       if (allEmpty) {
-        if (safeString(currentValue).substring(0, 10)) {
+        if (dateParts?.dateKey || safeString(currentValue).substring(0, 10)) {
           await this.saveValue(row, col, null);
         }
         close();
@@ -1061,8 +1077,12 @@ export class CellRenderer {
       if (m !== clampedM || d !== clampedD) {
         new Notice(t("cell.invalidDate"));
       }
-      const newVal = `${y}-${pad2(String(clampedM))}-${pad2(String(clampedD))}`;
-      if (newVal !== safeString(currentValue).substring(0, 10)) {
+      const dateKey = `${y}-${pad2(String(clampedM))}-${pad2(String(clampedD))}`;
+      const newVal = includeTime ? `${dateKey}T${normalizeTimeForSave(timeInp?.value || "")}` : dateKey;
+      const currentNormalized = dateParts
+        ? (includeTime ? `${dateParts.dateKey}T${dateParts.time || "00:00"}` : dateParts.dateKey)
+        : safeString(currentValue).substring(0, includeTime ? 16 : 10).replace(" ", "T");
+      if (newVal !== currentNormalized) {
         await this.saveValue(row, col, newVal);
       }
       close();
@@ -1106,6 +1126,38 @@ export class CellRenderer {
       if (!/^\d$/.test(event.key)) { event.preventDefault(); return; }
     };
 
+    const normalizeTimeForInput = (value: string) => {
+      const digits = value.replace(/\D/g, "").slice(0, 4);
+      if (digits.length <= 2) return digits;
+      return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+    };
+    const normalizeTimeForSave = (value: string) => {
+      const raw = value.trim();
+      let hour = 0;
+      let minute = 0;
+      if (raw.includes(":")) {
+        const [rawHour = "", rawMinute = ""] = raw.split(":");
+        hour = Number(rawHour || "0");
+        minute = Number(rawMinute || "0");
+      } else {
+        const digits = raw.replace(/\D/g, "").slice(0, 4);
+        if (digits.length <= 2) {
+          hour = Number(digits || "0");
+        } else if (digits.length === 3) {
+          hour = Number(digits.slice(0, 1));
+          minute = Number(digits.slice(1));
+        } else {
+          hour = Number(digits.slice(0, 2));
+          minute = Number(digits.slice(2));
+        }
+      }
+      if (!Number.isFinite(hour) || !Number.isFinite(minute)) return "00:00";
+      const clampedHour = Math.min(Math.max(Math.trunc(hour), 0), 23);
+      const clampedMinute = Math.min(Math.max(Math.trunc(minute), 0), 59);
+      if (clampedHour !== hour || clampedMinute !== minute) new Notice(t("cell.invalidDate"));
+      return `${pad2(String(clampedHour))}:${pad2(String(clampedMinute))}`;
+    };
+
     yearInp.value = initYear;
     yearInp.onkeydown = (e) => handleSegmentKey(e, yearInp, undefined);
     yearInp.oninput = () => {
@@ -1137,12 +1189,32 @@ export class CellRenderer {
       const v = dayInp.value;
       if (v.length === 1 && /^[4-9]$/.test(v)) {
         dayInp.value = `0${v}`;
-        void commit();
+        if (timeInp) {
+          timeInp.focus();
+          timeInp.select();
+        } else {
+          void commit();
+        }
       } else if (v.length === 2) {
-        void commit();
+        if (timeInp) {
+          timeInp.focus();
+          timeInp.select();
+        } else {
+          void commit();
+        }
       }
     };
     dayInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+
+    if (timeInp) {
+      timeInp.value = initTime;
+      timeInp.onkeydown = (e) => handleSegmentKey(e, timeInp, dayInp);
+      timeInp.oninput = () => {
+        timeInp.value = normalizeTimeForInput(timeInp.value);
+        if (timeInp.value.length === 5) void commit();
+      };
+      timeInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+    }
 
     if (closeBtn) {
       closeBtn.onmousedown = (event) => event.preventDefault();

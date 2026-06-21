@@ -73,6 +73,12 @@
   --db-radius-sm: 4px;
   --db-radius-md: 6px;
   --db-radius-lg: 8px;
+  --db-title-font-family: "Source Serif 4", "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", "Songti SC", "STSong", Georgia, "Times New Roman", serif;
+  --db-heading-vertical-space: 12px;
+  --db-heading-row-min-height: 37px;
+  --db-heading-font-size: 28px;
+  --db-heading-line-height: 1.3;
+  --db-description-min-height: 20px;
   --status-color-bg-gray: rgba(120, 119, 116, 0.18);
   --status-color-fg-gray: #787774;
   --status-color-bg-brown: rgba(159, 107, 83, 0.18);
@@ -105,15 +111,23 @@
   --status-color-fg-violet: #7c3aed;
   --status-color-bg-rose: rgba(225, 29, 72, 0.18);
   --status-color-fg-rose: #e11d48;
+  --db-current-time-saturation: max(var(--accent-s, 82%), 82%);
+  --db-current-time-lightness: clamp(44%, calc(var(--accent-l, 52%) + 4%), 56%);
+  --db-current-time-color: hsl(var(--accent-h, 254) var(--db-current-time-saturation) var(--db-current-time-lightness));
   height: 100%;
   /* overflow: auto 让容器自身成为滚动容器，表头 sticky 相对于此生效 */
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 0 24px 32px;
   position: relative;
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.theme-dark .note-database-container {
+  --db-current-time-lightness: clamp(58%, calc(var(--accent-l, 56%) + 10%), 70%);
 }
 
 .note-database-modal {
@@ -246,7 +260,7 @@
 .note-database-container .db-header {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--db-heading-vertical-space);
   margin-bottom: 0px;
   /* 负 margin 让 header 突破父容器的 24px 左右 padding，横向铺满 */
   margin-left: -12px;
@@ -258,7 +272,7 @@
   left: -12px;
   z-index: 30;
   background: var(--background-primary);
-  padding: 14px 12px 0;
+  padding: var(--db-heading-vertical-space) 12px 0;
 }
 
 .note-database-container .db-heading-row {
@@ -266,6 +280,7 @@
   align-items: center;
   align-self: flex-start;
   gap: 4px;
+  min-height: var(--db-heading-row-min-height);
   max-width: min(760px, 100%);
 }
 
@@ -278,16 +293,22 @@
   border: 0;
   border-radius: var(--db-radius-lg);
   background: transparent;
-  font-size: 28px;
+  font-size: var(--db-heading-font-size);
   font-family: inherit;
   font-weight: 700;
   color: var(--text-normal);
-  line-height: 1.3;
+  line-height: var(--db-heading-line-height);
   cursor: pointer;
-  padding: 20px 4px;
+  padding: 0 4px;
   text-align: left;
   user-select: none;
   box-shadow: none;
+}
+
+.note-database-container .db-heading-button {
+  appearance: none;
+  min-height: 0;
+  margin: 0;
 }
 
 .note-database-container .db-heading:hover {
@@ -296,6 +317,7 @@
 
 .note-database-container .db-heading-text {
   overflow: hidden;
+  font-family: var(--db-title-font-family);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -348,12 +370,12 @@
   width: 100%;
   max-width: none;
   max-height: 30vh;
-  min-height: 20px;
+  min-height: var(--db-description-min-height);
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.5;
   margin-left: 0;
-  margin-top: -6px;
+  margin-top: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;
@@ -390,8 +412,8 @@
 
 .note-database-embed.note-database-container .db-description {
   max-height: 30vh;
-  min-height: 0;
-  margin: -2px 0 0;
+  min-height: var(--db-description-min-height);
+  margin: 0;
   width: 100%;
 }
 
@@ -402,29 +424,37 @@
   border-radius: var(--db-radius-md);
   background: var(--background-primary);
   color: var(--text-normal);
-  font-size: 28px;
+  font-family: var(--db-title-font-family);
+  font-size: var(--db-heading-font-size);
   font-weight: 700;
-  line-height: 1.3;
+  line-height: var(--db-heading-line-height);
   outline: none;
   padding: 2px 6px;
 }
 
 .note-database-container .db-heading-edit-description {
-  min-height: 22px;
-  max-height: 200px;
-  border-color: transparent;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: var(--db-description-min-height);
+  max-height: 30vh;
+  border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
+  font-family: var(--font-interface);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.5;
-  margin-left: 6px;
-  margin-top: -6px;
-  padding: 0;
-  overflow-y: hidden;
+  margin-left: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
   resize: none;
+  scrollbar-gutter: stable;
 }
 
 .note-database-container .db-heading-edit-description:focus {
@@ -443,7 +473,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 32px;
+  min-height: var(--db-heading-row-min-height);
 }
 
 .note-database-container .db-title-actions {
@@ -458,10 +488,11 @@
   overflow: hidden;
   color: var(--text-normal);
   cursor: text;
-  font-size: 26px;
+  font-family: var(--db-title-font-family);
+  font-size: var(--db-heading-font-size);
   font-weight: 700;
   letter-spacing: 0;
-  line-height: 1.2;
+  line-height: var(--db-heading-line-height);
   text-overflow: ellipsis;
   user-select: text;
   white-space: nowrap;
@@ -709,11 +740,79 @@
   height: 19px;
 }
 
+.note-database-container .db-composite-icon {
+  --db-composite-main-size: 18px;
+  --db-composite-badge-box-size: 11px;
+  --db-composite-badge-icon-size: 8px;
+  --db-composite-badge-right: -1px;
+  --db-composite-badge-bottom: -1px;
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.note-database-container .db-composite-icon-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.note-database-container .db-composite-icon-main svg {
+  --db-composite-cutout-x: 94%;
+  --db-composite-cutout-y: 92%;
+  --db-composite-cutout-radius: 8px;
+
+  -webkit-mask-image: radial-gradient(
+    circle at var(--db-composite-cutout-x) var(--db-composite-cutout-y),
+    transparent 0,
+    transparent var(--db-composite-cutout-radius),
+    #000 calc(var(--db-composite-cutout-radius) + 0.6px)
+  );
+  mask-image: radial-gradient(
+    circle at var(--db-composite-cutout-x) var(--db-composite-cutout-y),
+    transparent 0,
+    transparent var(--db-composite-cutout-radius),
+    #000 calc(var(--db-composite-cutout-radius) + 0.6px)
+  );
+
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+.note-database-container .db-composite-icon-badge {
+  position: absolute;
+  right: var(--db-composite-badge-right);
+  bottom: var(--db-composite-badge-bottom);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--db-composite-badge-box-size);
+  height: var(--db-composite-badge-box-size);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  line-height: 0;
+}
+
+.note-database-container .db-composite-icon-badge svg {
+  width: var(--db-composite-badge-icon-size);
+  height: var(--db-composite-badge-icon-size);
+}
+
+
 .note-database-container .db-toggle-switch {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
+  flex: 0 0 34px;
   width: 34px;
+  min-width: 34px;
   height: 18px;
   box-sizing: border-box;
   border: 1px solid var(--background-modifier-border-hover);
@@ -985,6 +1084,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   min-height: 30px;
   box-sizing: border-box;
   padding: 4px 6px;
@@ -1010,13 +1110,16 @@
 .note-database-container .db-dropdown-field-icon,
 .note-database-container .db-dropdown-field-chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-container .db-dropdown-field-icon svg,
 .note-database-container .db-dropdown-field-chevron svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1117,7 +1220,10 @@
   grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  width: 100%;
+  min-width: 0;
   min-height: 30px;
+  box-sizing: border-box;
   padding: 5px 7px;
   border: 0;
   border-radius: var(--db-radius-sm);
@@ -1162,24 +1268,37 @@
 
 .note-database-container .db-dropdown-option-check {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-accent);
 }
 
 .note-database-container .db-dropdown-option-icon {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
+.note-database-container .db-dropdown-option-check,
+.note-database-container .db-dropdown-option-icon,
+.note-database-container .db-dropdown-option-swatches {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .note-database-container .db-dropdown-option-check svg {
+  display: block;
   width: 13px;
   height: 13px;
 }
 
 .note-database-container .db-dropdown-option-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1205,6 +1324,7 @@
 
 .note-database-container .db-dropdown-option-swatches {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
@@ -1238,6 +1358,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   min-height: 30px;
   box-sizing: border-box;
   padding: 4px 7px;
@@ -1261,12 +1382,15 @@
 
 .note-database-modal .db-dropdown-field-chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-modal .db-dropdown-field-chevron svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1323,7 +1447,10 @@
   grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  width: 100%;
+  min-width: 0;
   min-height: 30px;
+  box-sizing: border-box;
   padding: 5px 7px;
   border: 0;
   border-radius: var(--db-radius-sm);
@@ -1355,24 +1482,30 @@
 
 .note-database-modal .db-dropdown-option-check {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-accent);
 }
 
 .note-database-modal .db-dropdown-option-icon {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-modal .db-dropdown-option-check svg {
+  display: block;
   width: 13px;
   height: 13px;
 }
 
 .note-database-modal .db-dropdown-option-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1391,7 +1524,7 @@
   grid-template-columns: minmax(0, 1fr) 16px;
   align-items: center;
   gap: 8px;
-  min-width: 180px;
+  min-width: 0;
   min-height: 32px;
   box-sizing: border-box;
   padding: 4px 8px;
@@ -1405,16 +1538,29 @@
   cursor: pointer;
 }
 
+.note-database-settings .db-settings-dropdown {
+  width: max-content;
+  min-width: max-content;
+}
+
+.note-database-settings .db-settings-dropdown .db-dropdown-field-text {
+  min-width: max-content;
+}
+
+.note-database-settings .db-settings-dropdown .db-dropdown-field-value {
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .note-database-settings .db-status-preset-setting-item .setting-item-control {
   display: flex;
   flex-wrap: nowrap;
-  min-width: 0;
+  min-width: max-content;
   max-width: 100%;
 }
 
 .note-database-settings .db-status-preset-setting-item .db-settings-dropdown {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .note-database-settings .db-status-preset-setting-item .setting-item-control button {
@@ -1431,12 +1577,15 @@
 
 .note-database-settings .db-dropdown-field-chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-settings .db-dropdown-field-chevron svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1491,7 +1640,10 @@
   grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  width: 100%;
+  min-width: 0;
   min-height: 30px;
+  box-sizing: border-box;
   padding: 5px 7px;
   border: 0;
   border-radius: var(--db-radius-sm);
@@ -1514,24 +1666,30 @@
 
 .note-database-settings .db-dropdown-option-check {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-accent);
 }
 
 .note-database-settings .db-dropdown-option-icon {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-settings .db-dropdown-option-check svg {
+  display: block;
   width: 13px;
   height: 13px;
 }
 
 .note-database-settings .db-dropdown-option-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1579,7 +1737,10 @@
   grid-template-columns: 16px 16px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  width: 100%;
+  min-width: 0;
   min-height: 30px;
+  box-sizing: border-box;
   padding: 5px 7px;
   border: 0;
   border-radius: var(--db-radius-sm, 4px);
@@ -1599,8 +1760,10 @@
 .db-column-type-popover .db-dropdown-option-check,
 .db-column-type-popover .db-dropdown-option-icon {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
 }
 
 .db-column-type-popover .db-dropdown-option-check {
@@ -1612,11 +1775,13 @@
 }
 
 .db-column-type-popover .db-dropdown-option-check svg {
+  display: block;
   width: 13px;
   height: 13px;
 }
 
 .db-column-type-popover .db-dropdown-option-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1719,7 +1884,13 @@
 }
 
 .note-database-container .db-new-button:hover {
-  background: var(--interactive-accent-hover);
+  background: color-mix(in srgb, var(--interactive-accent) 88%, var(--text-on-accent) 12%);
+  color: var(--text-on-accent);
+}
+
+.note-database-container .db-toolbar .db-new-button:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 88%, var(--text-on-accent) 12%);
+  color: var(--text-on-accent);
 }
 
 /* 设置页 CSS 变量（设置页不在 .note-database-container 内，需单独定义） */
@@ -1752,11 +1923,32 @@
   margin-bottom: 12px;
 }
 .note-database-settings .setting-group-body .setting-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 16px;
   padding-top: 8px;
   padding-bottom: 8px;
 }
 .note-database-settings .setting-group-body .setting-item + .setting-item {
   border-top: 1px solid var(--background-modifier-border-hover);
+}
+.note-database-settings .setting-group-body .setting-item .setting-item-info {
+  min-width: 0;
+}
+.note-database-settings .setting-group-body .setting-item .setting-item-name,
+.note-database-settings .setting-group-body .setting-item .setting-item-description {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.note-database-settings .setting-group-body .setting-item .setting-item-control {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  justify-self: end;
+  justify-content: flex-end;
+  min-width: max-content;
+  max-width: 100%;
 }
 .note-database-settings .setting-group-body .setting-item .setting-item-control select,
 .note-database-settings .setting-group-body .setting-item .setting-item-control input[type="text"],
@@ -2319,6 +2511,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   min-height: 34px;
   box-sizing: border-box;
   margin: 0;
@@ -2346,13 +2539,16 @@
 .note-database-container .db-chart-options-row-icon,
 .note-database-container .db-chart-options-chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
 .note-database-container .db-chart-options-row-icon svg,
 .note-database-container .db-chart-options-chevron svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -2362,6 +2558,16 @@
   align-items: baseline;
   gap: 12px;
   min-width: 0;
+}
+
+.note-database-container .db-chart-options-row-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .note-database-container .db-chart-options-label {
@@ -2479,6 +2685,14 @@
 
 .note-database-container .db-chart-options-switch {
   grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.note-database-container .db-chart-options-switch-row {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.note-database-container .db-chart-options-switch-row .db-toggle-switch {
+  justify-self: end;
 }
 
 .note-database-container .db-chart-options-switch .db-toggle-switch {
@@ -2761,9 +2975,9 @@
 }
 
 .note-database-container .db-table col.db-select-colgroup {
-  width: 34px;
-  min-width: 34px;
-  max-width: 34px;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
 }
 
 /* 表头和单元格通用样式 */
@@ -2963,9 +3177,9 @@
 
 .note-database-container .db-table th.db-select-col,
 .note-database-container .db-table td.db-select-col {
-  width: 34px;
-  min-width: 34px;
-  max-width: 34px;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
   padding: 0;
   overflow: hidden;
   text-align: center;
@@ -2981,9 +3195,23 @@
   box-shadow: none;
 }
 
-.note-database-container .db-table .db-select-col input[type="checkbox"] {
-  display: block;
-  margin: 0 auto;
+/* 选择列内部容器：拖拽手柄（左）与 checkbox（右）同一行排布；
+   表头无手柄时 checkbox 同样贴右，与各行 checkbox 上下对齐。 */
+.note-database-container .db-table .db-select-col .db-select-inner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.note-database-container .db-table th.db-select-col .db-select-inner::before {
+  content: "";
+  flex: 0 0 20px;
+}
+
+.note-database-container .db-table .db-select-col .db-select-inner input[type="checkbox"] {
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 /* 笔记名称列的链接样式 */
@@ -3217,11 +3445,45 @@
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
 }
 
-.note-database-container .db-table tr.is-manual-row-draggable {
+/* 拖拽手柄与列管理面板的 .db-column-drag 保持一致：纯文本点缀、无背景/圆角/边框。 */
+.note-database-container .db-table .db-table-row-drag-handle {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  min-width: 18px;
+  min-height: 0;
+  height: auto;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
   cursor: grab;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+  user-select: none;
+  vertical-align: middle;
 }
 
-.note-database-container .db-table tr.is-manual-row-draggable:active {
+.note-database-container .db-table tr:hover .db-table-row-drag-handle,
+.note-database-container .db-table tr.is-dragging .db-table-row-drag-handle,
+.note-database-container .db-table .db-table-row-drag-handle:hover,
+.note-database-container .db-table .db-table-row-drag-handle:focus-visible {
+  opacity: 1;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-table .db-table-row-drag-handle:active {
   cursor: grabbing;
 }
 
@@ -3310,6 +3572,11 @@
   height: 24px;
 }
 
+.note-database-container .db-date-value {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
 .note-database-container .db-date-seg {
   height: 22px;
   border: 0;
@@ -3331,6 +3598,10 @@
   width: 28px;
 }
 
+.note-database-container .db-time-seg {
+  width: 46px;
+}
+
 .note-database-container .db-date-seg::placeholder {
   color: var(--text-faint);
   font-size: 11px;
@@ -3347,6 +3618,10 @@
 .db-cell-edit-popover.db-date-edit-popover {
   padding: 8px 10px;
   min-width: 170px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover.is-datetime {
+  min-width: 214px;
 }
 
 .db-cell-edit-popover.db-date-edit-popover .db-date-segments {
@@ -3376,6 +3651,10 @@
 
 .db-cell-edit-popover.db-date-edit-popover .db-date-seg:not(:first-child) {
   width: 28px;
+}
+
+.db-cell-edit-popover.db-date-edit-popover .db-time-seg {
+  width: 46px;
 }
 
 .db-cell-edit-popover.db-date-edit-popover .db-date-seg::placeholder {
@@ -4810,6 +5089,29 @@
   pointer-events: none;
 }
 
+.note-database-container .db-board.is-card-dragging {
+  align-items: stretch;
+}
+
+.db-board-drag-group-preview {
+  position: fixed;
+  z-index: 2147483646;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: opacity 120ms ease;
+}
+
+.db-board-drag-group-preview.is-hidden {
+  opacity: 0;
+}
+
 .note-database-container .db-board-column-checkbox {
   flex: 0 0 auto;
   margin: 0;
@@ -4875,6 +5177,10 @@
   min-width: 0;
   border-radius: var(--db-radius-lg);
   transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.note-database-container .db-board-subgroup:not(:last-child) {
+  padding-bottom: 10px;
 }
 
 .note-database-container .db-board-subgroup.is-drop-target {
@@ -5924,6 +6230,23 @@
   background: var(--background-modifier-hover);
 }
 
+.note-database-container .db-group-popover-row.is-disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.note-database-container .db-group-popover-row.is-disabled:hover {
+  background: transparent;
+}
+
+.note-database-container .db-group-popover-switch-row {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+}
+
+.note-database-container .db-group-popover-switch-row .db-toggle-switch {
+  justify-self: end;
+}
+
 .note-database-container .db-group-popover-marker {
   display: inline-flex;
   align-items: center;
@@ -5947,7 +6270,7 @@
 .note-database-container .db-export-popover-row,
 .note-database-container .db-view-tab-popover-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 7px;
   width: 100%;
@@ -5963,6 +6286,14 @@
   padding: 4px 6px;
 }
 
+.note-database-container .db-export-popover-row {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.note-database-container .db-view-tab-popover-row {
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
+}
+
 .note-database-container .db-export-popover-row:hover,
 .note-database-container .db-view-tab-popover-row:hover {
   background: var(--background-modifier-hover);
@@ -5973,10 +6304,13 @@
 }
 
 .note-database-container .db-export-popover-marker,
-.note-database-container .db-view-tab-popover-marker {
+.note-database-container .db-view-tab-popover-marker,
+.note-database-container .db-view-tab-popover-chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   color: var(--text-faint);
 }
 
@@ -5985,13 +6319,16 @@
 }
 
 .note-database-container .db-export-popover-marker svg,
-.note-database-container .db-view-tab-popover-marker svg {
+.note-database-container .db-view-tab-popover-marker svg,
+.note-database-container .db-view-tab-popover-chevron svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
 
 .note-database-container .db-export-popover-label,
 .note-database-container .db-view-tab-popover-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6094,6 +6431,7 @@
 .note-database-container .db-view-config-inline-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }
@@ -6113,10 +6451,313 @@
 }
 
 .note-database-container .db-view-config-help {
+  flex-basis: 100%;
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.35;
   margin-top: 4px;
+}
+
+.note-database-container .db-calendar-same-date-warning {
+  margin: -2px 0 4px 30px;
+  color: var(--text-warning);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* 时间线选项 popover：invalid 事件完整 warning（⚠️ + 冲突数 + [修复]）。 */
+.note-database-container .db-calendar-invalid-events-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-warning);
+}
+
+.note-database-container .db-calendar-invalid-events-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.note-database-container .db-calendar-invalid-events-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-calendar-invalid-events-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.note-database-container .db-calendar-invalid-events-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  height: auto;
+  border-radius: var(--radius-s);
+  background: var(--text-warning);
+  color: var(--background-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-database-container .db-calendar-invalid-events-btn:hover {
+  filter: brightness(1.08);
+}
+
+/* 无效时间事件修复 Modal：紧凑表格式修复队列 */
+.modal.invalid-events-modal-host {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+}
+
+.note-database-modal.db-invalid-events-modal {
+  width: 100%;
+  min-width: 0;
+  max-height: min(76vh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.note-database-modal .db-invalid-event-grid {
+  max-height: min(50vh, 480px);
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+}
+
+.note-database-modal .db-invalid-event-grid-header,
+.note-database-modal .db-invalid-event-row {
+  display: grid;
+  grid-template-columns: 28px minmax(160px, 1fr) minmax(168px, 190px) minmax(168px, 190px) minmax(116px, 150px);
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.note-database-modal .db-invalid-event-grid-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .db-invalid-event-row {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .db-invalid-event-row:last-child {
+  border-bottom: 0;
+}
+
+.note-database-modal .db-invalid-event-row:hover,
+.note-database-modal .db-invalid-event-row:focus-within {
+  background: var(--background-secondary);
+}
+
+.note-database-modal .db-invalid-event-row.is-invalid .db-invalid-event-name::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--text-error);
+  vertical-align: middle;
+}
+
+.note-database-modal .db-invalid-event-select {
+  justify-self: center;
+  margin: 0;
+}
+
+.note-database-modal .db-invalid-event-name {
+  min-width: 0;
+  font-weight: var(--font-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-invalid-event-datetime {
+  width: 100%;
+  min-width: 0;
+}
+
+.note-database-modal .db-invalid-event-time-field {
+  min-width: 0;
+}
+
+.note-database-modal .db-invalid-event-time-label {
+  display: none;
+}
+
+.note-database-modal .db-invalid-event-datetime.is-invalid {
+  border-color: var(--text-error);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-error) 50%, transparent);
+}
+
+.note-database-modal .db-invalid-event-span-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-database-modal .db-invalid-event-span {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-invalid-event-span.is-invalid {
+  color: var(--text-error);
+}
+
+.note-database-modal .db-invalid-event-row-fix {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 7px;
+  font-size: var(--font-ui-smaller);
+  opacity: 0;
+}
+
+.note-database-modal .db-invalid-event-row:hover .db-invalid-event-row-fix,
+.note-database-modal .db-invalid-event-row:focus-within .db-invalid-event-row-fix {
+  opacity: 1;
+}
+
+.note-database-modal .db-invalid-event-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-modal .db-invalid-event-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-database-modal .db-invalid-event-selected-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-grid {
+  overflow-x: hidden;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-grid-header {
+  display: none;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-row {
+  grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "select name name span"
+    ". start end span";
+  align-items: start;
+  gap: 8px 12px;
+  padding: 10px 12px;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-select {
+  grid-area: select;
+  margin-top: 4px;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-name {
+  grid-area: name;
+  align-self: center;
+  font-size: 13px;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-time-field.is-start {
+  grid-area: start;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-time-field.is-end {
+  grid-area: end;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-time-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-span-cell {
+  grid-area: span;
+  justify-self: end;
+  align-self: center;
+}
+
+.note-database-modal.is-invalid-events-compact .db-invalid-event-row-fix {
+  opacity: 1;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-row {
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-areas:
+    "select name"
+    ". start"
+    ". end"
+    ". span";
+  row-gap: 8px;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-span-cell {
+  justify-self: stretch;
+  justify-content: flex-end;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-row-fix {
+  margin-left: auto;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-time-field {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-time-label {
+  margin-bottom: 0;
+}
+
+.note-database-modal.is-invalid-events-narrow .db-invalid-event-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+@media (max-width: 720px) {
+  .modal.invalid-events-modal-host {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+  }
 }
 
 .note-database-container .db-computed-sync-cards {
@@ -6634,6 +7275,14 @@
   padding: 12px;
   color: var(--text-muted);
   font-size: 12px;
+  text-align: left;
+}
+
+.note-database-container .db-panel-hint {
+  padding: 2px 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
   text-align: left;
 }
 
@@ -9063,7 +9712,7 @@
 /* Embed: header 固定在容器顶部 */
 .note-database-embed.note-database-container > .db-header {
   top: 0;
-  background: transparent;
+  background: var(--background-primary);
   pointer-events: none;
   /* 负 margin 让 header 突破父容器的 24px 左右 padding，横向铺满 */
   margin-left: -12px;
@@ -9071,6 +9720,28 @@
 }
 
 .note-database-embed.note-database-container > .db-header > * {
+  pointer-events: auto;
+}
+
+.note-database-embed-codeblock-host {
+  position: relative;
+}
+
+.note-database-embed-codeblock-host .edit-block-button {
+  position: absolute !important;
+  z-index: 80 !important;
+  pointer-events: auto;
+}
+
+.markdown-rendered:has(.note-database-embed) .edit-block-button {
+  position: absolute !important;
+  z-index: 80 !important;
+  pointer-events: auto;
+}
+
+.markdown-preview-view:has(.note-database-embed) .edit-block-button {
+  position: absolute !important;
+  z-index: 80 !important;
   pointer-events: auto;
 }
 
@@ -9154,6 +9825,2538 @@
   max-width: none;
   margin-left: 0;
   margin-right: 0;
+}
+
+/* ========== Calendar View ========== */
+
+/* Main container */
+.note-database-container .db-calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Header */
+.note-database-container .db-calendar-header {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 25px 0 12px;
+  gap: 8px;
+}
+
+/* Mini month calendar / "jump to date" picker, anchored under the header.
+   Lightweight grid: plain text dates, a filled accent circle for today, a soft
+   pill marking the active week/day, and a short accent underline under event days. */
+.note-database-container .db-calendar-mini-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  margin-top: 6px;
+  padding: 10px;
+  width: 252px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.note-database-container .db-calendar-mini-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  margin-bottom: 4px;
+}
+
+.note-database-container .db-calendar-mini-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-normal);
+  text-align: center;
+}
+
+.note-database-container .db-calendar-mini-title-button {
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-mini-title-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-calendar-mini-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.note-database-container .db-calendar-mini-nav:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-mini-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 2px;
+}
+
+.note-database-container .db-calendar-mini-weekday {
+  font-size: 10px;
+  color: var(--text-normal);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  row-gap: 1px;
+}
+
+/* Day cell: borderless padded click target; number sits above an optional event
+   underline. No cell borders — days are separated by spacing alone. */
+.note-database-container .db-calendar-mini-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 34px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.note-database-container .db-calendar-mini-day-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-normal);
+  line-height: 1;
+}
+
+.note-database-container .db-calendar-mini-day.is-outside .db-calendar-mini-day-num {
+  color: var(--text-faint);
+}
+
+.note-database-container .db-calendar-mini-day.is-selected .db-calendar-mini-day-num {
+  background: var(--background-modifier-hover)
+}
+
+.note-database-container .db-calendar-mini-day.is-today .db-calendar-mini-day-num {
+  color: var(--interactive-accent);
+}
+
+/* Event marker: a short accent underline beneath the number. */
+.note-database-container .db-calendar-mini-day-dot {
+  width: 13px;
+  height: 2px;
+  margin-top: -6pt;
+}
+
+.note-database-container .db-calendar-mini-day.has-events .db-calendar-mini-day-dot {
+  background: var(--interactive-accent);
+  margin-top: -6pt;
+}
+
+.note-database-container .db-calendar-mini-day:hover .db-calendar-mini-day-num {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-calendar-mini-view-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.note-database-container .db-calendar-mini-view-cell {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-normal);
+  cursor: pointer;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.note-database-container .db-calendar-mini-view-cell:hover,
+.note-database-container .db-calendar-mini-view-cell.is-selected {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container .db-calendar-mini-view-cell.is-today {
+  color: var(--interactive-accent);
+}
+
+.note-database-container .db-calendar-mini-view-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-mini-view-dot {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+.note-database-container .db-calendar-mini-view-cell.has-events .db-calendar-mini-view-dot {
+  background: var(--interactive-accent);
+}
+
+.note-database-container .db-calendar-mini-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-container .db-calendar-mini-today {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.note-database-container .db-calendar-mini-today:hover {
+  background: var(--background-modifier-hover);
+  color: var(--interactive-accent);
+}
+
+
+/* Brief column highlight after jumping to a date from the mini picker. */
+.note-database-container .db-calendar-week-day-col.is-flash,
+.note-database-container .db-calendar-week-allday-col.is-flash,
+.note-database-container .db-calendar-time-header-day.is-flash {
+  animation: db-calendar-col-flash 1.2s ease-out;
+}
+
+@keyframes db-calendar-col-flash {
+  0%, 15% { background: color-mix(in srgb, var(--interactive-accent) 22%, transparent); }
+  100% { background: transparent; }
+}
+
+.note-database-container .db-calendar-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-database-container .db-timeline-title,
+.note-database-container .db-calendar-title {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-title-main,
+.note-database-container .db-calendar-title-main {
+  overflow: hidden;
+  font-family: var(--db-title-font-family);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+}
+
+.note-database-container .db-timeline-title-year,
+.note-database-container .db-calendar-title-year {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.note-database-container .db-calendar-controls {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-nav-button,
+.note-database-container .db-calendar-nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  min-width: 20px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 10px;
+  box-shadow: none;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.note-database-container .db-timeline-nav-button.is-icon,
+.note-database-container .db-calendar-nav-button.is-icon {
+  width: 20px;
+  padding: 0;
+}
+
+.note-database-container .db-timeline-nav-button.is-text,
+.note-database-container .db-calendar-nav-button.is-text {
+  min-width: 52px;
+}
+
+.note-database-container .db-timeline-nav-icon,
+.note-database-container .db-timeline-nav-icon svg,
+.note-database-container .db-calendar-nav-button .db-calendar-nav-icon,
+.note-database-container .db-calendar-nav-button .db-calendar-nav-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-database-container .db-timeline-nav-button:hover,
+.note-database-container .db-calendar-nav-button:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 时间线导航栏：invalid 事件图标按钮（mini-calendar 右侧，count > 0 才显示），warning 色，点击打开修复弹窗。 */
+.note-database-container .db-timeline-invalid-toggle {
+  color: var(--text-warning);
+}
+
+.note-database-container .db-timeline-invalid-toggle:hover {
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--text-warning) 16%, var(--background-modifier-hover));
+}
+
+.note-database-container .db-timeline-invalid-toggle.is-hidden {
+  display: none;
+}
+
+/* Calendar invalid-events warning toggle (A2): mirrors the timeline toggle. */
+.note-database-container .db-calendar-invalid-toggle {
+  color: var(--text-warning);
+}
+
+.note-database-container .db-calendar-invalid-toggle:hover {
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--text-warning) 16%, var(--background-modifier-hover));
+}
+
+.note-database-container .db-calendar-invalid-toggle.is-hidden {
+  display: none;
+}
+
+/* Compact scale switcher in the navigation cluster. */
+.note-database-container .db-calendar-scale-control,
+.note-database-container .db-timeline-scale-control {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+}
+
+.note-database-container .db-calendar-scale-segment,
+.note-database-container .db-timeline-scale-segment {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  gap: 1px;
+}
+
+.note-database-container .db-calendar-scale-button,
+.note-database-container .db-timeline-scale-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  min-width: 32px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-scale-button.is-active,
+.note-database-container .db-timeline-scale-button.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+}
+
+.note-database-container .db-calendar-scale-button:hover:not(.is-active),
+.note-database-container .db-timeline-scale-button:hover:not(.is-active) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-scale-menu,
+.note-database-container .db-timeline-scale-menu {
+  display: none;
+  gap: 4px;
+  min-width: 48px;
+  padding: 0 6px;
+}
+
+.note-database-container .db-calendar-scale-menu-label,
+.note-database-container .db-timeline-scale-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-scale-menu-chevron,
+.note-database-container .db-timeline-scale-menu-chevron {
+  width: 12px;
+  height: 12px;
+}
+
+body.is-mobile .note-database-container .db-calendar-scale-segment,
+body.is-mobile .note-database-container .db-timeline-scale-segment,
+.is-phone .note-database-container .db-calendar-scale-segment,
+.is-phone .note-database-container .db-timeline-scale-segment {
+  display: none;
+}
+
+body.is-mobile .note-database-container .db-calendar-scale-menu,
+body.is-mobile .note-database-container .db-timeline-scale-menu,
+.is-phone .note-database-container .db-calendar-scale-menu,
+.is-phone .note-database-container .db-timeline-scale-menu {
+  display: inline-flex;
+}
+
+/* Weekday labels (standalone div row above the table) */
+.note-database-container .db-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: none;
+  margin-bottom: -7pt;
+}
+
+.note-database-container .db-calendar-weekday {
+  position: relative;
+  padding: 4px;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+/* Line-grid table */
+.note-database-container .db-calendar-grid {
+  width: 100%;
+  table-layout: fixed;
+  border: none;
+  background: transparent;
+}
+
+.note-database-container .db-calendar-grid td {
+  vertical-align: top;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  min-height: var(--db-calendar-day-min-height, 100px);
+  height: var(--db-calendar-row-height, auto);
+  background: var(--background-primary);
+  position: relative;
+}
+
+/* Custom column width (table-based layouts) */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-grid td {
+  width: var(--db-calendar-col-width);
+}
+
+/* Custom column width (month div-based grid layouts) */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-weekdays {
+  grid-template-columns: repeat(7, var(--db-calendar-col-width));
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-month-week {
+  grid-template-columns: repeat(7, var(--db-calendar-col-width));
+}
+
+/* Custom column width (week/day time grids): header days, all-day cols and time
+   columns all read this var. The three share one scroll container and identical
+   52px gutters, so they stay aligned even when the total width overflows. */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-time-header-days,
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-allday-cols,
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-time-columns {
+  grid-template-columns: repeat(var(--db-calendar-time-day-count, 7), var(--db-calendar-col-width));
+}
+
+/* The time-grid body holds only absolutely-positioned slot lines + columns, so
+   without an explicit size it stays at the 1fr track width instead of the
+   columns' width. Pin it to dayCount × colWidth so the horizontal slot lines and
+   the time-grid right border span exactly the visible columns (and stay aligned
+   with the header / all-day rows, which size correctly via in-flow content). */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-body {
+  width: calc(var(--db-calendar-time-day-count, 7) * var(--db-calendar-col-width));
+}
+
+/* Match the sticky header's width to the columns (gutter + dayCount × colWidth)
+   so its bottom border ends exactly at the rightmost column's right border,
+   aligning with the time grid's right border below it. Without this the sticky
+   spans the full container width and the border undercuts/overruns the columns. */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-sticky {
+  width: calc(52px + var(--db-calendar-time-day-count, 7) * var(--db-calendar-col-width));
+}
+
+/* Center calendar body when using custom column widths.
+   Grid containers shrink to fit their tracks then center via auto margins;
+   non-grid elements with explicit widths center the same way. */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-weekdays,
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-month-week {
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-grid {
+  width: auto;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-time-header-days,
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-allday-cols {
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-body {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-sticky {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Center the navigation header to match the column grid edges below it.
+   Month view (no gutter): header = exactly 7 columns.
+   Week / day view (with 52px hour gutter): header = gutter + dayCount columns. */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"]:not(.db-calendar-week) .db-calendar-header {
+  width: calc(7 * var(--db-calendar-col-width));
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar[style*="--db-calendar-col-width"].db-calendar-week .db-calendar-header {
+  width: calc(52px + var(--db-calendar-time-day-count, 7) * var(--db-calendar-col-width));
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Day cell */
+.note-database-container .db-calendar-day-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 2px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: inherit;
+}
+
+.note-database-container .db-calendar-day-number {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-day.is-outside-month .db-calendar-day-number {
+  color: var(--text-faint);
+}
+
+.note-database-container .db-calendar-day.is-outside-month {
+  background: var(--background-secondary);
+}
+
+.note-database-container .db-calendar-day.is-today {
+  background: var(--background-primary);
+}
+
+.note-database-container .db-calendar-day.is-today .db-calendar-day-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--db-current-time-color);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Add button */
+.note-database-container .db-calendar-add-button {
+  opacity: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.note-database-container .db-calendar-day:hover .db-calendar-add-button,
+.note-database-container .db-calendar-add-button:focus {
+  opacity: 1;
+}
+
+/* Events container */
+.note-database-container .db-calendar-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 6px;
+  overflow: hidden;
+}
+
+/* Hover to expand compressed cards */
+.note-database-container .db-calendar-day:hover .db-calendar-events {
+  overflow: visible;
+}
+
+/* More events */
+.note-database-container .db-calendar-more-events {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 1px 4px;
+  cursor: pointer;
+}
+
+.note-database-container .db-calendar-more-events:hover {
+  color: var(--text-muted);
+}
+
+/* Expanded events popover */
+.note-database-container .db-calendar-events-expanded {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-sm, 4px);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.note-database-container .db-calendar-events-expanded.is-hidden {
+  display: none;
+}
+
+/* Drop target */
+.note-database-container .db-calendar-day.is-drop-target {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+}
+
+.note-database-container .db-calendar-time-columns .db-calendar-week-day-col.is-drop-target,
+.note-database-container .db-calendar-week-allday-col.is-drop-target,
+.note-database-container .db-calendar-week-allday-col.is-resize-target {
+  border-radius: var(--db-radius-sm);
+  background: color-mix(in srgb, var(--interactive-accent) 9%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+  outline-offset: -1px;
+}
+
+/* Column resize handle (on weekday label right edge) */
+.note-database-container .db-calendar-col-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.note-database-container .db-calendar-col-resize-handle:hover,
+.note-database-container .db-calendar-col-resize-handle:active {
+  background: var(--interactive-accent);
+  opacity: 0.3;
+}
+
+/* Row resize handle (hidden — replaced by toolbar slider) */
+.note-database-container .db-calendar-row-resize-handle {
+  display: none;
+}
+
+/* Drag snap indicator */
+.note-database-container .db-calendar-drop-snap {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  right: 4px;
+  z-index: 5;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Hidden date input for move-to-date */
+.note-database-container .db-hidden-date-input {
+  position: fixed;
+  top: -100px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ========== Week View ========== */
+
+/* Sticky wrapper: pins the day-name row + all-day strip above the scrolling time grid */
+.note-database-container .db-calendar-week-sticky {
+  position: sticky;
+  top: calc(var(--db-table-header-top)  - 16pt);
+  z-index: 10;
+  background: var(--background-primary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 8pt;
+}
+
+.note-database-embed.note-database-container .db-calendar-week-sticky {
+  top: calc(var(--db-table-header-top) - 1pt);
+}
+
+/* All-day section */
+.note-database-container .db-calendar-week-allday {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.note-database-container .db-calendar-week-allday-gutter {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 4px;
+  text-align: right;
+}
+
+/* All-day overflow "+N" link (spans all columns) and its hover popover */
+.note-database-container .db-calendar-week-allday-more {
+  position: relative;
+  z-index: 4;
+  align-self: center;
+  justify-self: start;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.note-database-container .db-calendar-week-allday-more:hover {
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-week-allday-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  min-width: min(360px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.note-database-container .db-calendar-week-allday-popover.is-hidden {
+  display: none;
+}
+
+/* Time grid layout (no inner scroll — the outer container scrolls) */
+.note-database-container .db-calendar-week-scroll {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  position: relative;
+}
+
+/* When custom column widths are set, the second column shrinks to fit the
+   content and the whole scroll container shrinks-to-fit + centers via auto
+   margins.  When the total width exceeds the parent (overflow), auto margins
+   collapse to 0 and the grid stays left-aligned — matching the all-day /
+   header rows above it, which use the same fit-content + auto-margin pattern. */
+.note-database-container .db-calendar[style*="--db-calendar-col-width"] .db-calendar-week-scroll {
+  grid-template-columns: 52px auto;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note-database-container .db-calendar-week-time-gutter {
+  position: relative;
+}
+
+.note-database-container .db-calendar-week-hour-label {
+  font-variant-numeric: tabular-nums; /* 备用：强制数字等宽 */
+  position: absolute;
+  right: 6px;
+  font-size: 13px;
+  color: var(--text-normal);
+  transform: translateY(-50%);
+  line-height: 1;
+}
+
+.note-database-container .db-calendar-week-body {
+  position: relative;
+  height: var(--db-week-grid-height, 1152px);
+}
+
+/* Week grid slot lines */
+.note-database-container .db-calendar-week-slot-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--background-modifier-border) 40%, transparent);
+  pointer-events: none;
+}
+
+.note-database-container .db-calendar-week-slot-line.is-hour {
+  background: color-mix(in srgb, var(--background-modifier-border) 90%, transparent);
+  height: 1px;
+}
+
+.note-database-container .db-calendar-week-day-col.is-today {
+  background: transparent;
+}
+
+/* Week day name and number */
+.note-database-container .db-calendar-week-day-name {
+  font-size: 14px;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-week-day-num {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-calendar-week-day-num.is-today {
+  color: var(--text-on-accent);
+}
+
+/* Week event content */
+.note-database-container .db-calendar-week-event-content {
+  padding: 4px 7px 4px 6px;
+  overflow: hidden;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+}
+
+.note-database-container .db-calendar-week-event-time {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-week-event-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--text-normal);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact (short) timed events: only the title fits; the shared flex-column
+   layout already centers it, here we just tighten padding/line-height. */
+.note-database-container .db-calendar-week-timed-event.is-compact .db-calendar-week-event-content {
+  padding: 1px 7px 1px 6px;
+  justify-content: center;
+  gap: 0;
+}
+
+.note-database-container .db-calendar-week-timed-event.is-compact .db-calendar-week-event-title {
+  display: block;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-week-timed-event.is-compact .db-calendar-week-event-time {
+  display: none;
+}
+
+
+/* Timed event in week view */
+.note-database-container .db-calendar-week-timed-event {
+  position: absolute;
+  z-index: 3;
+  padding: 1px;
+}
+
+/* Calendar options popover (reuse existing chart options styles) */
+.note-database-container .db-calendar-options-popover {
+  max-height: min(620px, calc(100vh - 96px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.note-database-container .db-calendar-range-row {
+  grid-template-columns: 24px minmax(92px, 1fr);
+  align-items: start;
+}
+
+.note-database-container .db-calendar-range-row .db-view-config-range {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+}
+
+.note-database-container .db-calendar-range-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.note-database-container .db-calendar-range-row .db-view-config-number {
+  width: 64px;
+  min-width: 0;
+}
+
+/* Calendar month single-grid layout */
+.note-database-container .db-calendar-month-grid {
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+}
+
+/* Week row: single CSS grid shared by day cells and event segments */
+.note-database-container .db-calendar-month-week {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  row-gap: 2px;
+  min-height: var(--db-calendar-month-week-min-height, var(--db-calendar-day-min-height, 112px));
+}
+
+.note-database-container .db-calendar-month-flash-column {
+  grid-column: var(--db-calendar-month-flash-column, 1);
+  grid-row: 1 / -1;
+  align-self: stretch;
+  min-height: 100%;
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  pointer-events: none;
+  z-index: 1;
+  animation: db-calendar-col-flash 1.2s ease-out;
+}
+
+/* Day cells: right + bottom border; first-row gets top, first-col gets left */
+.note-database-container .db-calendar-month-week > .db-calendar-day {
+  grid-row: 1 / -1;
+  position: relative;
+  min-width: 0;
+  min-height: var(--db-calendar-day-min-height, 112px);
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* First row: add top border */
+.note-database-container .db-calendar-month-grid > .db-calendar-month-week:first-child > .db-calendar-day {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* First column: add left border (day cells are div, segments are button, so :first-of-type picks col 1) */
+.note-database-container .db-calendar-month-week > .db-calendar-day:first-of-type {
+  border-left: 1px solid var(--background-modifier-border);
+}
+
+/* Event segments are direct children of the week grid */
+.note-database-container .db-calendar-month-segment {
+  position: relative;
+  grid-column: var(--db-calendar-segment-start) / span var(--db-calendar-segment-span);
+  grid-row: var(--db-calendar-segment-lane);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  gap: 4px;
+  height: 20px;
+  margin: 0 2px;
+  padding: 0 6px;
+  border: 0;
+  border-left: 3px solid var(--db-calendar-event-accent, var(--interactive-accent));
+  border-radius: 6px;
+  /* Solid base first (so the day-cell grid lines never show through), then the
+     tint on top — mirrors the week timed-event treatment. */
+  background-color: var(--background-primary);
+  background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)));
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 2;
+  box-shadow: none;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.note-database-container .db-calendar-month-segment.is-timed {
+  background: transparent;
+  border-left-color: transparent;
+  padding-left: 2px;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.is-continuation {
+  border-left-color: transparent;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.continues-after {
+  padding-right: 18px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.is-continuation::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -14px;
+  display: block;
+  width: 14px;
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+  background-color: var(--background-primary);
+  background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)));
+  mask-image: linear-gradient(to right, transparent 0, black 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.continues-after::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+  background-color: var(--background-primary);
+  background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 7%, transparent)));
+  box-shadow: inherit;
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 18px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 18px), transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.continues-after:hover {
+  box-shadow: none;
+}
+
+.note-database-container .db-calendar-month-segment.is-all-day.continues-after:hover::after {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.note-database-container .db-calendar-month-segment:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+
+/* Left/right resize grab zones on month all-day segments. These drive their own
+   pointer-based resize (mousedown on the zone), independent of the segment's
+   native move-drag. The zone is intentionally invisible — the ew-resize cursor
+   is the only affordance. */
+.note-database-container .db-calendar-month-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 4;
+  cursor: ew-resize;
+}
+
+.note-database-container .db-calendar-month-resize-handle.is-start {
+  left: 0;
+}
+
+.note-database-container .db-calendar-month-resize-handle.is-end {
+  right: 0;
+}
+
+/* Pin the resizing segment steady (no hover lift), lift it on top, and give it a
+   stronger shadow so it reads as the active one among its neighbors. */
+.note-database-container .db-calendar-month-segment.is-resizing,
+.note-database-container .db-calendar-month-segment.is-moving {
+  transform: none;
+  transition: none;
+  z-index: 5;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+
+/* Ghost rendered in the target week during a cross-week resize, showing the
+   event extending into that row. Mirrors the active segment's shadow so the
+   two read as one continuous preview. Non-interactive (preview only). */
+.note-database-container .db-calendar-month-segment.db-calendar-month-ghost {
+  z-index: 5;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+/* Highlight the target day cell while resizing (also covers cross-week targets). */
+.note-database-container .db-calendar-day.is-resize-target {
+  background-color: var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent));
+  box-shadow: inset 0 0 0 2px var(--db-calendar-event-accent, var(--interactive-accent));
+}
+
+.note-database-container .db-calendar-month-timed-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--db-calendar-event-accent, var(--interactive-accent));
+}
+
+.note-database-container .db-calendar-month-time {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-month-title {
+  position: relative;
+  z-index: 1;
+  flex: 1 0 min(8ch, 100%);
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-interface);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.note-database-container .db-calendar-month-dates {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-calendar-month-week .db-calendar-more-events {
+  z-index: 4;
+  align-self: end;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.note-database-container .db-calendar-month-week .db-calendar-more-events:hover {
+  color: var(--text-muted);
+}
+
+/* Day popover: an enlarged copy of the day cell, floating over it */
+.note-database-container .db-calendar-day .db-calendar-day-popover {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  z-index: 30;
+  min-width: calc(100% + 2px);
+  width: max-content;
+  max-width: min(520px, calc(100vw - 32px));
+  min-height: calc(100% + 2px);
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.note-database-container .db-calendar-day .db-calendar-day-popover.is-hidden {
+  display: none;
+}
+
+/* Day heading inside popover reuses the real day-cell heading spacing */
+.note-database-container .db-calendar-day-popover > .db-calendar-day-heading {
+  position: static;
+  padding: 4px 6px 2px;
+}
+
+/* Stacked, full-width events; spacing matches the real .db-calendar-events */
+.note-database-container .db-calendar-day-popover-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 6px;
+}
+
+.note-database-container .db-calendar-day-popover-events .db-calendar-month-segment {
+  grid-column: auto;
+  grid-row: auto;
+  height: auto;
+  min-height: 20px;
+  margin: 0;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+
+.note-database-container .db-calendar-day-popover-events .db-calendar-month-segment.is-timed {
+  align-items: center;
+}
+
+.note-database-container .db-calendar-day-popover-events .db-calendar-month-title {
+  flex: 1 1 14ch;
+  min-width: min(14ch, 100%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+  line-height: 1.4;
+}
+
+.note-database-container .db-calendar-day-popover-events .db-calendar-month-dates {
+  flex: 0 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* Week/day time grid */
+.note-database-container .db-calendar-time-header-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  background: var(--background-primary);
+}
+
+
+.note-database-container .db-calendar-time-header-days {
+  display: grid;
+  grid-template-columns: repeat(var(--db-calendar-time-day-count, 7), minmax(0, 1fr));
+}
+
+.note-database-container .db-calendar-time-header-day {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 2px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.note-database-container .db-calendar-day-view .db-calendar-time-header-day {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.note-database-container .db-calendar-time-header-day.is-today {
+  background: transparent;
+  color: var(--interactive-accent);
+}
+
+.note-database-container .db-calendar-week-allday {
+  grid-template-columns: 52px minmax(0, 1fr);
+  background: transparent;
+}
+
+.note-database-container .db-calendar-week-allday-gutter {
+  padding: 34px 8px 6px 4px;
+}
+
+/* Single grid: day columns + event segments share one grid (no overlay layer) */
+.note-database-container .db-calendar-week-allday-cols {
+  display: grid;
+  grid-template-columns: repeat(var(--db-calendar-time-day-count, 7), minmax(0, 1fr));
+  min-height: calc(var(--db-calendar-allday-rows, 1) * 24px + 10px);
+}
+
+/* Day columns span all grid rows as the background */
+.note-database-container .db-calendar-week-allday-col {
+  grid-row: 1 / -1;
+  position: relative;
+  inset: auto;
+  left: auto;
+  width: auto;
+  min-width: 0;
+  /* border-left: 1px solid var(--background-modifier-border); */
+  background: transparent;
+}
+
+.note-database-container .db-calendar-week-allday-col.is-today::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+
+/* The last column needs an explicit marker: :last-of-type matches by tag, so a
+   later "more events" div (or all-day segment) would steal it. */
+/* .note-database-container .db-calendar-week-allday-col.is-last-col {
+  border-right: 1px solid var(--background-modifier-border);
+} */
+
+.note-database-container .db-calendar-week-allday-date {
+  grid-row: 1;
+  position: relative;
+  z-index: 3;
+  justify-self: start;
+  align-self: start;
+  margin: 2px 0 0 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  box-shadow: none;
+}
+
+.note-database-container .db-calendar-week-allday-date.is-today {
+  color: var(--text-on-accent);
+}
+
+.note-database-container .db-calendar-week-allday-date:hover,
+.note-database-container .db-calendar-week-allday-date:focus-visible {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+.note-database-container .db-calendar-week-allday-segment {
+  pointer-events: auto;
+  z-index: 2;
+  height: 20px;
+  margin: 0 4px;
+  border-radius: 6px;
+}
+
+.note-database-container .db-calendar-week-allday-empty {
+  position: absolute;
+  top: 34px;
+  left: 10px;
+  right: 8px;
+  justify-self: start;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.note-database-container .db-calendar-week-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.note-database-container .db-calendar-week-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 28%, transparent);
+}
+
+.note-database-container .db-calendar-week-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.note-database-container .db-calendar-week-body {
+  position: relative;
+  height: auto;
+  overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 90%, transparent);
+}
+
+.note-database-container .db-calendar-time-columns {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--db-calendar-time-day-count, 7), minmax(0, 1fr));
+}
+
+.note-database-container .db-calendar-time-columns .db-calendar-week-day-col {
+  position: relative;
+  inset: auto;
+  left: auto;
+  width: auto;
+  min-width: 0;
+  background: transparent;
+}
+
+
+.note-database-container .db-calendar-week-timed-event {
+  position: absolute;
+  z-index: 3;
+  overflow: hidden;
+  border-left: 3px solid var(--db-calendar-event-accent, var(--interactive-accent));
+  border-radius: 7px;
+  /* Solid base first (so hour lines never show through), then the tint on top. */
+  background-color: var(--background-primary);
+  background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)));
+  cursor: pointer;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.09);
+}
+
+.note-database-container .db-calendar-week-timed-event.is-dragging {
+  opacity: 0.72;
+}
+
+.note-database-container .db-calendar-week-timed-event.is-moving {
+  z-index: 7;
+  opacity: 0.9;
+  cursor: grabbing;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.18);
+}
+
+.note-database-container .db-calendar-time-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 5px;
+  z-index: 5;
+  cursor: ns-resize;
+}
+
+.note-database-container .db-calendar-time-resize-handle.is-start {
+  top: 0;
+}
+
+.note-database-container .db-calendar-time-resize-handle.is-end {
+  bottom: 0;
+}
+
+.note-database-container .db-calendar-selection-preview {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px dashed var(--interactive-accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.note-database-container .db-calendar-timed-current-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  height: 1px;
+  background: var(--db-current-time-color);
+  pointer-events: none;
+}
+
+.note-database-container .db-calendar-timed-current-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--db-current-time-color);
+}
+
+.note-database-container .db-calendar-timed-drag-preview {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  z-index: 6;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+body.is-mobile .note-database-container .db-calendar-month-segment {
+  height: 18px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+body.is-mobile .note-database-container .db-calendar-month-time {
+  display: none;
+}
+
+/* ── Timeline shared base ── */
+
+.note-database-container .db-timeline-event {
+  --db-timeline-event-background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)));
+  --db-timeline-event-shadow: 0 2px 7px rgba(0, 0, 0, 0.09);
+  border: 0;
+  min-height: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background-color: var(--background-primary);
+  background-image: var(--db-timeline-event-background-image);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow: var(--db-timeline-event-shadow);
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.note-database-container .db-timeline-mobile-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.note-database-container .db-timeline-mobile-menu-button:hover,
+.note-database-container .db-timeline-mobile-menu-button:focus-visible {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* ── Timeline View ── */
+.note-database-container .db-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  --db-timeline-body-width: minmax(0, 1fr);
+  --db-timeline-unit-width: 80px;
+  --db-timeline-content-width: calc(var(--db-timeline-units) * var(--db-timeline-unit-width));
+  --db-timeline-event-row-height: 24px;
+  --db-timeline-extension-width: 70px;
+  --db-timeline-grid-line-color: color-mix(in srgb, var(--background-modifier-border) 42%, transparent);
+  --db-timeline-minor-line-color: color-mix(in srgb, var(--background-modifier-border) 28%, transparent);
+  --db-timeline-clipped-fade-width: 18px;
+}
+
+.note-database-container.db-view-timeline {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
+}
+
+.note-database-container.db-view-timeline:not(.note-database-embed) .db-timeline {
+  min-height: calc(100% - var(--db-table-header-top, 96px) - 24px);
+}
+
+.note-database-container .db-timeline-header {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 25px 0 12px;
+  gap: 8px;
+}
+
+
+.note-database-container .db-timeline-empty-range {
+  min-height: 160px;
+  margin: 0;
+}
+
+.note-database-container .db-timeline-controls {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-scroll {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-height: 240px;
+  min-width: 0;
+  overflow-x: visible;
+  overflow-y: visible;
+  isolation: isolate;
+}
+
+.note-database-container .db-timeline-event.is-all-day {
+  --db-timeline-event-background-image: linear-gradient(color-mix(in srgb, var(--background-modifier-hover) 70%, transparent), color-mix(in srgb, var(--background-modifier-hover) 70%, transparent));
+  --db-calendar-event-accent: var(--text-muted);
+  background-color: var(--background-primary);
+  background-image: var(--db-timeline-event-background-image);
+  border-left: 2px solid var(--text-faint);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+
+/* 拖拽重排序插入线：横跨整个 lane 宽度的细水平线，紧贴目标事件的上/下边缘——延续
+   旧「卡片边缘 box-shadow」的贴边质感，但跨整行更显眼。无圆点；用细线 + 柔和发光定位。 */
+.note-database-container .db-timeline-events > .db-timeline-reorder-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--db-timeline-reorder-line-top, 0);
+  height: 2px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--interactive-accent) 40%, transparent);
+  pointer-events: none;
+  z-index: 8;
+}
+
+.note-database-container .db-timeline-axis {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  width: 100%;
+  min-width: max(100%, var(--db-timeline-content-width));
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-database-container .db-timeline-axis::before {
+  display: none;
+  content: none;
+}
+
+.note-database-container .db-timeline-axis-range {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.note-database-container .db-timeline-axis-end {
+  justify-self: end;
+}
+
+.note-database-container .db-timeline-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: max(100%, var(--db-timeline-content-width));
+  min-width: 100%;
+  background-image: linear-gradient(
+    to right,
+    var(--db-timeline-grid-line-color) 1px,
+    transparent 1px
+  );
+  background-position: 0 0;
+  background-size: var(--db-timeline-unit-width) 100%;
+  background-repeat: repeat;
+}
+
+.note-database-container .db-timeline-body::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--db-timeline-extension-width) * -1);
+  width: var(--db-timeline-extension-width);
+  background-image: linear-gradient(to right, var(--db-timeline-grid-line-color) 1px, transparent 1px);
+  background-repeat: repeat;
+  background-size: calc(var(--db-timeline-extension-width) / 4) 100%;
+  opacity: 0.34;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, #000 0, transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, transparent 100%);
+}
+
+.note-database-container .db-timeline-body::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: calc(var(--db-timeline-extension-width) * -1);
+  bottom: 0;
+  width: var(--db-timeline-extension-width);
+  background-image: linear-gradient(to right, var(--db-timeline-grid-line-color) 1px, transparent 1px);
+  background-repeat: repeat;
+  background-size: calc(var(--db-timeline-extension-width) / 4) 100%;
+  opacity: 0.34;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to left, #000 0, transparent 100%);
+  mask-image: linear-gradient(to left, #000 0, transparent 100%);
+}
+
+.note-database-container .db-timeline-ticks {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(var(--db-timeline-units), var(--db-timeline-unit-width));
+  min-height: 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+}
+
+.note-database-container.db-view-timeline:not(.note-database-embed) .db-timeline-ticks {
+  border-bottom: 0;
+}
+
+.note-database-container.db-view-timeline:not(.note-database-embed) .db-timeline-ticks::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--db-timeline-extension-width) * -1);
+  right: calc(var(--db-timeline-extension-width) * -1);
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-ticks-band {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(var(--db-timeline-units), var(--db-timeline-unit-width));
+  min-height: 24px;
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.note-database-container .db-timeline-band-item {
+  grid-column: var(--db-timeline-band-start, auto) / span var(--db-timeline-band-span, 1);
+  padding: 2px 6px;
+  border-left: 1px solid var(--text-normal);
+  overflow: hidden;
+  font-family: var(--db-title-font-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-timeline-tick {
+  position: relative;
+  grid-column: var(--db-timeline-tick-offset);
+  min-width: 0;
+  overflow: visible;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums; /* 备用：强制数字等宽 */
+}
+
+
+
+.note-database-container .db-timeline-tick .db-timeline-tick-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  width: max-content;
+  max-width: 96px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.note-database-container .db-timeline-tick .db-timeline-tick-weekday {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+}
+
+.note-database-container .db-timeline-tick .db-timeline-tick-date {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.note-database-container .db-timeline-tick.is-current-time-tick .db-timeline-tick-date,
+.note-database-container .db-calendar-week-hour-label.is-current-time-tick {
+  color: var(--db-current-time-color);
+  font-weight: 700;
+}
+
+.note-database-container .db-timeline-tick.is-current-date-tick .db-timeline-tick-date,
+.note-database-container .db-calendar-week-day-num.is-today,
+.note-database-container .db-calendar-week-allday-date.is-today {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--db-current-time-color);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+}
+
+.note-database-container .db-timeline-today-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--db-timeline-today-offset-px, calc(var(--db-timeline-unit-width) * var(--db-timeline-today-offset-units, 0)));
+  width: 1px;
+  background: var(--db-current-time-color);
+  pointer-events: none;
+  z-index: 7;
+}
+
+.note-database-container .db-timeline-today-line::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--db-current-time-color);
+  transform: translate(-50%, -50%);
+}
+
+.note-database-container .db-timeline-group {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+}
+
+.note-database-container .db-timeline-group-header {
+  display: grid;
+  grid-template-columns: var(--db-timeline-group-width, 120px) var(--db-timeline-body-width, auto);
+  gap: 12px;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 0;
+}
+
+.note-database-container .db-timeline-group-header-label {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 8px;
+  background: transparent;
+  z-index: 5;
+}
+
+.note-database-container .db-timeline-group-header-grid {
+  min-width: 0;
+  height: 100%;
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.note-database-container .db-timeline-group-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-timeline-group-toggle.is-collapsed .db-collapse-triangle {
+  transform: rotate(-90deg);
+}
+
+.note-database-container .db-timeline-group-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background-color: var(--background-primary);
+  background-image: linear-gradient(
+    var(--db-timeline-group-tag-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)),
+    var(--db-timeline-group-tag-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent))
+  );
+  color: var(--db-timeline-group-tag-fg, var(--text-accent));
+  line-height: 1.2;
+}
+
+.note-database-container .db-timeline-group-title {
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.66;
+}
+
+.note-database-container .db-timeline-events {
+  position: relative;
+  display: grid;
+  width: max(100%, var(--db-timeline-content-width));
+  min-width: 100%;
+  grid-template-columns: repeat(var(--db-timeline-units), var(--db-timeline-unit-width));
+  grid-template-rows: repeat(var(--db-timeline-event-rows, 0), var(--db-timeline-event-row-height, 24px));
+  grid-auto-rows: var(--db-timeline-event-row-height, 24px);
+  align-items: center;
+  row-gap: 4px;
+  column-gap: 0;
+  padding: 2px 0 6px;
+  background: transparent;
+}
+
+.note-database-container .db-timeline-body-flash-column {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--db-timeline-unit-width) * var(--db-timeline-flash-offset, 0));
+  width: calc(var(--db-timeline-unit-width) * var(--db-timeline-flash-span, 1));
+  border-radius: 6px;
+  /* 静态背景留透明，flash 完全由下方动画承担——否则动画结束（animation-fill-mode
+     默认 none）会瞬间回到这里的静态 18%，在 JS（flashTimelineDate 的 1300ms
+     setTimeout）移除 overlay 前的约 100ms 形成仅在泳区的「二阶段高光」。
+     日历的 flash 列同样只靠动画、无静态 flash 背景。 */
+  background: transparent;
+  pointer-events: none;
+  z-index: 0;
+  animation: db-calendar-col-flash 1.2s ease-out;
+}
+
+.note-database-container .db-timeline-create-row {
+  display: grid;
+  width: max(100%, var(--db-timeline-content-width));
+  min-width: 100%;
+  min-height: var(--db-timeline-event-row-height, 24px);
+  grid-template-columns: repeat(var(--db-timeline-units), var(--db-timeline-unit-width));
+  padding: 0 0 6px;
+}
+
+.note-database-container .db-timeline-create-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  grid-column: 1 / -1;
+  height: 20px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 11px;
+  gap: 4px;
+  box-shadow: none;
+  --db-timeline-create-label-min-width: 72px;
+}
+
+.note-database-container .db-timeline-create-button::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--db-timeline-create-left, 0px);
+  width: var(--db-timeline-create-width, var(--db-timeline-unit-width));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--background-modifier-hover) 72%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.note-database-container .db-timeline-create-button.is-previewing::before,
+.note-database-container .db-timeline-create-button:focus-visible::before {
+  opacity: 1;
+}
+
+.note-database-container .db-timeline-create-button.is-previewing,
+.note-database-container .db-timeline-create-button:focus-visible {
+  color: var(--text-muted);
+}
+
+.note-database-container .db-timeline-create-content {
+  --db-timeline-create-content-left: min(
+    var(--db-timeline-create-left, 0px),
+    max(0px, calc(100% - var(--db-timeline-create-label-min-width)))
+  );
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--db-timeline-create-content-left);
+  display: inline-flex;
+  align-items: center;
+  width: max(var(--db-timeline-create-width, var(--db-timeline-unit-width)), var(--db-timeline-create-label-min-width));
+  max-width: calc(100% - var(--db-timeline-create-content-left));
+  min-width: 0;
+  padding: 0 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  gap: 4px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-create-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.note-database-container .db-timeline-create-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-events.is-drop-target {
+  border-radius: var(--db-radius-sm);
+  background: color-mix(in srgb, var(--interactive-accent) 9%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+}
+
+/* 折叠分组拖入高亮：折叠时无 .db-timeline-events，高亮挂在 group header 上提示可放入。 */
+.note-database-container .db-timeline-group.is-drop-target > .db-timeline-group-header {
+  border-radius: var(--db-radius-sm);
+  background: color-mix(in srgb, var(--interactive-accent) 9%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, transparent);
+}
+
+.note-database-container .db-timeline-events.is-resize-target {
+  border-radius: var(--db-radius-sm);
+  outline: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
+
+.note-database-container .db-timeline.is-scale-day.is-slot-15 .db-timeline-body {
+  background-image:
+    linear-gradient(
+      to right,
+      var(--db-timeline-grid-line-color) 1px,
+      transparent 1px
+    ),
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(var(--db-timeline-unit-width) * 0.25 - 1px),
+      var(--db-timeline-minor-line-color) calc(var(--db-timeline-unit-width) * 0.25 - 1px),
+      var(--db-timeline-minor-line-color) calc(var(--db-timeline-unit-width) * 0.25)
+    );
+  background-size: var(--db-timeline-unit-width) 100%, var(--db-timeline-unit-width) 100%;
+  background-repeat: repeat, repeat;
+}
+
+.note-database-container .db-timeline.is-scale-day.is-slot-30 .db-timeline-body {
+  background-image:
+    linear-gradient(
+      to right,
+      var(--db-timeline-grid-line-color) 1px,
+      transparent 1px
+    ),
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(var(--db-timeline-unit-width) * 0.5 - 1px),
+      var(--db-timeline-minor-line-color) calc(var(--db-timeline-unit-width) * 0.5 - 1px),
+      var(--db-timeline-minor-line-color) calc(var(--db-timeline-unit-width) * 0.5)
+    );
+  background-size: var(--db-timeline-unit-width) 100%, var(--db-timeline-unit-width) 100%;
+  background-repeat: repeat, repeat;
+}
+
+.note-database-container .db-timeline.is-scale-day.is-slot-60 .db-timeline-body {
+  background-image: linear-gradient(
+    to right,
+    var(--db-timeline-grid-line-color) 1px,
+    transparent 1px
+  );
+}
+
+.note-database-container .db-timeline-event {
+  --db-timeline-event-background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--interactive-accent) 14%, transparent)));
+  --db-timeline-event-shadow: 0 2px 7px rgba(0, 0, 0, 0.09);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  box-sizing: border-box;
+  min-height: 20px;
+  height: 20px;
+  padding: 0 6px;
+  grid-column: 1 / -1;
+  grid-row: var(--db-timeline-row, 1);
+  margin-left: var(--db-timeline-exact-offset, 0px);
+  width: var(--db-timeline-exact-width, 100%);
+  min-width: 0;
+  border-left: 3px solid var(--db-calendar-event-accent, var(--interactive-accent));
+  border-radius: 6px;
+  background-color: var(--background-primary);
+  background-image: var(--db-timeline-event-background-image);
+  box-shadow: var(--db-timeline-event-shadow);
+  transition: box-shadow 150ms ease, transform 150ms ease;
+  z-index: 3;
+}
+
+.note-database-container .db-timeline-event.is-draggable {
+  cursor: grab;
+}
+
+.note-database-container .db-timeline-event.is-all-day {
+  --db-timeline-event-background-image: linear-gradient(color-mix(in srgb, var(--background-modifier-hover) 70%, transparent), color-mix(in srgb, var(--background-modifier-hover) 70%, transparent));
+}
+
+.note-database-container .db-timeline-event.is-dragging {
+  opacity: 0.45;
+}
+
+.note-database-container .db-timeline-event.is-moving {
+  --db-timeline-event-shadow: 0 12px 26px rgba(0, 0, 0, 0.18);
+  z-index: 7;
+  opacity: 0.9;
+  cursor: grabbing;
+  box-shadow: var(--db-timeline-event-shadow);
+}
+
+.note-database-container .db-timeline-event:hover {
+  --db-timeline-event-shadow: 0 4px 12px rgba(0, 0, 0, 0.13);
+  box-shadow: var(--db-timeline-event-shadow);
+  transform: translateY(-1px);
+}
+
+.note-database-container .db-timeline-event.is-clipped-start {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.note-database-container .db-timeline-event.is-clipped-end {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: calc(var(--db-timeline-clipped-fade-width) + 6px);
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+
+.note-database-container .db-timeline-event.is-clipped-start::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--db-timeline-clipped-fade-width) * -1);
+  display: block;
+  width: var(--db-timeline-clipped-fade-width);
+  background-color: var(--background-primary);
+  background-image: var(--db-timeline-event-background-image);
+  mask-image: linear-gradient(to right, transparent 0, black 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 100%);
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-event.is-clipped-end::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: block;
+  background-color: var(--background-primary);
+  background-image: var(--db-timeline-event-background-image);
+  box-shadow: var(--db-timeline-event-shadow);
+  mask-image: linear-gradient(to right, black 0, black calc(100% - var(--db-timeline-clipped-fade-width)), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - var(--db-timeline-clipped-fade-width)), transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.note-database-container .db-timeline-event-content {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+}
+
+.note-database-container .db-timeline-event.is-clipped-end .db-timeline-event-content {
+  overflow: hidden;
+}
+
+.note-database-container .db-timeline-event.is-clipped-end .db-timeline-event-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.note-database-container .db-timeline-event.is-clipped-end .db-timeline-event-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.note-database-container .db-timeline-event.is-resizing {
+  --db-timeline-event-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  transform: none;
+  transition: none;
+  z-index: 6;
+  box-shadow: var(--db-timeline-event-shadow);
+}
+
+.note-database-container .db-timeline-event.is-clipped-end.is-resizing {
+  box-shadow: none;
+}
+
+.note-database-container .db-timeline-event::before,
+.note-database-container .db-timeline-event::after {
+  display: none;
+}
+
+.note-database-container .db-timeline-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+
+.note-database-container .db-timeline-resize-handle.is-start {
+  left: -3px;
+}
+
+.note-database-container .db-timeline-resize-handle.is-end {
+  right: 0;
+}
+
+.note-database-container .db-timeline-resize-handle::before {
+  display: none;
+}
+
+.note-database-container .db-timeline-mobile-menu-button {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 3;
+}
+
+.note-database-container .db-timeline-snap-marker {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 5;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.note-database-container .db-calendar-timed-drag-preview,
+.note-database-container .db-timeline-snap-marker.is-timed-range,
+.note-database-container .db-timeline-event > .db-timeline-snap-marker {
+  z-index: 6;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-snap-marker.is-timed-range {
+  left: var(--db-timeline-snap-left, 8px);
+  right: auto;
+  top: var(--db-timeline-snap-top, 8px);
+  width: var(--db-timeline-snap-width, max-content);
+  min-width: min(220px, calc(100% - var(--db-timeline-snap-left, 8px) - 8px));
+  max-width: calc(100% - var(--db-timeline-snap-left, 8px) - 8px);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  transform: none;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-event > .db-timeline-snap-marker {
+  left: 6px;
+  right: auto;
+  top: auto;
+  bottom: 4px;
+  width: max-content;
+  min-width: min(220px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  transform: none;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-event-title {
+  flex: 0 0 auto;
+  min-width: max-content;
+  overflow: visible;
+  color: var(--text-normal);
+  font-weight: 600;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-event-meta {
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-timeline-window-jump {
+  position: sticky;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  grid-column: 1 / -1;
+  grid-row: var(--db-timeline-row, 1);
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: var(--text-faint);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  z-index: 4;
+  opacity: 0.78;
+  pointer-events: auto;
+  box-shadow: none;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.note-database-container .db-timeline-window-jump.is-over-event {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.note-database-container .db-timeline-window-jump svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-timeline-window-jump.is-before {
+  justify-self: start;
+  left: 6px;
+  margin-left: 6px;
+}
+
+.note-database-container .db-timeline-window-jump.is-after {
+  justify-self: end;
+  right: 6px;
+  margin-right: 6px;
+}
+
+.note-database-container .db-timeline-events:hover .db-timeline-window-jump.is-over-event,
+.note-database-container .db-timeline-window-jump.is-over-event:focus-visible {
+  opacity: 0.82;
+  pointer-events: auto;
+}
+
+.note-database-container .db-timeline-window-jump:hover,
+.note-database-container .db-timeline-window-jump:focus-visible {
+  opacity: 1;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 
 /* ── Chart View ── */

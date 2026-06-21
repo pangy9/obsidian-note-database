@@ -5,7 +5,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 export const PROPERTY_TYPE_ICON_NAMES: Record<ColumnDef["type"], string> = {
   text: "letter-case",
   number: "number-123",
-  date: "calendar-event",
+  date: "calendar",
+  datetime: "clock",
   currency: "coin",
   select: "circle-dot",
   "multi-select": "tags",
@@ -41,13 +42,20 @@ export const PROPERTY_TYPE_ICON_DEFS: Record<string, PropertyTypeIconDef> = {
       { d: "M17 8h2.5a1.5 1.5 0 0 1 1.5 1.5v1a1.5 1.5 0 0 1 -1.5 1.5h-1.5h1.5a1.5 1.5 0 0 1 1.5 1.5v1a1.5 1.5 0 0 1 -1.5 1.5h-2.5" },
     ],
   },
-  "calendar-event": {
+  // date：纯日历，对齐 Obsidian 原生 Date 类型图标（lucide calendar）
+  "calendar": {
     paths: [
-      { d: "M4 5m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v11a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" },
+      { d: "M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" },
       { d: "M16 3v4" },
       { d: "M8 3v4" },
       { d: "M4 11h16" },
-      { d: "M8 15h2v2h-2z" },
+    ],
+  },
+  // datetime：纯时钟，对齐 Obsidian 原生 Date & time 类型图标（lucide clock）
+  "clock": {
+    paths: [
+      { d: "M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" },
+      { d: "M12 7v5l3 3" },
     ],
   },
   coin: {

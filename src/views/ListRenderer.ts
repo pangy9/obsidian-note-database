@@ -1,7 +1,10 @@
 import { App, Menu, setIcon } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
+import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { formatGroupKeyDisplay } from "../data/GroupDisplay";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -10,6 +13,7 @@ import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
+import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -56,6 +60,7 @@ interface ParsedLink {
 export class ListRenderer {
   private rowByPath = new Map<string, RowData>();
   private draggingPath: string | undefined;
+  private rowDropFeedback = new DragDropFeedbackState();
 
   constructor(private app: App, private actions: ListRendererActions) {}
 
@@ -90,7 +95,7 @@ export class ListRenderer {
         this.actions.toggleGroupCollapsed?.(groupField, group.key);
       };
       this.renderGroupCheckbox(label, group.rows);
-      label.createSpan({ cls: "db-list-group-title", text: group.key || t("common.uncategorized") });
+      label.createSpan({ cls: "db-list-group-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
       label.createSpan({ cls: "db-list-group-count", text: String(group.count) });
       if (collapsed) continue;
       const list = section.createDiv({ cls: "db-list" });
@@ -235,8 +240,9 @@ export class ListRenderer {
         if (this.canManualReorder(config)) menu.addSeparator();
         for (const group of groups) {
           if (group.key === groupKey) continue;
+          const groupLabel = formatGroupKeyDisplay(config, groupField, group.key);
           menu.addItem((menuItem) => menuItem
-            .setTitle(`${t("mobile.moveTo")} ${group.key || t("common.uncategorized")}`)
+            .setTitle(`${t("mobile.moveTo")} ${groupLabel}`)
             .setIcon("folder-input")
             .onClick(() => {
               const paths = group.rows.map((candidate) => candidate.file.path).filter((path) => path !== row.file.path);
@@ -301,20 +307,17 @@ export class ListRenderer {
     item.addEventListener("dragend", () => {
       this.draggingPath = undefined;
       item.removeClass("is-dragging");
-      this.clearDropTargets(item.parentElement);
+      this.rowDropFeedback.clear();
     });
     item.addEventListener("dragover", (event) => {
       const dragPath = this.draggingPath;
       if (!dragPath || dragPath === row.file.path) return;
       if (!this.isRowDrag(event)) return;
       event.preventDefault();
-      const rect = item.getBoundingClientRect();
-      const isAfter = event.clientY > rect.top + rect.height / 2;
-      item.toggleClass("is-drop-after", isAfter);
-      item.toggleClass("is-drop-before", !isAfter);
+      this.rowDropFeedback.update(item, resolveDropPlacement(item, event, "vertical"));
     });
     item.addEventListener("dragleave", () => {
-      item.removeClass("is-drop-before", "is-drop-after");
+      this.rowDropFeedback.clearTarget(item);
     });
     item.addEventListener("drop", (event) => {
       if (!this.isRowDrag(event)) return;
@@ -324,9 +327,9 @@ export class ListRenderer {
       event.preventDefault();
       event.stopPropagation();
       this.draggingPath = undefined;
-      this.clearDropTargets(item.parentElement);
-      const rect = item.getBoundingClientRect();
-      const isAfter = event.clientY > rect.top + rect.height / 2;
+      const placement = this.rowDropFeedback.getPlacement(item) || resolveDropPlacement(item, event, "vertical");
+      this.rowDropFeedback.clear();
+      const isAfter = placement === "after";
       const currentPaths = rows.map((r) => r.file.path).filter((path) => path !== dragPath);
       const targetIndex = currentPaths.indexOf(row.file.path);
       const beforePath = isAfter ? row.file.path : (targetIndex > 0 ? currentPaths[targetIndex - 1] : undefined);
@@ -343,13 +346,6 @@ export class ListRenderer {
       } else {
         this.actions.moveRowToPosition(dragPath, beforePath, afterPath);
       }
-    });
-  }
-
-  private clearDropTargets(parent: HTMLElement | null): void {
-    if (!parent) return;
-    parent.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => {
-      el.classList.remove("is-drop-before", "is-drop-after");
     });
   }
 
@@ -379,8 +375,7 @@ export class ListRenderer {
   }
 
   private canManualReorder(config: ViewConfig): boolean {
-    if (config.sortColumn) return false;
-    return !((config.sortRules || []).some((rule) => rule.field && rule.direction));
+    return !isExplicitlySorted(config);
   }
 
   private isPhoneLayout(): boolean {
@@ -474,6 +469,14 @@ export class ListRenderer {
       for (const entry of values) this.renderBadge(badges, col, entry);
       return;
     }
+    if (displayType === "date" || displayType === "datetime") {
+      valueEl.addClass("db-date-value");
+      valueEl.textContent = displayType === "datetime"
+        ? formatDateTimeValueDisplay(value, { mode: "full", showTimeWhenMissing: true })
+        : formatDateValueDisplay(value);
+      valueEl.title = valueEl.textContent;
+      return;
+    }
 
     const values = Array.isArray(value) ? value : [value];
     const links = values
@@ -564,6 +567,7 @@ export class ListRenderer {
   }
 
   private clear(container: HTMLElement): void {
+    this.rowDropFeedback.clear();
     container.querySelectorAll(".db-list, .db-list-grouped, .db-list-total-header").forEach((el) => el.remove());
   }
 

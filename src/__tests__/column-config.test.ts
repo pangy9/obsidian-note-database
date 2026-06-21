@@ -57,6 +57,7 @@ interface ViewConfig {
   boardSubgroupField?: string;
   sourceRules?: SourceRule[];
   groupOrders?: Record<string, string[]>;
+  showEmptyGroups?: Record<string, boolean>;
   collapsedGroups?: Record<string, string[]>;
   boardCardOrders?: Record<string, Record<string, string[]>>;
   viewStates?: Partial<Record<string, ViewModeStateDef>>;
@@ -133,6 +134,7 @@ function removeColumnReferences(config: ViewConfig, key: string): void {
   if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
   removeSourceRuleReferences(config.sourceRules, key);
   delete config.groupOrders?.[key];
+  delete config.showEmptyGroups?.[key];
   delete config.collapsedGroups?.[key];
   delete config.boardCardOrders?.[key];
   // Also clean viewStates
@@ -198,6 +200,11 @@ function updateColumnKeyReferences(
   if (config.groupOrders?.[oldKey]) {
     config.groupOrders[newKey] = config.groupOrders[oldKey];
     delete config.groupOrders[oldKey];
+    changed = true;
+  }
+  if (config.showEmptyGroups && oldKey in config.showEmptyGroups) {
+    config.showEmptyGroups[newKey] = config.showEmptyGroups[oldKey];
+    delete config.showEmptyGroups[oldKey];
     changed = true;
   }
   if (config.collapsedGroups?.[oldKey]) {
@@ -445,14 +452,17 @@ describe("BF-022: updateColumnKeyReferences traverses all references", () => {
     expect(vs.hiddenColumns).toEqual(["new"]);
   });
 
-  it("migrates groupOrders and collapsedGroups keys", () => {
+  it("migrates groupOrders, empty group visibility, and collapsedGroups keys", () => {
     const config = makeViewConfig({
       groupOrders: { old: ["a", "b"] },
+      showEmptyGroups: { old: false },
       collapsedGroups: { old: ["g1"] },
     });
     updateColumnKeyReferences(config, "old", "new");
     expect(config.groupOrders!["old"]).toBeUndefined();
     expect(config.groupOrders!["new"]).toEqual(["a", "b"]);
+    expect(config.showEmptyGroups!["old"]).toBeUndefined();
+    expect(config.showEmptyGroups!["new"]).toBe(false);
     expect(config.collapsedGroups!["old"]).toBeUndefined();
     expect(config.collapsedGroups!["new"]).toEqual(["g1"]);
   });

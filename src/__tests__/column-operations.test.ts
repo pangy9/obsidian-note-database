@@ -250,6 +250,41 @@ describe("ColumnOperations", () => {
     expect(propertyService.deleteKey).toHaveBeenCalledWith([], "amount");
   });
 
+  it("clears calendar and timeline field references when a column is deleted", async () => {
+    const dateCol: ColumnDef = { key: "date", label: "Date", type: "date" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, dateCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "timeline",
+      name: "Timeline",
+      viewType: "timeline",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "date"],
+      calendarStartDateField: "date",
+      calendarEndDateField: "date",
+      calendarTitleField: "date",
+      timelineStartDateField: "date",
+      timelineEndDateField: "date",
+      timelineGroupField: "date",
+      timelineTitleField: "date",
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops } = makeOps(db, view);
+
+    await ops.deleteColumn(dateCol);
+
+    expect(view.calendarStartDateField).toBeUndefined();
+    expect(view.calendarEndDateField).toBeUndefined();
+    expect(view.calendarTitleField).toBeUndefined();
+    expect(view.timelineStartDateField).toBeUndefined();
+    expect(view.timelineEndDateField).toBeUndefined();
+    expect(view.timelineGroupField).toBeUndefined();
+    expect(view.timelineTitleField).toBeUndefined();
+  });
+
   it("clears chartValueField when the value column is converted to a non-numeric type", async () => {
     const amountCol: ColumnDef = { key: "amount", label: "Amount", type: "number" };
     const schema = {
@@ -274,6 +309,72 @@ describe("ColumnOperations", () => {
 
     expect(amountCol.type).toBe("text");
     expect(view.chartValueField).toBeUndefined();
+  });
+
+  it("clears calendar and timeline date references when a date column becomes non-date", async () => {
+    const dateCol: ColumnDef = { key: "date", label: "Date", type: "date" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, dateCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "timeline",
+      name: "Timeline",
+      viewType: "timeline",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "date"],
+      calendarStartDateField: "date",
+      calendarEndDateField: "date",
+      calendarTitleField: "date",
+      timelineStartDateField: "date",
+      timelineEndDateField: "date",
+      timelineGroupField: "date",
+      timelineTitleField: "date",
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops } = makeOps(db, view);
+
+    await ops.changeColumnType(dateCol, "text");
+
+    expect(view.calendarStartDateField).toBeUndefined();
+    expect(view.calendarEndDateField).toBeUndefined();
+    expect(view.timelineStartDateField).toBeUndefined();
+    expect(view.timelineEndDateField).toBeUndefined();
+    expect(view.calendarTitleField).toBe("date");
+    expect(view.timelineGroupField).toBe("date");
+    expect(view.timelineTitleField).toBe("date");
+  });
+
+  it("leaves timeline day scale when a configured datetime field is downgraded to date", async () => {
+    const startCol: ColumnDef = { key: "start", label: "Start", type: "datetime" };
+    const endCol: ColumnDef = { key: "end", label: "End", type: "datetime" };
+    const schema = {
+      columns: [{ key: "file.name", label: "Name", type: "text" as const }, startCol, endCol],
+      computedFields: [],
+    };
+    const view: ViewConfig = {
+      id: "timeline",
+      name: "Timeline",
+      viewType: "timeline",
+      sourceFolder: "",
+      schema,
+      columnOrder: ["file.name", "start", "end"],
+      timelineStartDateField: "start",
+      timelineEndDateField: "end",
+      timelineScale: "day",
+      timelineAnchorTimeMinutes: 8 * 60,
+    };
+    const db: DatabaseConfig = { id: "db", name: "DB", sourceFolder: "", schema, views: [view] };
+    const { ops } = makeOps(db, view);
+
+    await ops.changeColumnType(endCol, "date");
+
+    expect(endCol.type).toBe("date");
+    expect(view.timelineScale).toBe("week");
+    expect(view.timelineAnchorTimeMinutes).toBeUndefined();
+    expect(view.timelineStartDateField).toBe("start");
+    expect(view.timelineEndDateField).toBe("end");
   });
 
   it("blocks type changes and duplication for file fields", async () => {

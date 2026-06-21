@@ -1,4 +1,5 @@
 import { getColumnOptionValues, hasObsidianTagValue, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
+import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 import { compareMultiSelect } from "./MultiSelect";
 import { stringifyValue } from "./Stringify";
@@ -124,12 +125,13 @@ export class QueryEngine {
   groupBy(
     rows: RowData[],
     field: string,
-    order: string[] = []
+    order: string[] = [],
+    column?: ColumnDef
   ): { key: string; rows: RowData[]; count: number }[] {
     const groups = new Map<string, RowData[]>();
     for (const row of rows) {
       const raw = this.getFieldValue(row, field);
-      const keys = this.getGroupKeys(raw);
+      const keys = this.getGroupKeys(raw, column);
       for (const key of keys) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(row);
@@ -158,9 +160,10 @@ export class QueryEngine {
     if (col.type === "number" || col.type === "currency") {
       return typeof val === "number" ? val : parseFloat(stringifyValue(val)) || 0;
     }
-    if (col.type === "date") {
-      if (typeof val === "string") return val;
-      return stringifyValue(val);
+    if (isDateLikeColumnType(col.type)) {
+      // 统一用本地墙上时间时间戳排序（带时间值与纯日期同口径），空值/非法回退 ""排最前。
+      if (val == null || val === "") return "";
+      return toDateTimestamp(val) ?? "";
     }
     if (col.type === "checkbox") {
       return val === true ? 1 : 0;
@@ -175,7 +178,7 @@ export class QueryEngine {
     if (column?.type === "number" || column?.type === "currency") {
       return this.compareNumbers(left, right);
     }
-    if (column?.type === "date") {
+    if (isDateLikeColumnType(column?.type)) {
       return this.compareDates(left, right);
     }
     if (column?.type === "select" || column?.type === "status") {
@@ -218,14 +221,9 @@ export class QueryEngine {
   }
 
   private parseDateValue(value: string): number {
-    const text = stringifyValue(value).trim();
-    if (!text) return Number.NaN;
-    const match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
-    if (match) {
-      const [, y, m, d] = match;
-      return new Date(Number(y), Number(m) - 1, Number(d)).getTime();
-    }
-    return Date.parse(text);
+    // 统一走 toDateTimestamp：纯日期/带时间都按本地墙上时间，毫秒 number（file.ctime）直通。
+    const ts = toDateTimestamp(value);
+    return ts == null ? Number.NaN : ts;
   }
 
   private toBooleanRank(value: string): number {
@@ -240,7 +238,16 @@ export class QueryEngine {
     return [stringifyValue(value)];
   }
 
-  private getGroupKeys(value: unknown): string[] {
+  private getGroupKeys(value: unknown, column?: ColumnDef): string[] {
+    // 仅纯 date 列（不含 datetime）按日期归一化，清理"同日不同时间/带时间脏值"造成的分裂分组；
+    // datetime 列按完整值分组以保留时段区分。归一化必须对原始值做（parseDateTimeParts 已支持
+    // 毫秒 number），不能在 getComparableValues(stringify) 之后做，否则 number 会被当年份解析。
+    if (column?.type === "date") {
+      const parts = parseDateTimeParts(value);
+      if (parts) return [parts.dateKey];
+      if (value == null || value === "") return [t("common.uncategorized")];
+      return [stringifyValue(value)];
+    }
     const keys = this.getComparableValues(value);
     if (keys.length === 0) return [t("common.uncategorized")];
     return Array.from(new Set(keys));

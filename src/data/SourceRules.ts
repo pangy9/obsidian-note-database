@@ -1,4 +1,5 @@
 import { normalizePath } from "obsidian";
+import { isDateLikeColumnType } from "./DateTimeFormat";
 import { getBaseFileFieldType, isBaseFileField } from "./FileFields";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleExpression, SourceRuleGroup, SourceRuleNode, SourceRuleNot, SourceRuleOperator, SourceRuleValueType } from "./types";
@@ -234,7 +235,7 @@ export function matchesBaseSourceType(
   const type = rawType.trim().toLowerCase();
   const declaredType = getDeclaredSourceFieldType(field, columns, computedFields);
   if (type === "list" || type === "array") return Array.isArray(value);
-  if (type === "date") return declaredType === "date" && hasFiniteDateValue(value);
+  if (type === "date") return isDateLikeColumnType(declaredType) && hasFiniteDateValue(value);
   if (type === "duration") return false;
   if (type === "null") return value == null;
   if (type === "number") return typeof value === "number" && Number.isFinite(value);

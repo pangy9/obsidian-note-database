@@ -1,5 +1,6 @@
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "../data/types";
 import { toChartNumber } from "../data/ChartAggregation";
+import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "../data/DateTimeFormat";
 import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
 import { stringifyValue } from "../data/Stringify";
 import { t } from "../i18n";
@@ -77,7 +78,7 @@ function isNumericSummaryColumn(config: ViewConfig, col: ColumnDef): boolean {
 function getSummaryKindsForColumn(config: ViewConfig, col: ColumnDef): SummaryKind[] {
   const common: SummaryKind[] = ["COUNT", "UNIQUE", "EMPTY", "FILLED"];
   if (isNumericSummaryColumn(config, col)) return ["SUM", "AVERAGE", "MEDIAN", "MIN", "MAX", "RANGE", "STDDEV", ...common];
-  if (col.type === "date") return ["EARLIEST", "LATEST", "RANGE", ...common];
+  if (isDateLikeColumnType(col.type)) return ["EARLIEST", "LATEST", "RANGE", ...common];
   if (col.type === "checkbox") return ["CHECKED", "UNCHECKED", ...common];
   return common;
 }
@@ -122,6 +123,7 @@ export class SummaryRenderer {
   ): void {
     const existing = containerEl.querySelector(".db-summary");
     if (existing) existing.remove();
+    if (config?.viewType === "calendar" || config?.viewType === "timeline") return;
 
     const summary = containerEl.createDiv({ cls: "db-summary" });
     if (options?.placement === "after-chart") this.placeAfterChart(containerEl, summary);
@@ -378,7 +380,7 @@ export class SummaryRenderer {
   }
 
   private formatSummaryValue(value: unknown): string {
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    if (value instanceof Date) return parseDateTimeParts(value)?.dateKey ?? "";
     if (typeof value === "number") {
       if (!Number.isFinite(value)) return "";
       if (Math.abs(value) >= 86400000 && value % 86400000 === 0) return `${value / 86400000}d`;
@@ -394,11 +396,8 @@ export class SummaryRenderer {
   }
 
   private toTime(value: unknown): number | null {
-    if (value instanceof Date) return value.getTime();
-    if (typeof value === "number") return value;
-    if (typeof value !== "string" || !value.trim()) return null;
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
+    // 统一走本地墙上时间时间戳，与排序同口径；避免 Date.parse 对带时间值按 UTC 解析导致与排序差一天。
+    return toDateTimestamp(value);
   }
 
   private sum(values: number[]): number {

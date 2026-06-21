@@ -100,6 +100,24 @@ export function sortByManualRank(rows: RowData[], ranks: Record<string, string>)
 	return [...ranked, ...unranked];
 }
 
+/**
+ * 判断视图是否处于「显式排序」状态：存在 sortColumn，或 sortRules 中至少一条
+ * 有效规则（field 与 direction 均非空）。
+ *
+ * 显式排序生效时 manual order（手动排序）会被覆盖、组内重排序应禁用；但跨组
+ * 移动只改分组值、与排序规则无关，不应受此约束。
+ *
+ * 供 table / board / gallery / list / timeline 统一判断，避免各 renderer 各写
+ * 一份导致口径不一致（如旧看板漏过滤无效 sortRule 而误禁用拖拽）。
+ */
+export function isExplicitlySorted(config: {
+  sortColumn?: string;
+  sortRules?: Array<{ field?: string; direction?: string }>;
+}): boolean {
+  if (config.sortColumn) return true;
+  return (config.sortRules || []).some((rule) => Boolean(rule.field && rule.direction));
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

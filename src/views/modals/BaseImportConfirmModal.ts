@@ -27,7 +27,7 @@ export class BaseImportConfirmModal extends Modal {
   private defaultUnchecked: boolean;
 
   private static TYPES: ColumnDef["type"][] = [
-    "text", "number", "date", "currency", "select", "multi-select", "status", "checkbox",
+    "text", "number", "date", "datetime", "currency", "select", "multi-select", "status", "checkbox",
   ];
 
   constructor(

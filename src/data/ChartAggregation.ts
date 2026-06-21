@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import { getColumnOptionValues, isOptionColumnType } from "./ColumnTypes";
+import { isDateLikeColumnType } from "./DateTimeFormat";
 import { stringifyValue } from "./Stringify";
 import { ChartAggregation as ChartAggregationType, ChartDateBucket, ChartNumberBucket, ColumnDef, ComputedFieldDef, RowData } from "./types";
 
@@ -10,6 +11,7 @@ const CHART_COMPATIBLE_TYPES: ColumnDef["type"][] = [
   "multi-select",
   "checkbox",
   "date",
+  "datetime",
 ];
 
 export interface ChartDataPoint {
@@ -86,7 +88,7 @@ export function isChartGroupColumn(column: ColumnDef, computedFields: ComputedFi
 }
 
 export function isChartDateGroupColumn(column: ColumnDef, computedFields: ComputedFieldDef[] = []): boolean {
-  if (column.type === "date") return true;
+  if (isDateLikeColumnType(column.type)) return true;
   if (column.type !== "computed") return false;
   const computedKey = getChartComputedKey(column);
   return computedFields.some((field) => field.key === computedKey && field.type === "date");

@@ -1,4 +1,5 @@
 import { getColumnOptions, isObsidianTagsKey } from "../data/ColumnTypes";
+import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { createDropdownField } from "./DropdownField";
@@ -172,7 +173,7 @@ export class FilterPanelRenderer {
       ["notempty", t("filter.notempty")],
     ];
     if (!col) return [...base, ["contains", t("filter.contains")], ...emptyOps];
-    if (col.type === "number" || col.type === "currency" || col.type === "date") {
+    if (col.type === "number" || col.type === "currency" || isDateLikeColumnType(col.type)) {
       return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
     }
     if (col.type === "select" || col.type === "status") {
@@ -195,7 +196,7 @@ export class FilterPanelRenderer {
   }
 
   private renderValueInput(row: HTMLElement, rule: FilterRule, col: ColumnDef | undefined, actions: FilterPanelActions): void {
-    if (col?.type === "date") {
+    if (isDateLikeColumnType(col?.type)) {
       this.renderDateInput(row, rule, actions);
       return;
     }

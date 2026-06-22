@@ -1,4 +1,4 @@
-import { App, ItemView, WorkspaceLeaf, Notice, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
+import { App, FileView, WorkspaceLeaf, Notice, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
 import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { evaluateBaseFilterExpression } from "../data/BaseExpression";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
@@ -195,7 +195,10 @@ interface PendingConfigSave extends ConfigSaveMetadata {
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
-export class DatabaseView extends ItemView {
+export class DatabaseView extends FileView {
+  allowNoFile = true;
+  file: TFile | null = null;
+  navigation = false;
   private dataSource: DataSource;
   private propertyService: PropertyService;
   private cellRenderer: CellRenderer;
@@ -829,6 +832,23 @@ export class DatabaseView extends ItemView {
 
   getIcon(): string {
     return "database";
+  }
+
+  async onLoadFile(_file: TFile): Promise<void> {
+    // The dashboard view is file-less; database-file tabs handle their own file binding.
+  }
+
+  async onUnloadFile(_file: TFile): Promise<void> {
+    // No file buffer is owned by this view.
+  }
+
+  async onRename(_file: TFile): Promise<void> {
+    // Database-file tabs override this to follow their backing file.
+  }
+
+  canAcceptExtension(extension: string): boolean {
+    void extension;
+    return false;
   }
 
   async onOpen(): Promise<void> {

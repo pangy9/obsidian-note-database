@@ -27,6 +27,7 @@ const { MockChainSetting, MockMenu, MockPlugin, MockTFile, parseYamlMock } = vi.
 vi.mock("obsidian", () => ({
   App: class {},
   FuzzySuggestModal: class {},
+  FileView: class {},
   ItemView: class {},
   MarkdownView: class {},
   MarkdownRenderChild: class {},

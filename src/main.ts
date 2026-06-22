@@ -59,6 +59,7 @@ export default class NoteDatabasePlugin extends Plugin {
   private switchingDatabaseFileView = false;
   private markdownDatabaseFileBypass = new Map<string, number>();
   private databaseFileConfigCache = new Map<string, DatabaseConfig>();
+  private currentWorkspaceLeaf: WorkspaceLeaf | null = null;
   /** 防抖 timer，防止 file-open / active-leaf-change / layout-change 同时触发导致重复打开 */
   private pendingDatabaseFileOpen: number | null = null;
   private pendingDatabaseFileOpenFile?: TFile;
@@ -190,16 +191,20 @@ export default class NoteDatabasePlugin extends Plugin {
       this.markDatabaseFileTabs();
     }));
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      this.currentWorkspaceLeaf = leaf;
+      if (leaf && this.isDatabasePluginLeaf(leaf)) return;
       const file = this.getLeafFile(leaf) || this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file, leaf || undefined);
     }));
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       this.markDatabaseFileTabs();
+      if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) return;
       const file = this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
     }));
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {
       this.databaseFileConfigCache.delete(file.path);
+      if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) return;
       const activeFile = this.app.workspace.getActiveFile();
       if (activeFile instanceof TFile && activeFile.path === file.path) {
         this.scheduleDatabaseFileViewOpen(file);
@@ -209,6 +214,10 @@ export default class NoteDatabasePlugin extends Plugin {
       this.handleDatabaseFileExplorerClick(event);
     }, { capture: true });
     this.app.workspace.onLayoutReady(() => {
+      if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) {
+        this.markDatabaseFilesInExplorer();
+        return;
+      }
       const file = this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFilesInExplorer();
@@ -362,6 +371,7 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private async openDatabaseFileViewIfNeeded(file: TFile, targetLeaf?: WorkspaceLeaf): Promise<void> {
     if (this.switchingDatabaseFileView || file.extension !== "md") return;
+    if (targetLeaf && this.isDatabasePluginLeaf(targetLeaf)) return;
     const bypassUntil = this.markdownDatabaseFileBypass.get(file.path) || 0;
     if (Date.now() < bypassUntil) return;
     if (!(await this.isDatabaseViewFile(file))) return;
@@ -533,6 +543,11 @@ export default class NoteDatabasePlugin extends Plugin {
     return file instanceof TFile ? file : null;
   }
 
+  private isDatabasePluginLeaf(leaf: WorkspaceLeaf | null | undefined): boolean {
+    const viewType = leaf?.view?.getViewType();
+    return viewType === DATABASE_VIEW_TYPE || viewType === DATABASE_FILE_VIEW_TYPE;
+  }
+
   private async openDatabaseFileAsMarkdown(file: TFile): Promise<void> {
     this.markdownDatabaseFileBypass.set(file.path, Date.now() + 1000);
     const leaf = this.app.workspace.getLeaf(false) || this.app.workspace.getLeaf("tab");
@@ -559,6 +574,7 @@ export default class NoteDatabasePlugin extends Plugin {
       type: DATABASE_VIEW_TYPE,
       active: true,
     });
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   /** Open the dashboard and switch to a specific file database. */
@@ -2490,16 +2506,24 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   private markDatabaseFileTabs(): void {
+    const applyTabState = (leaf: WorkspaceLeaf, isDatabaseFile: boolean, containerEl?: HTMLElement): void => {
+      const tabHeaderEl = (leaf as unknown as { tabHeaderEl?: HTMLElement }).tabHeaderEl;
+      tabHeaderEl?.toggleClass("note-database-file-tab", isDatabaseFile);
+      containerEl?.toggleClass("note-database-file-leaf", isDatabaseFile);
+    };
+
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view as unknown as { file?: TFile; containerEl?: HTMLElement };
       const file = view.file;
-      const tabHeaderEl = (leaf as unknown as { tabHeaderEl?: HTMLElement }).tabHeaderEl;
       const fm = file instanceof TFile
         ? this.app.metadataCache.getFileCache(file)?.frontmatter
         : undefined;
       const isDatabaseFile = file instanceof TFile && fm?.["db_view"] === true;
-      tabHeaderEl?.toggleClass("note-database-file-tab", isDatabaseFile);
-      view?.containerEl?.toggleClass("note-database-file-leaf", isDatabaseFile);
+      applyTabState(leaf, isDatabaseFile, view?.containerEl);
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(DATABASE_FILE_VIEW_TYPE)) {
+      const view = leaf.view as unknown as { containerEl?: HTMLElement };
+      applyTabState(leaf, true, view?.containerEl);
     }
     // 标记文件列表中的数据库文件
     this.markDatabaseFilesInExplorer();

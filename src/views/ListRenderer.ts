@@ -1,7 +1,7 @@
 import { App, Menu, setIcon } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
-import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
@@ -13,6 +13,10 @@ import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
+import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { getFieldWidth } from "./ColumnWidth";
+import { renderGroupExpandControls } from "./GroupExpandControls";
+import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -45,6 +49,7 @@ export interface ListRendererActions {
   ): void | Promise<void>;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
+  expandGroup?(field: string, key: string, count: number): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
@@ -100,7 +105,9 @@ export class ListRenderer {
       if (collapsed) continue;
       const list = section.createDiv({ cls: "db-list" });
       this.setupGroupDropTarget(list, groupField, group.key);
-      for (const row of group.rows) this.renderRow(list, config, row, groupField, group.key, groups, group.rows);
+      const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
+      for (const row of group.rows.slice(0, visibleCount)) this.renderRow(list, config, row, groupField, group.key, groups, group.rows);
+      renderGroupExpandControls(list, config, groupField, group.key, group.rows.length, this.actions);
       this.renderNewRow(list, { [groupField]: group.key || "" }, group.rows);
     }
   }
@@ -187,7 +194,7 @@ export class ListRenderer {
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const field = meta.createDiv({ cls: "db-list-field", attr: { "data-note-database-column-key": col.key } });
       if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
-      else field.setCssProps({ flexBasis: `${this.getFieldWidth(config, col)}px` });
+      else field.style.setProperty("--db-card-field-width", `${getFieldWidth(config, col)}px`);
       setFieldTooltip(field, displayValue, col.label);
       if (empty) field.addClass("is-empty-field");
       if (displayType === "checkbox") field.addClass("is-checkbox-field");
@@ -487,6 +494,15 @@ export class ListRenderer {
       return;
     }
 
+    if (displayType === "number") {
+      const num = typeof value === "number" ? value : parseFloat(String(value));
+      if (!isNaN(num)) {
+        const style = getNumberDisplayStyle(col);
+        if (style === "rating") { renderRating(valueEl, num, col.numberDisplayConfig); return; }
+        if (style === "progress") { renderProgress(valueEl, num, col.numberDisplayConfig); return; }
+        if (style === "ring") { renderProgressRing(valueEl, num, col.numberDisplayConfig); return; }
+      }
+    }
     valueEl.textContent = Array.isArray(value) ? value.join(", ") : String(value);
     valueEl.title = valueEl.textContent;
   }
@@ -500,7 +516,7 @@ export class ListRenderer {
     field.className = "db-list-field";
     field.setAttribute("data-note-database-column-key", col.key);
     if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
-    else field.setCssProps({ flexBasis: `${this.getFieldWidth(config, col)}px` });
+    else field.style.setProperty("--db-card-field-width", `${getFieldWidth(config, col)}px`);
     setFieldTooltip(field, displayValue, col.label);
     if (empty) field.classList.add("is-empty-field");
     if (displayType === "checkbox") field.classList.add("is-checkbox-field");
@@ -569,10 +585,6 @@ export class ListRenderer {
   private clear(container: HTMLElement): void {
     this.rowDropFeedback.clear();
     container.querySelectorAll(".db-list, .db-list-grouped, .db-list-total-header").forEach((el) => el.remove());
-  }
-
-  private getFieldWidth(config: ViewConfig, col: ColumnDef): number {
-    return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 180;
   }
 
   private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {

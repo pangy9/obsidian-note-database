@@ -1,5 +1,5 @@
 import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef, getAllTags } from "obsidian";
-import { ChartReferenceLine, ColumnDef, DatabaseConfig, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
+import { ChartReferenceLine, ColumnDef, DatabaseConfig, DateGroupMode, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
@@ -260,6 +260,7 @@ export class DataSource {
     const results: { file: TFile; config: DatabaseConfig }[] = [];
     const allFiles = this.vault.getMarkdownFiles();
     const cleanupTargets: TFile[] = [];
+    const idBackfillTargets: { file: TFile; id: string }[] = [];
 
     for (const f of allFiles) {
       const override = this.getViewDefOverride(f.path);
@@ -278,12 +279,24 @@ export class DataSource {
         if (Object.prototype.hasOwnProperty.call(fm, "name")) {
           cleanupTargets.push(f);
         }
+        // Migration: backfill a stable database.id when the frontmatter lacks one.
+        // parseDatabaseConfig falls back to a fresh temporary id on every scan, which
+        // would break dbId-based embed references until the id is persisted to disk.
+        const databaseObj = fm["database"] as Record<string, unknown> | undefined;
+        if (databaseObj && typeof databaseObj === "object" && databaseObj["id"] == null) {
+          idBackfillTargets.push({ file: f, id: config.id });
+        }
       }
     }
 
     // Asynchronously remove redundant top-level "name" from legacy database files
     if (cleanupTargets.length > 0) {
       void this.migrateRemoveTopLevelName(cleanupTargets);
+    }
+
+    // Asynchronously persist a stable id into db_view files missing database.id
+    if (idBackfillTargets.length > 0) {
+      void this.migrateBackfillDatabaseId(idBackfillTargets);
     }
 
     return results;
@@ -303,6 +316,27 @@ export class DataSource {
       } catch (err) {
         // Non-critical migration; log and continue
         console.warn("Note Database: failed to migrate top-level name in", file.path, err);
+      }
+    }
+  }
+
+  /** Persist a stable database.id into db_view files whose frontmatter lacks one.
+   *  Without a persisted id, parseDatabaseConfig generates a fresh temporary id on every
+   *  scan, which would break dbId-based embed references. The id passed in is the one
+   *  generated during this scan, so scan and write agree. Idempotent via the null guard. */
+  private async migrateBackfillDatabaseId(targets: { file: TFile; id: string }[]): Promise<void> {
+    for (const target of targets) {
+      try {
+        await this.app.fileManager.processFrontMatter(target.file, (fm) => {
+          const frontmatter = fm as Record<string, unknown>;
+          const database = frontmatter["database"];
+          if (frontmatter["db_view"] === true && database && typeof database === "object" && (database as Record<string, unknown>)["id"] == null) {
+            (database as Record<string, unknown>)["id"] = target.id;
+          }
+        });
+      } catch (err) {
+        // Non-critical migration; log and continue
+        console.warn("Note Database: failed to backfill database id in", target.file.path, err);
       }
     }
   }
@@ -499,6 +533,15 @@ export class DataSource {
       collapsedGroups: v["collapsedGroups"] && typeof v["collapsedGroups"] === "object"
         ? v["collapsedGroups"] as Record<string, string[]>
         : undefined,
+      dateGroupModes: v["dateGroupModes"] && typeof v["dateGroupModes"] === "object"
+        ? v["dateGroupModes"] as Record<string, DateGroupMode>
+        : undefined,
+      groupRowLimit: typeof v["groupRowLimit"] === "number" && v["groupRowLimit"] >= 0
+        ? v["groupRowLimit"]
+        : undefined,
+      expandedGroupRows: v["expandedGroupRows"] && typeof v["expandedGroupRows"] === "object"
+        ? v["expandedGroupRows"] as Record<string, Record<string, number>>
+        : undefined,
       boardCardOrders: v["boardCardOrders"] && typeof v["boardCardOrders"] === "object"
         ? v["boardCardOrders"] as Record<string, Record<string, string[]>>
         : undefined,
@@ -672,6 +715,9 @@ export class DataSource {
       groupOrders: view.groupOrders || {},
       showEmptyGroups: view.showEmptyGroups || {},
       collapsedGroups: view.collapsedGroups || {},
+      dateGroupModes: view.dateGroupModes,
+      groupRowLimit: view.groupRowLimit,
+      expandedGroupRows: view.expandedGroupRows,
       boardGroupField: view.boardGroupField || "",
       boardSubgroupEnabled: view.boardSubgroupEnabled ?? Boolean(view.boardSubgroupField),
       boardSubgroupField: view.boardSubgroupField || "",

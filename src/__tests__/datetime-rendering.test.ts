@@ -21,7 +21,9 @@ describe("datetime renderer integration", () => {
 
     expect(source).toContain('if (col.type === "date" || col.type === "datetime")');
     expect(source).toContain('this.editDatePopover(target, row, col, currentValue, col.type === "datetime")');
-    expect(source).toContain('timeInp = segments.createEl("input", { cls: "db-date-seg db-time-seg"');
+    expect(source).toContain('hourInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-hour-seg"');
+    expect(source).toContain('minuteInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-minute-seg"');
+    expect(source).not.toContain('maxlength: "5", placeholder: timePlaceholder');
   });
 
   it("treats datetime fields as date-like in formula examples", () => {

@@ -1,7 +1,7 @@
 import { getColumnDisplayType } from "./ColumnDisplay";
-import { isDateLikeColumnType } from "./DateTimeFormat";
+import { isDateLikeColumnType, parseDateTimeParts } from "./DateTimeFormat";
 import { getDefaultGroupOrder, getEffectiveGroupOrder } from "./GroupOrder";
-import { formatGroupKeyDisplay } from "./GroupDisplay";
+import { formatGroupKeyDisplay, getDateGroupMode } from "./GroupDisplay";
 import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "./GroupVisibility";
 import { stringifyValue } from "./Stringify";
 import type { LocaleCode } from "../i18n";
@@ -937,12 +937,28 @@ function getEventTitle(row: RowData, config: ViewConfig, explicitTitleField: str
 }
 
 function getTimelineGroupKeys(row: RowData, config: ViewConfig, uncategorizedLabel: string): { key: string; label: string }[] {
-  if (!config.timelineGroupField) return [{ key: UNCATEGORIZED_TIMELINE_LANE, label: uncategorizedLabel }];
-  const value = getRowFieldValue(row, config.timelineGroupField, config);
+  const field = config.timelineGroupField;
+  if (!field) return [{ key: UNCATEGORIZED_TIMELINE_LANE, label: uncategorizedLabel }];
+  const column = config.schema.columns.find((col) => col.key === field);
+  // datetime 列在 "date" 模式按 dateKey 分组（忽略时刻），与 QueryEngine.getGroupKeys 口径一致。
+  const useDateKey = column?.type === "datetime" && getDateGroupMode(config, field) === "date";
+  const value = getRowFieldValue(row, field, config);
   const values = Array.isArray(value) ? value : [value];
-  const groups = values.map((item) => stringifyValue(item).trim()).filter(Boolean);
+  const groups: { key: string; label: string }[] = [];
+  for (const item of values) {
+    const trimmed = stringifyValue(item).trim();
+    if (!trimmed) continue;
+    if (useDateKey) {
+      const parts = parseDateTimeParts(item);
+      if (parts) {
+        groups.push({ key: parts.dateKey, label: formatGroupKeyDisplay(config, field, parts.dateKey) });
+        continue;
+      }
+    }
+    groups.push({ key: trimmed, label: trimmed });
+  }
   if (groups.length === 0) return [{ key: UNCATEGORIZED_TIMELINE_LANE, label: uncategorizedLabel }];
-  return groups.map((group) => ({ key: group, label: group }));
+  return groups;
 }
 
 function getRowFieldValue(row: RowData, field: string, config: ViewConfig): unknown {

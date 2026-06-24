@@ -120,7 +120,7 @@ export function COLUMN_TYPE_LABELS(): Record<ColumnDef["type"], string> {
   };
 }
 
-const OPTION_COLORS: StatusColor[] = [
+export const OPTION_COLORS: StatusColor[] = [
   "blue", "green", "orange", "purple", "pink", "yellow", "red", "brown",
   "gray", "teal", "cyan", "lime", "indigo", "violet", "rose", "slate",
 ];

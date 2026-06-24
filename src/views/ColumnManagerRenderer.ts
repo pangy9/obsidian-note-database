@@ -1,6 +1,7 @@
-import { setIcon } from "obsidian";
-import { ColumnDef, ViewConfig } from "../data/types";
+import { Menu, setIcon } from "obsidian";
+import { ColumnDef, NumberDisplayStyle, ViewConfig } from "../data/types";
 import { COLUMN_TYPE_LABELS } from "../data/ColumnTypes";
+import { isNumberDisplayColumn } from "../data/ColumnDisplay";
 import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
@@ -14,6 +15,7 @@ export interface ColumnManagerActions {
   moveColumn(key: string, offset: -1 | 1): void;
   moveColumnTo(key: string, targetKey: string, placement: "before" | "after"): void;
   toggleColumnWrap(col: ColumnDef): void;
+  setNumberDisplayStyle(col: ColumnDef, style: NumberDisplayStyle): void;
   editColumn(col: ColumnDef): void;
   addColumn(): void;
   deleteColumn(col: ColumnDef): void;
@@ -184,6 +186,38 @@ export class ColumnManagerRenderer {
     });
     setIcon(wrapBtn, "wrap-text");
     wrapBtn.onclick = () => actions.toggleColumnWrap(col);
+
+    if (isNumberDisplayColumn(col, config.schema.computedFields)) {
+      const styleIcon = col.numberDisplayStyle === "rating" ? "star"
+        : col.numberDisplayStyle === "progress" ? "bar-chart-horizontal"
+        : col.numberDisplayStyle === "ring" ? "target"
+        : "hash";
+      const styleBtn = row.createEl("button", {
+        cls: `clickable-icon db-column-number-style-toggle${col.numberDisplayStyle ? " is-active" : ""}`,
+        attr: { title: t("panel.numberDisplayStyle"), "aria-label": t("panel.numberDisplayStyle") },
+      });
+      setIcon(styleBtn, styleIcon);
+      styleBtn.onclick = (event) => {
+        const menu = new Menu();
+        const currentStyle = col.numberDisplayStyle ?? "plain";
+        const numberStyles: { value: NumberDisplayStyle; key: string }[] = [
+          { value: "plain", key: "menu.numberStylePlain" },
+          { value: "rating", key: "menu.numberStyleRating" },
+          { value: "progress", key: "menu.numberStyleProgress" },
+          { value: "ring", key: "menu.numberStyleRing" },
+        ];
+        for (const { value, key } of numberStyles) {
+          menu.addItem((item) => item
+            .setTitle(t(key))
+            .setChecked(currentStyle === value)
+            .onClick(() => actions.setNumberDisplayStyle(col, value))
+          );
+        }
+        const rect = styleBtn.getBoundingClientRect();
+        menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+        event.stopPropagation();
+      };
+    }
 
     if (!actions.isReadOnly) {
       const editBtn = row.createEl("button", { cls: "clickable-icon" });

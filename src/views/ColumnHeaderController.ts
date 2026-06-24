@@ -1,7 +1,7 @@
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
-import { getTableColumnStyle, getTableLayout } from "./TableLayout";
+import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
 
 export interface ColumnHeaderActions {
   getConfig(): ViewConfig | undefined;
@@ -89,72 +89,8 @@ export class ColumnHeaderController {
   private syncTableColumnLayouts(th: HTMLElement): void {
     const root = th.closest(".note-database-container");
     const config = this.actions.getConfig();
-    if (!root || !config || typeof CSS === "undefined" || !CSS.escape) return;
-
-    const columnByKey = new Map(config.schema.columns.map((column) => [column.key, column]));
-    root.querySelectorAll<HTMLTableElement>("table.db-table").forEach((table) => {
-      const colgroup = table.querySelector("colgroup");
-      if (!colgroup) return;
-
-      const dataCols = Array.from(colgroup.querySelectorAll<HTMLElement>("col[data-note-database-column-key]"));
-      if (dataCols.length === 0) return;
-
-      const keys = dataCols.map((colEl) => colEl.getAttribute("data-note-database-column-key") || "");
-      const baseWidths = keys.map((key) => this.getColumnWidth(columnByKey.get(key), config));
-      const selectionCol = colgroup.querySelector<HTMLElement>("col.db-select-colgroup");
-      const selectionWidth = selectionCol ? 34 : 0;
-      const layout = getTableLayout(selectionWidth, baseWidths, this.getAvailableTableWidth(table));
-
-      table.style.width = `${layout.tableWidth}px`;
-      table.style.minWidth = `${layout.tableWidth}px`;
-      if (selectionCol) {
-        selectionCol.setAttr("width", "34");
-        selectionCol.setCssProps({ width: "34px" });
-      }
-
-      dataCols.forEach((colEl, index) => {
-        const style = getTableColumnStyle(layout.columnWidths[index], index, dataCols.length);
-        colEl.style.width = style.width || "";
-        colEl.style.minWidth = style.minWidth || "";
-      });
-    });
-
-    for (const col of columnByKey.values()) {
-      const escaped = CSS.escape(col.key);
-      root.querySelectorAll<HTMLElement>(`th[data-note-database-column-key="${escaped}"]`).forEach((el) => {
-        const renderedWidth = this.getRenderedHeaderWidth(el, col, config);
-        el.style.width = `${renderedWidth}px`;
-        el.toggleClass("is-narrow", this.isHeaderNarrow(renderedWidth, col.key));
-      });
-    }
-  }
-
-  private getRenderedHeaderWidth(th: HTMLElement, col: ColumnDef, config: ViewConfig): number {
-    const table = th.closest("table.db-table");
-    const colEl = table?.querySelector<HTMLElement>(`col[data-note-database-column-key="${CSS.escape(col.key)}"]`);
-    const parsedWidth = colEl ? parseFloat(colEl.style.width || "") : Number.NaN;
-    return Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : this.getColumnWidth(col, config);
-  }
-
-  private getColumnWidth(col: ColumnDef | undefined, config: ViewConfig): number {
-    return (col ? config.columnWidths?.[col.key] : undefined) || col?.width || config.defaultColumnWidth || 150;
-  }
-
-  private getAvailableTableWidth(table: HTMLTableElement): number {
-    const wrap = table.closest(".db-table-wrap");
-    const parent = wrap?.parentElement;
-    if (!parent) return 0;
-    const cs = getComputedStyle(parent);
-    const paddingLeft = parseFloat(cs.paddingLeft) || 0;
-    const paddingRight = parseFloat(cs.paddingRight) || 0;
-    return Math.max(0, Math.floor(parent.getBoundingClientRect().width - paddingLeft - paddingRight));
-  }
-
-  private isHeaderNarrow(width: number, key: string): boolean {
-    const config = this.actions.getConfig();
-    const col = config?.schema.columns.find((candidate) => candidate.key === key);
-    const labelLength = (col?.label || col?.key || key).length;
-    return width < Math.min(180, Math.max(96, labelLength * 7 + 54));
+    if (!root || !config) return;
+    syncTableColumnLayouts(root, config);
   }
 
   private setupDragToReorder(th: HTMLElement, col: ColumnDef): void {

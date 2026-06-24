@@ -191,6 +191,15 @@ If Note Database helps you, a star or donation helps support continued developme
 
 ## Changelog
 
+### 1.2.1
+
+- Fixed database-file tab and header behavior so `db_view: true` files use Obsidian's native file-view header path.
+- Made embedded database references prefer database ids, improving resilience when database files are moved or renamed.
+- Added number display styles for number fields: rating, horizontal progress bar, and ring progress, with configurable icons, emoji, colors, max values, divisors, and value display.
+- Added datetime grouping by date with an "ignore time" option, and fixed datetime edit popovers to use segmented time input consistently.
+- Added per-group row limits with progressive expand controls.
+- Improved mobile settings, status preset dropdowns, table checkbox alignment, card/list field widths, column-width adjustment, and popover input styling.
+
 ### 1.2.0
 
 - Added calendar and timeline views for date and datetime properties, including month/week/day calendar scales and day/week/month/quarter timeline scales.

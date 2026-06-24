@@ -8,7 +8,7 @@ import {
   toMultiSelectValuesForKey,
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
-import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { DataSource } from "../data/DataSource";
 import { formatDateTimeValueDisplay, formatDateValueDisplay, parseDateTimeParts } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
@@ -21,6 +21,7 @@ import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
+import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -154,8 +155,7 @@ export class CellRenderer {
         break;
       }
       case "number": {
-        const num = typeof value === "number" ? value : parseFloat(String(value));
-        td.textContent = isNaN(num) ? "-" : this.formatNumber(num);
+        this.renderNumberValue(td, col, value);
         break;
       }
       case "date":
@@ -181,6 +181,17 @@ export class CellRenderer {
     } else {
       setFieldTooltip(td, this.getTooltipValue(col, value));
     }
+  }
+
+  /** Render a number cell value, honoring the column's numberDisplayStyle (plain/rating/progress). */
+  private renderNumberValue(td: HTMLElement, col: ColumnDef, value: unknown): void {
+    const num = typeof value === "number" ? value : parseFloat(String(value));
+    if (isNaN(num)) { td.textContent = "-"; return; }
+    const style = getNumberDisplayStyle(col);
+    if (style === "rating") { td.empty(); renderRating(td, num, col.numberDisplayConfig); return; }
+    if (style === "progress") { td.empty(); renderProgress(td, num, col.numberDisplayConfig); return; }
+    if (style === "ring") { td.empty(); renderProgressRing(td, num, col.numberDisplayConfig); return; }
+    td.textContent = this.formatNumber(num);
   }
 
   private getEffectiveDisplayType(col: ColumnDef): ColumnDef["type"] {
@@ -350,7 +361,7 @@ export class CellRenderer {
     }
 
     if (col.type === "number" || col.type === "currency") {
-      this.editNumber(target, row, col, currentValue, origText);
+      this.editNumber(target, row, col, currentValue);
       return;
     }
 
@@ -803,8 +814,7 @@ export class CellRenderer {
     td: HTMLElement,
     row: RowData,
     col: ColumnDef,
-    currentValue: unknown,
-    origText: string
+    currentValue: unknown
   ): void {
     this.editSingleLinePopover(td, safeString(currentValue), "number", async (inputValue) => {
       const raw = inputValue;
@@ -812,11 +822,11 @@ export class CellRenderer {
       if (String(newVal) !== String(currentValue)) {
         await this.saveValue(row, col, newVal);
       } else {
-        td.textContent = origText;
+        this.renderNumberValue(td, col, currentValue);
       }
       this.clearTransientClass(td, "db-cell-editing");
     }, () => {
-      td.textContent = origText;
+      this.renderNumberValue(td, col, currentValue);
       this.clearTransientClass(td, "db-cell-editing");
     });
   }
@@ -990,6 +1000,8 @@ export class CellRenderer {
     const initMonth = dateParts?.month || fallbackParts[1] || "";
     const initDay = dateParts?.day || fallbackParts[2] || "";
     const initTime = dateParts?.time || "";
+    const initHour = initTime.slice(0, 2);
+    const initMinute = initTime.slice(3, 5);
 
     let popover: HTMLElement;
     let closeBtn: HTMLButtonElement | undefined;
@@ -1025,14 +1037,17 @@ export class CellRenderer {
     const monthInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "MM" } });
     segments.createSpan({ cls: "db-date-sep", text: "-" });
     const dayInp = segments.createEl("input", { cls: "db-date-seg", attr: { maxlength: "2", placeholder: "DD" } });
-    let timeInp: HTMLInputElement | undefined;
+    let hourInp: HTMLInputElement | undefined;
+    let minuteInp: HTMLInputElement | undefined;
     if (includeTime) {
       segments.createSpan({ cls: "db-date-sep db-time-sep", text: " " });
-      const timePlaceholder = "HH" + ":mm";
-      timeInp = segments.createEl("input", { cls: "db-date-seg db-time-seg", attr: { maxlength: "5", placeholder: timePlaceholder } });
+      hourInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-hour-seg", attr: { maxlength: "2", placeholder: "HH" } });
+      segments.createSpan({ cls: "db-date-sep db-time-colon", text: ":" });
+      const minutePlaceholder = "m" + "m";
+      minuteInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-minute-seg", attr: { maxlength: "2", placeholder: minutePlaceholder } });
     }
 
-    const inputs = [yearInp, monthInp, dayInp, timeInp].filter((input): input is HTMLInputElement => Boolean(input));
+    const inputs = [yearInp, monthInp, dayInp, hourInp, minuteInp].filter((input): input is HTMLInputElement => Boolean(input));
     let committed = false;
 
     const pad2 = (v: string) => v.length === 1 ? `0${v}` : v;
@@ -1078,7 +1093,7 @@ export class CellRenderer {
         new Notice(t("cell.invalidDate"));
       }
       const dateKey = `${y}-${pad2(String(clampedM))}-${pad2(String(clampedD))}`;
-      const newVal = includeTime ? `${dateKey}T${normalizeTimeForSave(timeInp?.value || "")}` : dateKey;
+      const newVal = includeTime ? `${dateKey}T${normalizeTimeForSave(hourInp?.value || "", minuteInp?.value || "")}` : dateKey;
       const currentNormalized = dateParts
         ? (includeTime ? `${dateParts.dateKey}T${dateParts.time || "00:00"}` : dateParts.dateKey)
         : safeString(currentValue).substring(0, includeTime ? 16 : 10).replace(" ", "T");
@@ -1126,31 +1141,9 @@ export class CellRenderer {
       if (!/^\d$/.test(event.key)) { event.preventDefault(); return; }
     };
 
-    const normalizeTimeForInput = (value: string) => {
-      const digits = value.replace(/\D/g, "").slice(0, 4);
-      if (digits.length <= 2) return digits;
-      return `${digits.slice(0, 2)}:${digits.slice(2)}`;
-    };
-    const normalizeTimeForSave = (value: string) => {
-      const raw = value.trim();
-      let hour = 0;
-      let minute = 0;
-      if (raw.includes(":")) {
-        const [rawHour = "", rawMinute = ""] = raw.split(":");
-        hour = Number(rawHour || "0");
-        minute = Number(rawMinute || "0");
-      } else {
-        const digits = raw.replace(/\D/g, "").slice(0, 4);
-        if (digits.length <= 2) {
-          hour = Number(digits || "0");
-        } else if (digits.length === 3) {
-          hour = Number(digits.slice(0, 1));
-          minute = Number(digits.slice(1));
-        } else {
-          hour = Number(digits.slice(0, 2));
-          minute = Number(digits.slice(2));
-        }
-      }
+    const normalizeTimeForSave = (hourValue: string, minuteValue: string) => {
+      const hour = Number(hourValue.trim() || "0");
+      const minute = Number(minuteValue.trim() || "0");
       if (!Number.isFinite(hour) || !Number.isFinite(minute)) return "00:00";
       const clampedHour = Math.min(Math.max(Math.trunc(hour), 0), 23);
       const clampedMinute = Math.min(Math.max(Math.trunc(minute), 0), 59);
@@ -1189,16 +1182,16 @@ export class CellRenderer {
       const v = dayInp.value;
       if (v.length === 1 && /^[4-9]$/.test(v)) {
         dayInp.value = `0${v}`;
-        if (timeInp) {
-          timeInp.focus();
-          timeInp.select();
+        if (hourInp) {
+          hourInp.focus();
+          hourInp.select();
         } else {
           void commit();
         }
       } else if (v.length === 2) {
-        if (timeInp) {
-          timeInp.focus();
-          timeInp.select();
+        if (hourInp) {
+          hourInp.focus();
+          hourInp.select();
         } else {
           void commit();
         }
@@ -1206,14 +1199,36 @@ export class CellRenderer {
     };
     dayInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
 
-    if (timeInp) {
-      timeInp.value = initTime;
-      timeInp.onkeydown = (e) => handleSegmentKey(e, timeInp, dayInp);
-      timeInp.oninput = () => {
-        timeInp.value = normalizeTimeForInput(timeInp.value);
-        if (timeInp.value.length === 5) void commit();
+    if (hourInp && minuteInp) {
+      hourInp.value = initHour;
+      hourInp.onkeydown = (e) => handleSegmentKey(e, hourInp, dayInp);
+      hourInp.oninput = () => {
+        hourInp.value = hourInp.value.replace(/\D/g, "");
+        const v = hourInp.value;
+        if (v.length === 1 && /^[3-9]$/.test(v)) {
+          hourInp.value = `0${v}`;
+          minuteInp.focus();
+          minuteInp.select();
+        } else if (v.length === 2) {
+          minuteInp.focus();
+          minuteInp.select();
+        }
       };
-      timeInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+      hourInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+
+      minuteInp.value = initMinute;
+      minuteInp.onkeydown = (e) => handleSegmentKey(e, minuteInp, hourInp);
+      minuteInp.oninput = () => {
+        minuteInp.value = minuteInp.value.replace(/\D/g, "");
+        const v = minuteInp.value;
+        if (v.length === 1 && /^[6-9]$/.test(v)) {
+          minuteInp.value = `0${v}`;
+          void commit();
+        } else if (v.length === 2) {
+          void commit();
+        }
+      };
+      minuteInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
     }
 
     if (closeBtn) {

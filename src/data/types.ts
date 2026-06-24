@@ -6,6 +6,31 @@ export interface RecordSchema {
   computedFields: ComputedFieldDef[];
 }
 
+export type NumberDisplayStyle = "plain" | "rating" | "progress" | "ring";
+
+/** How a date/datetime group field is grouped.
+ *  "exact" = datetime by full value / date by dateKey (default);
+ *  "date" = ignore time, group by dateKey; "smart" = relative buckets (Phase 2). */
+export type DateGroupMode = "exact" | "date" | "smart";
+
+/** Per-column tuning for number display styles (rating/progress/ring). Undefined fields = defaults. */
+export interface NumberDisplayConfig {
+  /** lucide icon name for rating, or "emoji" for a custom emoji glyph; default "star". */
+  ratingSymbol?: string;
+  /** custom emoji used when ratingSymbol is "emoji"; default "⭐". */
+  ratingEmoji?: string;
+  /** rating icon rendering style; default "filled". */
+  ratingVariant?: "filled" | "outline";
+  /** max rating stars; default 5. */
+  ratingMax?: number;
+  /** progress divisor: fill = value/divisor; default 100 (value is percent). */
+  progressDivisor?: number;
+  /** show the raw value text beside the bar/ring; default true. */
+  progressShowValue?: boolean;
+  /** tint color (reuses the StatusColor palette); undefined = theme accent. */
+  color?: StatusColor;
+}
+
 export interface ColumnDef {
   key: string;
   label: string;
@@ -18,6 +43,10 @@ export interface ColumnDef {
   statusPresetId?: string;
   statusOptions?: StatusOptionDef[];
   wrap?: boolean;
+  /** Per-column display style for number values. Undefined = plain number. */
+  numberDisplayStyle?: NumberDisplayStyle;
+  /** Per-column tuning for the number display style (icon/max/divisor/showValue/color). */
+  numberDisplayConfig?: NumberDisplayConfig;
 }
 
 export type StatusColor =
@@ -269,6 +298,15 @@ export interface ViewConfig {
   showEmptyGroups?: Record<string, boolean>;
   /** Collapsed group keys keyed by grouped property. */
   collapsedGroups?: Record<string, string[]>;
+  /** Date grouping mode keyed by grouped date/datetime property.
+   *  "exact" (default) = datetime groups by full value; "date" = ignore time, group by date;
+   *  "smart" = relative buckets (Phase 2). */
+  dateGroupModes?: Record<string, DateGroupMode>;
+  /** Max rows shown per group before collapsing (0/undefined = no limit). */
+  groupRowLimit?: number;
+  /** Per-group expanded row count keyed by field → groupKey. -1 = fully expanded; positive M = show M;
+   *  absent = use groupRowLimit. */
+  expandedGroupRows?: Record<string, Record<string, number>>;
   /** Manual board card order keyed by board group field and group key. */
   boardCardOrders?: Record<string, Record<string, string[]>>;
   /** Manual row ordering. Key = file.path, value = base62 rank string. */

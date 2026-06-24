@@ -187,6 +187,16 @@ export function updateColumnKeyReferences(
     delete config.collapsedGroups[oldKey];
     changed = true;
   }
+  if (config.dateGroupModes && oldKey in config.dateGroupModes) {
+    config.dateGroupModes[newKey] = config.dateGroupModes[oldKey];
+    delete config.dateGroupModes[oldKey];
+    changed = true;
+  }
+  if (config.expandedGroupRows && oldKey in config.expandedGroupRows) {
+    config.expandedGroupRows[newKey] = config.expandedGroupRows[oldKey];
+    delete config.expandedGroupRows[oldKey];
+    changed = true;
+  }
   if (config.boardCardOrders?.[oldKey]) {
     config.boardCardOrders[newKey] = config.boardCardOrders[oldKey];
     delete config.boardCardOrders[oldKey];

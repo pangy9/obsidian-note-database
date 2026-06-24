@@ -120,8 +120,9 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
 }
 
 function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions, valueEl: HTMLElement, close: () => void): () => void {
+  const contextClass = getDropdownPopoverContextClass(anchor);
   const host = getDropdownPopoverHost(anchor);
-  const panel = host.createDiv({ cls: `db-dropdown-popover${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
+  const panel = host.createDiv({ cls: `db-dropdown-popover ${contextClass}${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
   panel.setAttr("role", "listbox");
   const searchable = options.searchable === true && options.options.length > 8;
   let searchInput: HTMLInputElement | undefined;
@@ -197,9 +198,16 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
 }
 
 function getDropdownPopoverHost(anchor: HTMLElement): HTMLElement {
+  if (anchor.closest(".note-database-settings, .note-database-modal")) return anchor.ownerDocument.body;
   const container = anchor.closest(".note-database-container");
   if (container instanceof HTMLElement) return container;
   return anchor.parentElement || anchor;
+}
+
+function getDropdownPopoverContextClass(anchor: HTMLElement): string {
+  if (anchor.closest(".note-database-settings")) return "db-dropdown-popover-context-settings";
+  if (anchor.closest(".note-database-modal")) return "db-dropdown-popover-context-modal";
+  return "db-dropdown-popover-context-container";
 }
 
 function getOptionText(options: DropdownOption[], value: string): string | undefined {

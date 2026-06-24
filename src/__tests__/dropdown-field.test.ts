@@ -68,6 +68,18 @@ describe("shared dropdown field adoption", () => {
     expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-control")).toContain("min-width: max-content");
     expect(cssRule(styles, ".note-database-settings .setting-group-body .setting-item .setting-item-name,\n.note-database-settings .setting-group-body .setting-item .setting-item-description")).toContain("white-space: normal");
     expect(cssRule(styles, ".note-database-settings .db-settings-dropdown")).toContain("min-width: max-content");
+    expect(cssRule(styles, ".db-dropdown-popover.db-dropdown-popover-context-settings,\n.db-dropdown-popover.db-dropdown-popover-context-modal")).toContain("background: var(--background-primary)");
+    expect(cssRule(styles, ".db-dropdown-popover-context-settings .db-dropdown-option,\n.db-dropdown-popover-context-modal .db-dropdown-option")).toContain("grid-template-columns: 16px minmax(0, 1fr)");
+    expect(cssRule(styles, ".is-phone .note-database-settings .setting-group-body .setting-item")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(cssRule(styles, ".is-phone .note-database-settings .setting-group-body .setting-item .setting-item-info,\n.is-phone .note-database-settings .setting-group-body .setting-item .setting-item-control")).toContain("min-width: 0");
+    expect(styles).toContain(".is-phone .note-database-settings .setting-group-body .setting-item .setting-item-control {\n  flex: 1 1 auto;\n  flex-wrap: wrap;");
+    expect(cssRule(styles, ".is-phone .note-database-settings .db-settings-dropdown")).toContain("width: 100%");
+    expect(cssRule(styles, ".is-phone .note-database-settings .db-settings-dropdown")).toContain("min-width: 0");
+    expect(cssRule(styles, ".is-phone .note-database-settings .db-settings-dropdown .db-dropdown-field-value")).toContain("overflow: hidden");
+    expect(cssRule(styles, ".is-phone .note-database-settings .db-status-preset-setting-item .setting-item-control")).toContain("min-width: 0");
+    expect(cssRule(styles, ".is-phone .note-database-modal .db-status-preset-default-row")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(cssRule(styles, ".is-phone .note-database-modal .db-status-preset-default-dropdown")).toContain("width: 100%");
+    expect(cssRule(styles, ".is-phone .note-database-modal .db-status-preset-default-dropdown")).toContain("min-width: 0");
     expect(styles).toContain(".note-database-settings .db-dropdown-field");
   });
 
@@ -78,9 +90,32 @@ describe("shared dropdown field adoption", () => {
     const summary = readFileSync(new URL("../views/SummaryRenderer.ts", import.meta.url), "utf8");
     const toolbar = readFileSync(new URL("../views/ToolbarRenderer.ts", import.meta.url), "utf8");
     const dropdown = readFileSync(new URL("../views/DropdownField.ts", import.meta.url), "utf8");
+    const numberRenderer = readFileSync(new URL("../views/NumberDisplayRenderer.ts", import.meta.url), "utf8");
+    const databaseView = readFileSync(new URL("../views/DatabaseView.ts", import.meta.url), "utf8");
+    const tableSync = readFileSync(new URL("../views/TableColumnLayoutSync.ts", import.meta.url), "utf8");
     const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
 
     expect(columnMenu).toContain("showColumnTypePopover");
+    expect(columnMenu).toContain("showNumberDisplayStylePopover");
+    expect(columnMenu).toContain("openColumnWidthPanel?");
+    expect(columnMenu).toContain("menu.adjustColumnWidth");
+    expect(columnMenu).toContain("this.isPhoneLayout() && includeWidthActions");
+    expect(columnMenu).toContain("createColumnMenuSubpopover");
+    expect(columnMenu).toContain("db-column-menu-subpopover");
+    expect(columnMenu).toContain("db-column-number-style-popover");
+    expect(columnMenu).toContain("renderNumberStyleMenuIcon");
+    expect(columnMenu).toContain("menu.numberDisplayIconStyle");
+    expect(columnMenu).toContain("menu.numberDisplayIconEmoji");
+    expect(columnMenu).toContain("menu.numberDisplayEmoji");
+    expect(columnMenu).toContain("{ value: \"emoji\"");
+    expect(columnMenu).toContain("menu.numberDisplayColorTheme");
+    expect(columnMenu).toContain("menu.numberDisplayColorCustom");
+    expect(columnMenu).toContain("if (currentRatingSymbol !== \"emoji\")");
+    expect(columnMenu).toContain("db-number-style-menu-progress");
+    expect(columnMenu).toContain("db-number-style-menu-ring-arc");
+    expect(columnMenu).not.toContain("icon: \"target\"");
+    expect(columnMenu).toContain("pointerleave");
+    expect(columnMenu).toContain("scheduleHoverClose");
     expect(columnMenu).toContain("db-column-type-popover");
     expect(columnMenu).not.toContain("setSubmenu");
     expect(columnMenu).toContain("columnType.group.basic");
@@ -111,13 +146,45 @@ describe("shared dropdown field adoption", () => {
     expect(dropdown).toContain("db-dropdown-search");
     expect(dropdown).toContain("data-search-text");
     expect(dropdown).toContain("getDropdownPopoverHost");
+    expect(dropdown).toContain("getDropdownPopoverContextClass");
+    expect(dropdown).toContain("anchor.ownerDocument.body");
+    expect(dropdown).toContain("db-dropdown-popover-context-settings");
+    expect(dropdown).toContain("db-dropdown-popover-context-modal");
     expect(dropdown).toContain(".note-database-container");
     expect(dropdown).not.toContain(".db-chart-subpopover, .db-chart-options-popover");
     expect(dropdown).toContain("option.icon ? \" has-icon\" : \"\"");
     expect(dropdown).toContain("if (options.renderIcon) options.renderIcon(iconEl, option.icon)");
     expect(dropdown).toContain("else setIcon(iconEl, option.icon)");
     expect(dropdown).toContain("db-dropdown-option-icon");
+    expect(numberRenderer).toContain("symbol === \"emoji\"");
+    expect(numberRenderer).toContain("db-rating-emoji");
+    expect(numberRenderer).toContain("if (!isEmoji) applyColorClass");
+    expect(databaseView).toContain("showMobileColumnWidthPanel");
+    expect(databaseView).toContain("MOBILE_COLUMN_WIDTH_MIN = 60");
+    expect(databaseView).toContain("MOBILE_COLUMN_WIDTH_MAX = 360");
+    expect(databaseView).toContain("config.columnWidths = { ...(config.columnWidths || {}), [col.key]: nextWidth }");
+    expect(databaseView).toContain("this.calculateAutoColumnWidth(col, this.rows)");
+    expect(databaseView).toContain("this.pendingUndoLabel = t(\"undo.columnWidthConfig\")");
+    expect(databaseView).toContain("syncTableColumnLayouts(root, config)");
+    expect(tableSync).toContain("export function syncTableColumnLayouts");
+    expect(tableSync).toContain("tableWrap.style.minWidth");
     expect(viewConfig).toContain("controls.insertBefore(operatorDropdown.button, value)");
+    expect(styles).toContain(".db-column-menu-subpopover");
+    expect(styles).toContain(".db-column-menu-subpopover .db-number-style-menu-progress");
+    expect(styles).toContain(".db-column-menu-subpopover .db-number-style-menu-ring-arc");
+    expect(cssRule(styles, ".db-column-number-style-popover.db-column-menu-subpopover")).toContain("width: 292px");
+    expect(cssRule(styles, ".db-numopt-dropdown-popover")).toContain("background: var(--background-primary)");
+    expect(cssRule(styles, ".db-column-number-style-popover .db-toggle-switch")).toContain("appearance: none");
+    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatch")).toContain("border-radius: 2px");
+    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatch.is-selected")).toContain("0 0 0 3px #000");
+    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatches")).toContain("justify-content: flex-start");
+    expect(styles).toContain(".db-column-number-style-popover .db-numopt-swatch.db-option-color-green");
+    expect(styles).toContain(".db-mobile-column-width-panel");
+    expect(styles).toContain(".db-mobile-column-width-backdrop");
+    expect(styles).toContain(".db-mobile-column-width-slider");
+    expect(columnMenu).toContain("progressDivisor: 1000");
+    expect(styles).toContain(".note-database-container .db-cell-rating.is-outline");
+    expect(styles).toContain(".note-database-container .db-cell-rating.is-emoji");
     expect(styles).toContain(".db-column-type-popover .db-column-type-option-icon");
     expect(styles).toContain(".note-database-container .db-dropdown-option.has-icon");
     expect(styles).toContain(".note-database-container .db-dropdown-option-icon");
@@ -139,13 +206,13 @@ describe("shared dropdown field adoption", () => {
     expect(cssRule(styles, ".note-database-settings .db-dropdown-field")).toContain("min-width: 0");
     expect(cssRule(styles, ".note-database-modal .db-dropdown-option")).toContain("min-width: 0");
     expect(cssRule(styles, ".note-database-settings .db-dropdown-option")).toContain("min-width: 0");
-    expect(cssRule(styles, ".db-column-type-popover .db-dropdown-option")).toContain("min-width: 0");
+    expect(cssRule(styles, ".db-column-menu-subpopover .db-dropdown-option")).toContain("min-width: 0");
     expect(dropdown).not.toContain("db-dropdown-section-separator");
     expect(styles).not.toContain("db-dropdown-section-separator");
     expect(cssRule(styles, ".note-database-container .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
     expect(cssRule(styles, ".note-database-modal .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
     expect(cssRule(styles, ".note-database-settings .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
-    expect(cssRule(styles, ".db-column-type-popover .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
+    expect(cssRule(styles, ".db-column-menu-subpopover .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
   });
 
   it("keeps parent header popovers open while interacting with shared dropdown popovers", () => {
@@ -173,7 +240,7 @@ describe("shared dropdown field adoption", () => {
   it("defines semantic dropdown labels for supported locales", () => {
     for (const locale of ["en", "zh-CN", "zh-TW"] as const) {
       setLocale(locale);
-      for (const key of ["panel.field", "panel.operator", "panel.sortDirection", "viewConfig.sourceRules.logic", "viewConfig.sourceRules.fieldGroup.custom", "columnType.group.basic", "columnType.group.options", "columnType.group.advanced"] as const) {
+      for (const key of ["panel.field", "panel.operator", "panel.sortDirection", "viewConfig.sourceRules.logic", "viewConfig.sourceRules.fieldGroup.custom", "columnType.group.basic", "columnType.group.options", "columnType.group.advanced", "menu.adjustColumnWidth", "columnWidth.adjustTitle", "columnWidth.auto", "columnWidth.narrow", "columnWidth.medium", "columnWidth.wide"] as const) {
         expect(t(key), `${locale}:${key}`).not.toBe(key);
       }
     }

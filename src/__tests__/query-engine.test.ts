@@ -137,6 +137,19 @@ describe("QueryEngine date column grouping", () => {
     expect(engine.groupBy(rows, "due", [], col).map((g) => g.key).sort()).toEqual(["2026-06-04T09:00", "2026-06-04T18:00"]);
   });
 
+  it("merges datetime values by date when dateGroupMode is 'date'", () => {
+    const engine = new QueryEngine();
+    const col: ColumnDef = { key: "due", label: "Due", type: "datetime" };
+    const config = { dateGroupModes: { due: "date" } } as never;
+    const rows = [
+      row("a.md", { due: "2026-06-04T09:00" }),
+      row("b.md", { due: "2026-06-04T18:00" }),
+      row("c.md", { due: "2026-06-05T12:00" }),
+    ];
+    // "date" mode ignores the time → same-day values merge into one dateKey group.
+    expect(engine.groupBy(rows, "due", [], col, config).map((g) => g.key).sort()).toEqual(["2026-06-04", "2026-06-05"]);
+  });
+
   it("normalizes file.ctime grouping to date keys", () => {
     const engine = new QueryEngine();
     const col: ColumnDef = { key: "file.ctime", label: "Created", type: "date" };

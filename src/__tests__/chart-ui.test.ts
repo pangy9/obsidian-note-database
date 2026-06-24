@@ -524,6 +524,8 @@ describe("chart view UI wiring", () => {
     expect(cssRule(styles, ".note-database-container .db-chart-options-row")).toContain("min-width: 0");
     expect(cssRule(styles, ".note-database-container .db-chart-options-row-icon,\n.note-database-container .db-chart-options-chevron")).toContain("flex: 0 0 auto");
     expect(cssRule(styles, ".note-database-container .db-chart-options-row-label")).toContain("white-space: nowrap");
+    expect(cssRule(styles, ".note-database-container .db-chart-options-title-row .db-chart-options-row-text")).toContain("grid-template-columns: max-content minmax(0, 1fr)");
+    expect(cssRule(styles, ".note-database-container .db-chart-options-title-row .db-chart-options-label")).toContain("flex: 0 0 auto");
     expect(styles).toContain(".note-database-container .db-chart-empty");
     expect(styles).toContain(".note-database-container .db-chart-number");
     expect(styles).toContain("border: 0");

@@ -43,6 +43,40 @@ describe("group visibility toolbar UI", () => {
       expect(i18n.match(new RegExp(`"${key}"`, "g"))?.length).toBe(3);
     }
   });
+
+  it("renders per-group row limit as a shared dropdown instead of radio options", () => {
+    const toolbar = readFileSync("src/views/ToolbarRenderer.ts", "utf8");
+    const styles = readFileSync("styles.css", "utf8");
+    const i18n = readFileSync("src/i18n.ts", "utf8");
+
+    expect(toolbar).toContain("createDropdownField({");
+    expect(toolbar).toContain("DropdownOption");
+    expect(toolbar).toContain("db-group-row-limit-select-row");
+    expect(toolbar).toContain("db-group-row-limit-dropdown-popover");
+    expect(toolbar).toContain("{ value: \"custom\", text: t(\"viewConfig.groupRowLimitCustom\") }");
+    expect(toolbar).toContain("db-group-row-limit-custom-row");
+    expect(toolbar).toContain("groupRowLimitEditingCustom");
+    expect(toolbar).toContain("groupRowLimitFocusCustomInput");
+    expect(toolbar).toContain("const custom = value === \"custom\"");
+    expect(toolbar).toContain("actions.setGroupRowLimit(custom ? (current > 0 ? current : 25) : Number(value) || 0)");
+    expect(toolbar).toContain("const customActive = this.groupRowLimitEditingCustom || (!isPreset && current > 0)");
+    expect(toolbar).toContain("if (this.groupRowLimitFocusCustomInput)");
+    expect(toolbar).toContain("input.focus()");
+    expect(toolbar).toContain("isGroupPopoverActiveTarget");
+    expect(toolbar).toContain(".db-group-row-limit-dropdown-popover");
+    expect(toolbar).toContain("isActiveTarget: (target) => this.isGroupPopoverActiveTarget(target, panel, anchorEl)");
+    expect(toolbar).not.toContain("db-group-row-limit-option");
+    expect(toolbar).not.toContain('type: "radio"');
+    expect(styles).not.toContain("db-group-row-limit-option");
+    expect(styles).toContain(".note-database-container .db-group-row-limit-custom-row");
+    expect(styles).toContain(".note-database-container .db-group-row-limit-input");
+    expect(styles).toContain("height: 30px");
+    expect(styles).toContain("min-height: 30px");
+    expect(styles).toContain("border-radius: var(--db-radius-sm)");
+    expect(toolbar).toContain("this.groupRowLimitEditingCustom = false");
+    expect(toolbar).toContain("this.groupRowLimitFocusCustomInput = false");
+    expect(i18n).toContain('"viewConfig.groupRowLimit": "每组最多显示"');
+  });
 });
 
 describe("board subgroup controls in group popover", () => {

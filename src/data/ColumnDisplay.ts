@@ -1,4 +1,4 @@
-import { ColumnDef, ComputedFieldDef } from "./types";
+import { ColumnDef, ComputedFieldDef, NumberDisplayStyle } from "./types";
 
 export type ColumnDisplayType = Exclude<ColumnDef["type"], "computed">;
 
@@ -17,6 +17,18 @@ export function getColumnDisplayType(
 ): ColumnDisplayType {
   if (col.type !== "computed") return col.type;
   return getComputedFieldForColumn(col, computedFields)?.type || "text";
+}
+
+/** Number display style for a column; defaults to "plain" when unset. */
+export function getNumberDisplayStyle(col: ColumnDef): NumberDisplayStyle {
+  return col.numberDisplayStyle ?? "plain";
+}
+
+/** True when a column renders as a number — a plain number column, or a computed
+ *  column whose formula result type is number. Used to gate the rating/progress
+ *  display-style selector (currency is intentionally excluded). */
+export function isNumberDisplayColumn(col: ColumnDef, computedFields?: ComputedFieldDef[]): boolean {
+  return getColumnDisplayType(col, computedFields) === "number";
 }
 
 export function getComputedStorageKey(col: Pick<ColumnDef, "key" | "type" | "computedKey">): string {

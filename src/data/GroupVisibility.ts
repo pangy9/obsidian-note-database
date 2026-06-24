@@ -58,3 +58,30 @@ export function withEmptyOptionGroups<T extends GroupLike>(config: ViewConfig, f
     .map((key) => ({ key, rows: [], count: 0 } as unknown as T));
   return additions.length > 0 ? [...groups, ...additions] : groups;
 }
+
+/** Per-group row limit for the view. 0 = no limit (show all). */
+export function getGroupRowLimit(config: ViewConfig): number {
+  return config.groupRowLimit && config.groupRowLimit > 0 ? config.groupRowLimit : 0;
+}
+
+/** How many rows a group should currently show (clamped to totalCount).
+ *  expanded === -1 → all; positive M → M; absent → limit; limit 0 → all. */
+export function getGroupVisibleCount(config: ViewConfig, field: string, key: string, totalCount: number): number {
+  const limit = getGroupRowLimit(config);
+  if (limit <= 0) return totalCount;
+  const expanded = config.expandedGroupRows?.[field]?.[key];
+  if (expanded === -1) return totalCount;
+  if (typeof expanded === "number" && expanded > 0) return Math.min(expanded, totalCount);
+  return Math.min(limit, totalCount);
+}
+
+/** Set a group's expanded row count. count = -1 (fully expanded) or positive M; 0 = reset to limit (clear). */
+export function setGroupExpandedCount(config: ViewConfig, field: string, key: string, count: number): void {
+  const map = { ...(config.expandedGroupRows?.[field] || {}) };
+  if (count === 0) delete map[key];
+  else map[key] = count;
+  const next = { ...(config.expandedGroupRows || {}) };
+  if (Object.keys(map).length > 0) next[field] = map;
+  else delete next[field];
+  config.expandedGroupRows = Object.keys(next).length > 0 ? next : undefined;
+}

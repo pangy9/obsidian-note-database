@@ -22,6 +22,8 @@ import { RowData, TimelineScale, ViewConfig } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
 import { openDropdownMenu } from "./DropdownField";
 import { buildMiniCalendarEventIndex, MiniCalendarMode, renderMiniCalendar } from "./CalendarMiniCalendarRenderer";
+import { renderGroupExpandControls } from "./GroupExpandControls";
+import { getGroupVisibleCount } from "../data/GroupVisibility";
 
 const TIME_SNAP_MINUTES = CALENDAR_TIME_SNAP_MINUTES;
 
@@ -129,6 +131,7 @@ export interface CalendarTimelineRendererActions {
   onConfigChange?(label?: string): void;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
+  expandGroup?(field: string, key: string, count: number): void;
   readonly isReadOnly?: boolean;
   /** 统计被隐藏的无效时间事件数量；导航栏 warning 在 count > 0 时显示，缓存命中可即时返回。 */
   getTimelineInvalidEventCount?(): number | Promise<number>;
@@ -307,12 +310,20 @@ export class CalendarTimelineRenderer {
       }
       const events = groupEl.createDiv({ cls: "db-timeline-events" });
       events.setAttribute("data-timeline-lane-key", lane.key);
-      events.style.setProperty("--db-timeline-event-rows", String(lane.rowCount));
       // day scale：可见小时范围（绝对分钟，可跨午夜）；week/month/quarter：整个多天窗口（0 → totalUnits 天）。
       const visible = model.scale === "day"
         ? this.getTimelineVisibleMinutes(config, { ...model, totalUnits: Math.max(1, visibleUnitSpan ?? model.totalUnits) })
         : { startMinutes: 0, endMinutes: Math.max(1, visibleUnitSpan ?? model.totalUnits) * MINUTES_PER_DAY };
-      for (const event of lane.events) {
+      const limitCount = hasGroupField && config.timelineGroupField
+        ? getGroupVisibleCount(config, config.timelineGroupField, lane.key, lane.events.length)
+        : lane.events.length;
+      const renderedEvents = limitCount < lane.events.length ? lane.events.slice(0, limitCount) : lane.events;
+      // 限流时 lane 高度只算可见事件的最高行，缩短 lane、让后续分组顶上（不留垂直空隙）。
+      const laneRowCount = limitCount < lane.events.length
+        ? renderedEvents.reduce((max, e) => Math.max(max, e.timelineRow || 1), 1)
+        : lane.rowCount;
+      events.style.setProperty("--db-timeline-event-rows", String(laneRowCount));
+      for (const event of renderedEvents) {
         // 统一按绝对刻度（相对 windowStartKey 的分钟）定位事件两端，再用可见窗口夹取。
         // scale.start < visibleStart → 左侧 jump-to-start；scale.end > visibleEnd → 右侧 jump-to-end。
         // 满宽（覆盖整个可见窗口）是 scale 覆盖 visible 的自然结果，无需特判。
@@ -331,6 +342,9 @@ export class CalendarTimelineRenderer {
         if (isClippedEnd) {
           this.renderTimelineJumpIndicator(events, config, event, "after", "end", model, event.timelineRow || 1, isOverEvent);
         }
+      }
+      if (hasGroupField && config.timelineGroupField) {
+        renderGroupExpandControls(groupEl, config, config.timelineGroupField, lane.key, lane.events.length, this.actions);
       }
       this.renderTimelineCreateRow(groupEl, config, model, lane.key);
     }

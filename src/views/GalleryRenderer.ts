@@ -1,7 +1,7 @@
 import { App, Menu, setIcon, TFile } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
-import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
@@ -13,6 +13,10 @@ import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
+import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
+import { renderGroupExpandControls } from "./GroupExpandControls";
+import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -46,6 +50,7 @@ export interface GalleryRendererActions {
   ): void | Promise<void>;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
+  expandGroup?(field: string, key: string, count: number): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
@@ -109,7 +114,9 @@ export class GalleryRenderer {
       if (collapsed) continue;
       const gallery = this.createGallery(section, config);
       this.setupGroupDropTarget(gallery, groupField, group.key);
-      for (const row of group.rows) this.renderCard(gallery, config, row, groupField, group.key, groups, group.rows);
+      const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
+      for (const row of group.rows.slice(0, visibleCount)) this.renderCard(gallery, config, row, groupField, group.key, groups, group.rows);
+      renderGroupExpandControls(gallery, config, groupField, group.key, group.rows.length, this.actions);
       this.renderNewCard(gallery, { [groupField]: group.key || "" }, group.rows);
     }
   }
@@ -205,7 +212,7 @@ export class GalleryRenderer {
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const item = meta.createDiv({ cls: "db-gallery-field", attr: { "data-note-database-column-key": col.key } });
-      item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
+      item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
       if (displayType === "checkbox") item.addClass("is-checkbox-field");
@@ -537,6 +544,15 @@ export class GalleryRenderer {
       return;
     }
 
+    if (displayType === "number") {
+      const num = typeof value === "number" ? value : parseFloat(String(value));
+      if (!isNaN(num)) {
+        const style = getNumberDisplayStyle(col);
+        if (style === "rating") { renderRating(valueEl, num, col.numberDisplayConfig); return; }
+        if (style === "progress") { renderProgress(valueEl, num, col.numberDisplayConfig); return; }
+        if (style === "ring") { renderProgressRing(valueEl, num, col.numberDisplayConfig); return; }
+      }
+    }
     valueEl.textContent = Array.isArray(value) ? value.join(", ") : String(value);
     setFieldTooltip(valueEl, valueEl.textContent);
   }
@@ -549,7 +565,7 @@ export class GalleryRenderer {
     const item = window.activeDocument.createElement("div");
     item.className = "db-gallery-field";
     item.setAttribute("data-note-database-column-key", col.key);
-    item.style.setProperty("--db-card-field-width", `${this.getFieldWidth(config, col)}px`);
+    item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
     setFieldTooltip(item, displayValue, col.label);
     if (empty) item.classList.add("is-empty-field");
     if (displayType === "checkbox") item.classList.add("is-checkbox-field");
@@ -708,8 +724,8 @@ export class GalleryRenderer {
     return Math.max(0.35, Math.min(2.5, config.galleryImageAspectRatio || 0.75));
   }
 
-  private getFieldWidth(config: ViewConfig, col: ColumnDef): number {
-    return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 150;
+  private getCardFieldWidth(config: ViewConfig, col: ColumnDef): number {
+    return clampCardFieldWidth(getFieldWidth(config, col), this.getCardSize(config));
   }
 
   private getDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {

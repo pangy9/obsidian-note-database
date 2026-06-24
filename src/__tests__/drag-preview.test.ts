@@ -71,10 +71,18 @@ describe("drag preview targets", () => {
     const selectCol = cssRule(styles, ".note-database-container .db-table col.db-select-colgroup");
     const selectCell = cssRule(styles, ".note-database-container .db-table th.db-select-col,\n.note-database-container .db-table td.db-select-col");
     const headerReserve = cssRule(styles, ".note-database-container .db-table th.db-select-col .db-select-inner::before");
+    const mobileHeaderReserve = cssRule(styles, ".is-phone .note-database-container .db-table th.db-select-col .db-select-inner::before");
+    const mobileCheckbox = cssRule(styles, ".is-phone .note-database-container .db-table th.db-select-col input[type=\"checkbox\"],\n.is-phone .note-database-container .db-table td.db-select-col input[type=\"checkbox\"]");
+    const mobileMoveButton = cssRule(styles, ".is-phone .note-database-container .db-table-mobile-move-btn");
 
     expect(tableRenderer).toContain("return this.isPhoneLayout() ? 62 : 40");
+    expect(tableRenderer.indexOf("this.renderMobileMoveButton(selectInner")).toBeLessThan(tableRenderer.indexOf("const cb = selectInner.createEl(\"input\""));
     expect(selectCol).toContain("width: 40px");
     expect(selectCell).toContain("width: 40px");
+    expect(mobileHeaderReserve).toContain("flex-basis: 24px");
+    expect(mobileCheckbox).toContain("margin: 0 8px 0 auto");
+    expect(mobileMoveButton).toContain("flex: 0 0 24px");
+    expect(mobileMoveButton).toContain("margin: 0");
     expect(headerReserve).toContain('content: ""');
     expect(headerReserve).toContain("flex: 0 0 20px");
   });

@@ -1,9 +1,10 @@
 import { getColumnOptionValues, hasObsidianTagValue, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
+import { getDateGroupMode } from "./GroupDisplay";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
 import { compareMultiSelect } from "./MultiSelect";
 import { stringifyValue } from "./Stringify";
-import { ColumnDef, RowData, FilterRule, SortRule } from "./types";
+import { ColumnDef, DateGroupMode, RowData, FilterRule, SortRule, ViewConfig } from "./types";
 import { t } from "../i18n";
 
 export type SortDirection = "asc" | "desc";
@@ -126,12 +127,14 @@ export class QueryEngine {
     rows: RowData[],
     field: string,
     order: string[] = [],
-    column?: ColumnDef
+    column?: ColumnDef,
+    config?: ViewConfig
   ): { key: string; rows: RowData[]; count: number }[] {
+    const dateGroupMode = config ? getDateGroupMode(config, field) : undefined;
     const groups = new Map<string, RowData[]>();
     for (const row of rows) {
       const raw = this.getFieldValue(row, field);
-      const keys = this.getGroupKeys(raw, column);
+      const keys = this.getGroupKeys(raw, column, dateGroupMode);
       for (const key of keys) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(row);
@@ -238,11 +241,11 @@ export class QueryEngine {
     return [stringifyValue(value)];
   }
 
-  private getGroupKeys(value: unknown, column?: ColumnDef): string[] {
-    // 仅纯 date 列（不含 datetime）按日期归一化，清理"同日不同时间/带时间脏值"造成的分裂分组；
-    // datetime 列按完整值分组以保留时段区分。归一化必须对原始值做（parseDateTimeParts 已支持
-    // 毫秒 number），不能在 getComparableValues(stringify) 之后做，否则 number 会被当年份解析。
-    if (column?.type === "date") {
+  private getGroupKeys(value: unknown, column?: ColumnDef, dateGroupMode?: DateGroupMode): string[] {
+    // date 列总按 dateKey 归一化；datetime 列在 "date" 模式也按 dateKey（忽略时刻），清理"同日不同
+    // 时间/带时间脏值"造成的分裂分组。归一化必须对原始值做（parseDateTimeParts 已支持毫秒 number），
+    // 不能在 getComparableValues(stringify) 之后做，否则 number 会被当年份解析。
+    if (column?.type === "date" || (column?.type === "datetime" && dateGroupMode === "date")) {
       const parts = parseDateTimeParts(value);
       if (parts) return [parts.dateKey];
       if (value == null || value === "") return [t("common.uncategorized")];

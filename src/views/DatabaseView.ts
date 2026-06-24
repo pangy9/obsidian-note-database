@@ -12,7 +12,7 @@ import {
   getVisibleColumns,
 } from "../data/ColumnConfig";
 import { RowPipeline } from "../data/RowPipeline";
-import { ViewConfig, ColumnDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition } from "../data/types";
+import { ViewConfig, ColumnDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode } from "../data/types";
 import {
   getDefaultCellValue as getColumnDefaultCellValue,
   getStatusPresetOptions,
@@ -31,7 +31,7 @@ import {
 } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
-import { setShowEmptyGroups, withEmptyOptionGroups } from "../data/GroupVisibility";
+import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { CellOptionTransaction, CellRenderer } from "./CellRenderer";
@@ -94,12 +94,25 @@ import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 const NEW_COLUMN_HIGHLIGHT_MS = 2200;
+const MOBILE_COLUMN_WIDTH_MIN = 60;
+const MOBILE_COLUMN_WIDTH_MAX = 360;
+const MOBILE_COLUMN_WIDTH_PRESETS = [
+  { key: "narrow", width: 100 },
+  { key: "medium", width: 150 },
+  { key: "wide", width: 240 },
+] as const;
 
 function filtersEqual(left: FilterRule, right: FilterRule): boolean {
   return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "");
+}
+
+function clampColumnWidth(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(Math.round(value), min), max);
 }
 
 export const DATABASE_VIEW_TYPE = "note-database-view";
@@ -218,6 +231,7 @@ export class DatabaseView extends FileView {
   private listRenderer: ListRenderer;
   private chartRenderer = new ChartRenderer();
   private chartToolbarRenderer = new ChartToolbarRenderer();
+  private mobileColumnWidthPanelCleanup?: () => void;
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -228,6 +242,7 @@ export class DatabaseView extends FileView {
       this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
     isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
     toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
     getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
     openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
     updateTimelineAnchor: (dateKey, label, timeMinutes) => this.updateTimelineAnchor(dateKey, label, timeMinutes),
@@ -405,6 +420,7 @@ export class DatabaseView extends FileView {
       createEntry: (defaults, position) => { void this.createBlankEntry(defaults, position); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
     });
     this.boardRenderer = new BoardRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -424,6 +440,7 @@ export class DatabaseView extends FileView {
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
@@ -446,6 +463,7 @@ export class DatabaseView extends FileView {
         this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
@@ -467,6 +485,7 @@ export class DatabaseView extends FileView {
         this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
+    expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
@@ -484,9 +503,12 @@ export class DatabaseView extends FileView {
       moveColumn: (key, offset) => this.columnOperations.moveColumn(key, offset),
       hideColumn: (col) => this.columnOperations.hideColumn(col),
       toggleColumnWrap: (col) => this.toggleColumnWrap(col),
+      setNumberDisplayStyle: (col, style) => this.setNumberDisplayStyle(col, style),
+      updateNumberDisplayConfig: (col, partial) => this.updateNumberDisplayConfig(col, partial),
       sortByColumn: (col) => this.sortByColumn(col),
       getColumnSortDirection: (col) => this.getColumnSortDirection(col),
       clearColumnSort: (col) => this.clearColumnSort(col),
+      openColumnWidthPanel: (col) => this.showMobileColumnWidthPanel(col),
       autoFitColumn: (col) => this.autoFitColumn(col),
       autoFitAllColumns: () => this.autoFitAllColumns(),
       deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
@@ -895,6 +917,7 @@ export class DatabaseView extends FileView {
     this.timelineInvalidEventsScanner.clear();
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
+    this.closeMobileColumnWidthPanel();
     this.closeGroupOrderPopover();
     window.activeDocument.removeEventListener("mousedown", this.handleOutsideClickBound, true);
     if (this.scrollbarIdleTimer !== null) {
@@ -1038,6 +1061,8 @@ export class DatabaseView extends FileView {
       setGroupByField: (value) => this.setGroupByField(value),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(mode),
       setShowEmptyGroups: (field, value) => this.setShowEmptyGroups(field, value),
+      setGroupDateMode: (field, mode) => this.setGroupDateMode(field, mode),
+      setGroupRowLimit: (limit) => this.setGroupRowLimit(limit),
       setBoardSubgroupEnabled: (enabled) => this.setBoardSubgroupEnabled(enabled),
       setBoardSubgroupField: (value) => this.setBoardSubgroupField(value),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover("view", anchorEl),
@@ -1215,6 +1240,18 @@ export class DatabaseView extends FileView {
     const config = this.getConfig();
     if (!config) return;
     setShowEmptyGroups(config, field, value);
+    this.pendingUndoLabel = t("undo.groupConfig");
+    this.scheduleConfigSave();
+    this.refresh({ viewport: "reset-top" });
+  }
+
+  private setGroupDateMode(field: string, mode: DateGroupMode): void {
+    const config = this.getConfig();
+    if (!config) return;
+    const modes = { ...(config.dateGroupModes || {}) };
+    if (mode === "exact") delete modes[field];
+    else modes[field] = mode;
+    config.dateGroupModes = Object.keys(modes).length > 0 ? modes : undefined;
     this.pendingUndoLabel = t("undo.groupConfig");
     this.scheduleConfigSave();
     this.refresh({ viewport: "reset-top" });
@@ -1423,7 +1460,7 @@ export class DatabaseView extends FileView {
       return;
     }
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col));
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col, config));
     const keys = groups.map((group) => group.key);
     const currentOrder = config.groupOrders?.[field] || [];
     const defaultOrder = getDefaultGroupOrder(config, field);
@@ -1590,7 +1627,7 @@ export class DatabaseView extends FileView {
     const field = this.getActiveGroupField(config);
     if (!field) return;
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col));
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], col, config));
     const keys = groups.map((group) => group.key);
     const optionOrder = getDefaultGroupOrder(config, field).filter((key) => keys.includes(key));
     const appendMissing = (order: string[]) => [...order, ...keys.filter((key) => !order.includes(key))];
@@ -2209,7 +2246,8 @@ export class DatabaseView extends FileView {
     const entry = this.getCurrentEntry();
     const view = entry?.config.views[viewIndex] || this.getConfig();
     if (!entry || !view) return;
-    const locator = `dbPath: ${entry.sourcePath}`;
+    // Prefer the stable database id so the copied embed survives file moves/renames.
+    const locator = entry.config.id ? `dbId: ${entry.config.id}` : `dbPath: ${entry.sourcePath}`;
     const lines = [
       "```note-database",
       locator,
@@ -3016,6 +3054,7 @@ export class DatabaseView extends FileView {
         moveColumn: (key, offset) => this.columnOperations.moveColumn(key, offset),
         moveColumnTo: (key, targetKey, placement) => this.columnOperations.moveColumnTo(key, targetKey, placement),
         toggleColumnWrap: (col) => this.toggleColumnWrap(col),
+        setNumberDisplayStyle: (col, style) => this.setNumberDisplayStyle(col, style),
         editColumn: (col) => this.showColumnRenameModal(col),
         addColumn: () => { void this.columnOperations.appendColumn(); },
         deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
@@ -3105,7 +3144,7 @@ export class DatabaseView extends FileView {
     if (!config) return;
     new ColumnRenameModal(this.app, col, config.schema.columns, async (result) => {
       await this.columnOperations.renameColumn(col, result);
-    }).open();
+    }, config.schema.computedFields).open();
   }
 
   private setAllColumnsVisible(visible: boolean): void {
@@ -3147,6 +3186,33 @@ export class DatabaseView extends FileView {
     this.pendingUndoLabel = t("undo.columnWrapConfig");
     this.scheduleConfigSave();
     this.renderColumnManager();
+    this.refresh();
+  }
+
+  private setNumberDisplayStyle(col: ColumnDef, style: NumberDisplayStyle): void {
+    col.numberDisplayStyle = style === "plain" ? undefined : style;
+    this.pendingUndoLabel = t("undo.numberDisplayStyleConfig");
+    this.scheduleConfigSave();
+    this.renderColumnManager();
+    this.refresh();
+  }
+
+  private updateNumberDisplayConfig(col: ColumnDef, partial: Partial<NumberDisplayConfig>): void {
+    const current = col.numberDisplayConfig ?? {};
+    const merged: NumberDisplayConfig = { ...current, ...partial };
+    // Drop fields that equal their default so frontmatter stays clean (like wrap/plain → undefined).
+    if (!merged.ratingSymbol || merged.ratingSymbol === "star") delete merged.ratingSymbol;
+    if (merged.ratingSymbol !== "emoji") delete merged.ratingEmoji;
+    if (!merged.ratingEmoji || merged.ratingEmoji === "⭐") delete merged.ratingEmoji;
+    if (merged.ratingSymbol === "emoji") delete merged.ratingVariant;
+    if (!merged.ratingVariant || merged.ratingVariant === "filled") delete merged.ratingVariant;
+    if (!merged.ratingMax || merged.ratingMax === 5) delete merged.ratingMax;
+    if (merged.progressDivisor == null || merged.progressDivisor === 100) delete merged.progressDivisor;
+    if (merged.progressShowValue === true) delete merged.progressShowValue;
+    if (!merged.color) delete merged.color;
+    col.numberDisplayConfig = Object.keys(merged).length > 0 ? merged : undefined;
+    this.pendingUndoLabel = t("undo.numberDisplayStyleConfig");
+    this.scheduleConfigSave();
     this.refresh();
   }
 
@@ -3615,7 +3681,8 @@ export class DatabaseView extends FileView {
 
   /** Show a floating context menu on column header right-click */
   private showContextMenu(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement, options?: ColumnMenuOptions): void {
-    this.columnMenu.show(event, col, anchorEl, options);
+    const config = this.getConfig();
+    this.columnMenu.show(event, col, anchorEl, { ...options, computedFields: config?.schema.computedFields });
   }
 
   /** Save the current view config back to its source (settings or file) */
@@ -5264,7 +5331,7 @@ export class DatabaseView extends FileView {
 
   private renderGroupedTable(config: ViewConfig, field: string): void {
     if (!this.containerEl_) return;
-    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field), config));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     const sortedGroups = this.queryEngine.sortGroups(groups, order);
     this.tableRenderer.renderGroupedTable(this.containerEl_, this.getStatefulConfig(config), this.rows, sortedGroups, field);
@@ -5282,7 +5349,7 @@ export class DatabaseView extends FileView {
     const renderConfig = this.getStatefulConfig(config);
     if (this.vs().groupByField) {
       const field = this.vs().groupByField;
-      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
+      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field), config));
       const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
       this.galleryRenderer.renderGrouped(this.containerEl_, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       return;
@@ -5295,7 +5362,7 @@ export class DatabaseView extends FileView {
     const renderConfig = this.getStatefulConfig(config);
     if (this.vs().groupByField) {
       const field = this.vs().groupByField;
-      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
+      const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field), config));
       const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
       this.listRenderer.renderGrouped(this.containerEl_, renderConfig, this.queryEngine.sortGroups(groups, order), field);
       return;
@@ -5328,7 +5395,7 @@ export class DatabaseView extends FileView {
   }
 
   private getBoardGroups(config: ViewConfig, field: string): BoardGroup[] {
-    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field)));
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field), config));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     const groupMap = new Map(groups.map((group) => [group.key, group]));
     const col = config.schema.columns.find((candidate) => candidate.key === field);
@@ -5393,7 +5460,7 @@ export class DatabaseView extends FileView {
   }
 
   private getBoardSubgroups(config: ViewConfig, field: string, rows: RowData[]): BoardGroup["subgroups"] {
-    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(rows, field, [], config.schema.columns.find((c) => c.key === field)));
+    const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(rows, field, [], config.schema.columns.find((c) => c.key === field), config));
     const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
     return this.queryEngine.sortGroups(groups, order);
   }
@@ -5585,6 +5652,24 @@ export class DatabaseView extends FileView {
     this.refresh();
   }
 
+  private expandGroup(config: ViewConfig | undefined, field: string, key: string, count: number): void {
+    if (!config) return;
+    setGroupExpandedCount(config, field, key, count);
+    this.pendingUndoLabel = t("undo.groupCollapseConfig");
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private setGroupRowLimit(limit: number): void {
+    const config = this.getConfig();
+    if (!config) return;
+    config.groupRowLimit = limit > 0 ? limit : undefined;
+    config.expandedGroupRows = undefined; // changing the limit resets all per-group expansions
+    this.pendingUndoLabel = t("undo.groupConfig");
+    this.scheduleConfigSave();
+    this.refresh({ viewport: "reset-top" });
+  }
+
   private updateGalleryCardSize(width: number): void {
     const config = this.getConfig();
     if (!config) return;
@@ -5736,6 +5821,107 @@ export class DatabaseView extends FileView {
     this.scheduleViewStateSave();
     this.updateToolbarIndicators();
     this.refresh();
+  }
+
+  private showMobileColumnWidthPanel(col: ColumnDef): void {
+    const config = this.getConfig();
+    const root = this.containerEl_;
+    if (!config || !root) return;
+    this.closeMobileColumnWidthPanel();
+
+    const doc = root.ownerDocument;
+    const backdrop = doc.body.createDiv({ cls: "db-mobile-column-width-backdrop" });
+    const panel = doc.body.createDiv({ cls: "db-mobile-column-width-panel" });
+    const title = panel.createDiv({
+      cls: "db-mobile-column-width-title",
+      text: t("columnWidth.adjustTitle", { name: col.label || col.key }),
+    });
+    title.setAttr("aria-live", "polite");
+
+    const valueRow = panel.createDiv({ cls: "db-mobile-column-width-value-row" });
+    const slider = valueRow.createEl("input", {
+      cls: "db-mobile-column-width-slider",
+      attr: {
+        type: "range",
+        min: String(MOBILE_COLUMN_WIDTH_MIN),
+        max: String(MOBILE_COLUMN_WIDTH_MAX),
+        step: "1",
+        "aria-label": t("menu.adjustColumnWidth"),
+      },
+    });
+    const valueEl = valueRow.createSpan({ cls: "db-mobile-column-width-value" });
+
+    const presets = panel.createDiv({ cls: "db-mobile-column-width-presets" });
+    const autoButton = presets.createEl("button", {
+      cls: "db-mobile-column-width-preset",
+      text: t("columnWidth.auto"),
+      attr: { type: "button" },
+    });
+    for (const preset of MOBILE_COLUMN_WIDTH_PRESETS) {
+      const button = presets.createEl("button", {
+        cls: "db-mobile-column-width-preset",
+        text: t(`columnWidth.${preset.key}`),
+        attr: { type: "button" },
+      });
+      button.onclick = () => {
+        applyWidth(preset.width);
+        persist();
+      };
+    }
+
+    let dirty = false;
+    const setSliderValue = (width: number) => {
+      const max = Math.max(MOBILE_COLUMN_WIDTH_MAX, Math.ceil(width));
+      slider.max = String(max);
+      slider.value = String(clampColumnWidth(width, MOBILE_COLUMN_WIDTH_MIN, max));
+      valueEl.setText(String(Math.round(width)));
+    };
+    const applyWidth = (width: number) => {
+      const nextWidth = Math.round(Math.max(MOBILE_COLUMN_WIDTH_MIN, width));
+      config.columnWidths = { ...(config.columnWidths || {}), [col.key]: nextWidth };
+      dirty = true;
+      setSliderValue(nextWidth);
+      syncTableColumnLayouts(root, config);
+    };
+    const persist = () => {
+      if (!dirty) return;
+      this.pendingUndoLabel = t("undo.columnWidthConfig");
+      this.scheduleConfigSave();
+      dirty = false;
+    };
+    const close = () => {
+      persist();
+      cleanup();
+    };
+    const cleanup = () => {
+      backdrop.remove();
+      panel.remove();
+      doc.removeEventListener("keydown", onKeydown, true);
+      if (this.mobileColumnWidthPanelCleanup === close) {
+        this.mobileColumnWidthPanelCleanup = undefined;
+      }
+    };
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      close();
+    };
+
+    slider.oninput = () => applyWidth(Number(slider.value));
+    slider.onchange = () => persist();
+    autoButton.onclick = () => {
+      applyWidth(this.calculateAutoColumnWidth(col, this.rows));
+      persist();
+    };
+    backdrop.onclick = () => close();
+    doc.addEventListener("keydown", onKeydown, true);
+    this.mobileColumnWidthPanelCleanup = close;
+    setSliderValue(config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || 150);
+  }
+
+  private closeMobileColumnWidthPanel(): void {
+    this.mobileColumnWidthPanelCleanup?.();
+    this.mobileColumnWidthPanelCleanup = undefined;
   }
 
   private autoFitColumn(col: ColumnDef): void {

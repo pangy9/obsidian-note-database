@@ -1,5 +1,15 @@
-import { ColumnDef, RowData } from "../data/types";
+import { ColumnDef, RowData, ViewConfig } from "../data/types";
 import { toMultiSelectValuesForKey } from "../data/ColumnTypes";
+
+/** Resolved width (px) for a column: explicit columnWidths > col.width > defaultColumnWidth > fallback. */
+export function getFieldWidth(config: ViewConfig, col: ColumnDef, fallback = 150): number {
+  return config.columnWidths?.[col.key] || col.width || config.defaultColumnWidth || fallback;
+}
+
+/** Clamp a card field width so it stays strictly below the card width (value column must not fill the card). */
+export function clampCardFieldWidth(fieldWidth: number, cardWidth: number): number {
+  return Math.min(fieldWidth, Math.max(0, cardWidth - 1));
+}
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
 let cachedFontFamily = "";

@@ -1,5 +1,5 @@
 import { setIcon } from "obsidian";
-import { ColumnDef, DatabaseConfig, DatabaseViewType, GroupOrderMode, TimelineScale, ViewConfig } from "../data/types";
+import { ColumnDef, DatabaseConfig, DatabaseViewType, DateGroupMode, GroupOrderMode, TimelineScale, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
@@ -7,10 +7,12 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
-import { openDropdownMenu } from "./DropdownField";
+import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
 import { CalendarTimelineToolbarRenderer } from "./CalendarTimelineToolbarRenderer";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "../data/GroupVisibility";
+import { getDateGroupMode } from "../data/GroupDisplay";
+import { isHTMLElement } from "./DomGuards";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -48,6 +50,8 @@ export interface ToolbarActions {
   setGroupByField(value: string): void;
   setGroupOrderMode(mode: GroupOrderMode): void;
   setShowEmptyGroups(field: string, value: boolean): void;
+  setGroupDateMode(field: string, mode: DateGroupMode): void;
+  setGroupRowLimit(limit: number): void;
   setBoardSubgroupEnabled(enabled: boolean): void;
   setBoardSubgroupField(value: string): void;
   toggleViewConfig(anchorEl: HTMLElement): void;
@@ -92,6 +96,8 @@ export class ToolbarRenderer {
   private groupPopoverViewType?: DatabaseViewType;
   private groupPopoverActions?: ToolbarActions;
   private groupPopoverState?: DatabaseViewState;
+  private groupRowLimitEditingCustom = false;
+  private groupRowLimitFocusCustomInput = false;
   private viewTabPopover?: HTMLElement;
   private removeViewTabPopoverListener?: () => void;
   private exportPopover?: HTMLElement;
@@ -1104,16 +1110,28 @@ export class ToolbarRenderer {
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      if (target && (panel.contains(target) || anchorEl.contains(target))) return;
+      if (this.isGroupPopoverActiveTarget(target, panel, anchorEl)) return;
       this.closeGroupPopover();
     };
     const popoverTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
-    const removeAutoClose = installPopoverAutoClose({ panel, anchorEl, close: () => this.closeGroupPopover() });
+    const removeAutoClose = installPopoverAutoClose({
+      panel,
+      anchorEl,
+      close: () => this.closeGroupPopover(),
+      isActiveTarget: (target) => this.isGroupPopoverActiveTarget(target, panel, anchorEl),
+    });
     this.removeGroupPopoverListener = () => {
       window.clearTimeout(popoverTimer);
       window.activeDocument.removeEventListener("mousedown", onOutside, true);
       removeAutoClose();
     };
+  }
+
+  private isGroupPopoverActiveTarget(target: EventTarget | null, panel: HTMLElement, anchorEl: HTMLElement): boolean {
+    if (!(target instanceof Node)) return false;
+    if (panel.contains(target) || anchorEl.contains(target)) return true;
+    const element = isHTMLElement(target) ? target : target.parentElement;
+    return element?.closest(".db-group-row-limit-dropdown-popover") != null;
   }
 
   private populateGroupPopover(
@@ -1132,9 +1150,13 @@ export class ToolbarRenderer {
       if (isEmptyGroupVisibilityColumn(config, groupColumn)) {
         this.renderGroupVisibilitySwitch(panel, config, groupValue, actions);
       }
+      if (groupColumn.type === "datetime") {
+        this.renderGroupDateModeSwitch(panel, config, groupValue, actions);
+      }
       if (currentViewType === "board") {
         this.renderBoardSubgroupSwitch(panel, config, actions);
       }
+      this.renderGroupRowLimitRow(panel, config, actions);
       this.addGroupOrderRows(panel, config, groupColumn, actions);
     }
 
@@ -1220,6 +1242,79 @@ export class ToolbarRenderer {
       this.rebuildGroupPopover();
     };
     input.onclick = (event) => event.stopPropagation();
+  }
+
+  private renderGroupDateModeSwitch(
+    panel: HTMLElement,
+    config: ViewConfig,
+    field: string,
+    actions: ToolbarActions
+  ): void {
+    const row = panel.createEl("label", { cls: "db-group-popover-row db-group-popover-switch-row" });
+    const marker = row.createSpan({ cls: "db-group-popover-marker" });
+    setIcon(marker, "clock");
+    row.createSpan({ cls: "db-group-popover-label", text: t("viewConfig.dateGroupIgnoreTime") });
+    const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });
+    input.checked = getDateGroupMode(config, field) === "date";
+    input.onchange = (event) => {
+      event.stopPropagation();
+      actions.setGroupDateMode(field, input.checked ? "date" : "exact");
+      this.rebuildGroupPopover();
+    };
+    input.onclick = (event) => event.stopPropagation();
+  }
+
+  private renderGroupRowLimitRow(panel: HTMLElement, config: ViewConfig, actions: ToolbarActions): void {
+    const current = config.groupRowLimit || 0;
+    const presets = [10, 25, 50, 100];
+    const isPreset = presets.includes(current);
+    const customActive = this.groupRowLimitEditingCustom || (!isPreset && current > 0);
+    const options: DropdownOption[] = [
+      { value: "0", text: t("viewConfig.groupRowLimitUnlimited") },
+      ...presets.map((value) => ({ value: String(value), text: String(value) })),
+      { value: "custom", text: t("viewConfig.groupRowLimitCustom") },
+    ];
+    const value = customActive ? "custom" : String(current);
+    createDropdownField({
+      parent: panel,
+      label: t("viewConfig.groupRowLimit"),
+      options,
+      value,
+      onChange: (value) => {
+        const custom = value === "custom";
+        this.groupRowLimitEditingCustom = custom;
+        this.groupRowLimitFocusCustomInput = custom;
+        actions.setGroupRowLimit(custom ? (current > 0 ? current : 25) : Number(value) || 0);
+        this.rebuildGroupPopover();
+      },
+      icon: "list-filter",
+      className: "db-group-popover-row db-group-row-limit-select-row",
+      popoverClassName: "db-group-row-limit-dropdown-popover",
+    });
+    if (customActive) {
+      const row = panel.createDiv({ cls: "db-group-popover-row db-group-row-limit-custom-row" });
+      row.createSpan({ cls: "db-group-popover-marker" });
+      row.createSpan({ cls: "db-group-popover-label", text: t("viewConfig.groupRowLimitCustom") });
+      const input = row.createEl("input", {
+        cls: "db-view-config-number db-group-row-limit-input",
+        attr: { type: "number", min: "1", max: "500" },
+      });
+      input.value = String(current);
+      input.onclick = (event) => event.stopPropagation();
+      input.onchange = () => {
+        const n = Math.max(1, Math.round(Number(input.value) || 0));
+        this.groupRowLimitEditingCustom = true;
+        actions.setGroupRowLimit(n);
+        this.rebuildGroupPopover();
+      };
+      if (this.groupRowLimitFocusCustomInput) {
+        this.groupRowLimitFocusCustomInput = false;
+        window.setTimeout(() => {
+          input.focus();
+          input.select();
+        }, 0);
+      }
+    }
   }
 
   private renderBoardSubgroupSwitch(
@@ -1324,6 +1419,8 @@ export class ToolbarRenderer {
   private closeGroupPopover(): void {
     this.removeGroupPopoverListener?.();
     this.removeGroupPopoverListener = undefined;
+    this.groupRowLimitEditingCustom = false;
+    this.groupRowLimitFocusCustomInput = false;
     this.groupPopover?.remove();
     this.groupPopover = undefined;
   }

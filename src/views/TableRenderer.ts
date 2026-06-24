@@ -8,6 +8,8 @@ import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback"
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
+import { renderGroupExpandControls } from "./GroupExpandControls";
+import { getGroupVisibleCount } from "../data/GroupVisibility";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -41,6 +43,7 @@ export interface TableRendererActions {
   createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
+  expandGroup?(field: string, key: string, count: number): void;
   /** When true, the "+ 新建" row is not rendered */
   readonly hideCreateEntry?: boolean;
   /** When true, row-level data mutation controls are not rendered */
@@ -133,11 +136,13 @@ export class TableRenderer {
       this.renderHeader(table, config, visibleColumns, group.rows);
       const tbody = table.createEl("tbody");
       if (groupField) this.setupGroupDropTarget(tbody, groupField, group.key);
-      this.renderRows(tbody, config, group.rows, visibleColumns, groupField, group.key, groups);
+      const visibleCount = groupField ? getGroupVisibleCount(config, groupField, group.key, group.rows.length) : group.rows.length;
+      this.renderRows(tbody, config, group.rows.slice(0, visibleCount), visibleColumns, groupField, group.key, groups);
       if (!this.actions.hideCreateEntry) {
         const defaults = groupField ? this.getGroupDefaults(config, groupField, group.key) : undefined;
         this.renderNewRow(tbody, visibleColumns.length + 1, defaults, group.rows);
       }
+      if (groupField) renderGroupExpandControls(tableWrap, config, groupField, group.key, group.rows.length, this.actions);
     }
   }
 
@@ -269,15 +274,15 @@ export class TableRenderer {
         // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
         // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
         this.setupRowDrag(selectInner, tr, row, rows, config, groupField, groupKey);
+        if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
+          this.renderMobileMoveButton(selectInner, config, row, rows, groupField, groupKey, groups);
+        }
         const cb = selectInner.createEl("input", { attr: { type: "checkbox" } });
         cb.checked = this.actions.isRowSelected(row);
         cb.onclick = (event) => {
           event.stopPropagation();
           this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
         };
-        if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
-          this.renderMobileMoveButton(selectInner, config, row, rows, groupField, groupKey, groups);
-        }
       }
       for (const col of columns) {
         const td = tr.createEl("td", {

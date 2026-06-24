@@ -187,6 +187,9 @@ export class ColumnOperations {
       targetCol.key = newKey;
       targetCol.label = newLabel;
       targetCol.wrap = result.wrap || undefined;
+      if (result.numberDisplayStyle !== undefined) {
+        targetCol.numberDisplayStyle = result.numberDisplayStyle === "plain" ? undefined : result.numberDisplayStyle;
+      }
       if (newIsFileField) {
         targetCol.type = getFileFieldFixedType(newKey);
         targetCol.statusOptions = undefined;

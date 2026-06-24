@@ -1048,8 +1048,16 @@ export class ViewConfigPanelRenderer {
   }
 
   private renderDefaultColumnWidth(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
+    // In card views, cap the default field width below the card width so the control never
+    // offers a value larger than the card (board/gallery). table/list have no card width.
+    const cardWidth = config.viewType === "board" ? (config.boardColumnWidth || 280)
+      : config.viewType === "gallery" ? (config.galleryCardSize || 250)
+      : 0;
+    // Align maxWidth to the slider step (10) so the range thumb's rightmost value equals the
+    // number input's max — otherwise the slider snaps to a lower step value than max allows.
+    const maxWidth = cardWidth > 0 ? Math.max(80, Math.floor((cardWidth - 1) / 10) * 10) : 800;
     const setDefaultColumnWidth = (value: number) => {
-      const next = Math.max(80, Math.min(800, Math.round(value)));
+      const next = Math.max(80, Math.min(maxWidth, Math.round(value)));
       config.defaultColumnWidth = next;
       const columnWidths = { ...(config.columnWidths || {}) };
       for (const col of config.schema.columns) {
@@ -1058,7 +1066,8 @@ export class ViewConfigPanelRenderer {
       }
       config.columnWidths = columnWidths;
     };
-    this.renderRange(panel, t("viewConfig.defaultColumnWidth"), this.getDefaultColumnWidth(config), 80, 800, 10, (value) => {
+    const current = Math.min(this.getDefaultColumnWidth(config), maxWidth);
+    this.renderRange(panel, t("viewConfig.defaultColumnWidth"), current, 80, maxWidth, 10, (value) => {
       setDefaultColumnWidth(value);
       actions.onChange(t("undo.defaultColumnWidthConfig"));
     }, setDefaultColumnWidth);

@@ -11,6 +11,9 @@ import {
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { DataSource } from "../data/DataSource";
 import { formatDateTimeValueDisplay, formatDateValueDisplay, parseDateTimeParts } from "../data/DateTimeFormat";
+import { isImeComposing } from "../data/KeyboardUtils";
+import { normalizeExternalUrlTarget, parseTextLink } from "../data/TextLink";
+import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
 import { t } from "../i18n";
@@ -22,6 +25,7 @@ import { safeString } from "../data/SafeString";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderInlineMarkdown } from "./InlineMarkdownRenderer";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -165,7 +169,25 @@ export class CellRenderer {
         this.renderDate(td, row, col, value, true);
         break;
       default:
-        td.textContent = String(value);
+        if (col.textRenderMode === "markdown" && !isFileFieldKey(col.key)) {
+          const nodes = parseInlineMarkdown(value);
+          if (nodes) {
+            td.empty();
+            renderInlineMarkdown(td, nodes, {
+              linkClickStrategy: "table",
+              onOpenLink: (target, external) => {
+                if (external) window.open(target);
+                else void this.app?.workspace.openLinkText(target, row.file.path);
+              },
+            });
+          } else {
+            td.textContent = String(value);
+          }
+        } else if (col.textRenderMode === "link" && !isFileFieldKey(col.key)) {
+          this.renderTextLink(td, row, value);
+        } else {
+          td.textContent = String(value);
+        }
     }
 
     if (!this.isReadOnly && col.type === "computed") {
@@ -192,6 +214,35 @@ export class CellRenderer {
     if (style === "progress") { td.empty(); renderProgress(td, num, col.numberDisplayConfig); return; }
     if (style === "ring") { td.empty(); renderProgressRing(td, num, col.numberDisplayConfig); return; }
     td.textContent = this.formatNumber(num);
+  }
+
+  /** Render a link-mode text value as a styled link. A single click opens it
+   *  after a short delay so a double-click can still enter the inline editor
+   *  (makeEditable's dblclick); the second click of a dblclick cancels the open.
+   *  This coexists with the cell's inline-edit interaction. */
+  private renderTextLink(td: HTMLElement, row: RowData, value: unknown): void {
+    const link = parseTextLink(value);
+    if (!link) { td.textContent = String(value); return; }
+    const anchor = td.createEl("a", {
+      cls: `db-text-link ${link.external ? "external-link" : "internal-link"}`,
+      text: link.label,
+      attr: { title: link.target, href: link.external ? link.target : "#" },
+    });
+    let openTimer: number | undefined;
+    anchor.addEventListener("click", (event) => {
+      event.preventDefault();
+      // Second click of a double-click: cancel the pending open so the dblclick
+      // (inline edit) wins.
+      if (event.detail > 1) {
+        if (openTimer !== undefined) { window.clearTimeout(openTimer); openTimer = undefined; }
+        return;
+      }
+      openTimer = window.setTimeout(() => {
+        openTimer = undefined;
+        if (link.external) window.open(link.target);
+        else void this.app?.workspace.openLinkText(link.target, row.file.path);
+      }, 280);
+    });
   }
 
   private getEffectiveDisplayType(col: ColumnDef): ColumnDef["type"] {
@@ -433,6 +484,7 @@ export class CellRenderer {
       close();
     };
     const onKeydown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         close();
@@ -649,6 +701,7 @@ export class CellRenderer {
           };
           input.onblur = finish;
           input.onkeydown = (ev) => {
+            if (isImeComposing(ev)) return;
             if (ev.key === "Enter") finish();
             if (ev.key === "Escape") { finished = true; input.replaceWith(label); }
           };
@@ -756,6 +809,7 @@ export class CellRenderer {
       attr: { placeholder: t("cell.addOption"), type: "text" },
     });
     addInput.onkeydown = (e) => {
+      if (isImeComposing(e)) return;
       if (e.key !== "Enter") return;
       e.preventDefault();
       if (isFileTags) {
@@ -920,6 +974,7 @@ export class CellRenderer {
       prev?: HTMLInputElement,
       _next?: HTMLInputElement,
     ) => {
+      if (isImeComposing(event)) return;
       // Allow navigation and control keys
       if (["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
         if (event.key === "Backspace" && input.value === "" && prev) {
@@ -1116,6 +1171,7 @@ export class CellRenderer {
     };
 
     const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       cancel();
@@ -1129,6 +1185,7 @@ export class CellRenderer {
       input: HTMLInputElement,
       prev?: HTMLInputElement,
     ) => {
+      if (isImeComposing(event)) return;
       if (["Backspace", "Delete", "Tab", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
         if (event.key === "Backspace" && input.value === "" && prev) {
           event.preventDefault();
@@ -1388,6 +1445,13 @@ export class CellRenderer {
 
     let committed = false;
 
+    // Markdown-mode columns get a format toolbar above the textarea, plus
+    // paste-URL-over-selection (wraps the selection into a [text](url) link).
+    if (col.textRenderMode === "markdown" && !isFileFieldKey(col.key)) {
+      this.buildMarkdownToolbar(popover, textarea);
+      this.attachPasteUrlAsLink(textarea);
+    }
+
     const close = () => {
       popover.remove();
       td.removeClass("db-cell-editing");
@@ -1420,6 +1484,7 @@ export class CellRenderer {
     };
     
     const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       cancel();
@@ -1439,6 +1504,7 @@ export class CellRenderer {
     
     textarea.addEventListener("input", resize);
     textarea.addEventListener("keydown", (event) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         void save();
@@ -1511,6 +1577,72 @@ export class CellRenderer {
     return col.type === "text";
   }
 
+  /** Build a format toolbar above the textarea for markdown-mode text columns.
+   *  Each button wraps/inserts the matching marker around the current selection,
+   *  then keeps focus in the textarea. */
+  private buildMarkdownToolbar(popover: HTMLElement, textarea: HTMLTextAreaElement): void {
+    const bar = createDiv({ cls: "db-md-toolbar" });
+    // Insert before the textarea so the toolbar sits on top.
+    textarea.parentElement?.insertBefore(bar, textarea);
+
+    const buttons: { icon: string; title: string; run: () => void }[] = [
+      { icon: "bold", title: t("mdToolbar.bold"), run: () => this.wrapSelection(textarea, "**", "**", t("mdToolbar.bold")) },
+      { icon: "italic", title: t("mdToolbar.italic"), run: () => this.wrapSelection(textarea, "*", "*", t("mdToolbar.italic")) },
+      { icon: "strikethrough", title: t("mdToolbar.strike"), run: () => this.wrapSelection(textarea, "~~", "~~", t("mdToolbar.strike")) },
+      { icon: "highlighter", title: t("mdToolbar.highlight"), run: () => this.wrapSelection(textarea, "==", "==", t("mdToolbar.highlight")) },
+      { icon: "code", title: t("mdToolbar.code"), run: () => this.wrapSelection(textarea, "`", "`", t("mdToolbar.code")) },
+      { icon: "sigma", title: t("mdToolbar.math"), run: () => this.wrapSelection(textarea, "$", "$", "x^2") },
+      { icon: "link", title: t("mdToolbar.link"), run: () => this.wrapSelection(textarea, "[", "](url)", t("mdToolbar.linkText")) },
+      { icon: "file-symlink", title: t("mdToolbar.wikilink"), run: () => this.wrapSelection(textarea, "[[", "]]", t("mdToolbar.wikilinkText")) },
+    ];
+
+    for (const def of buttons) {
+      const btn = bar.createEl("button", { cls: "db-md-toolbar-btn", attr: { type: "button", title: def.title, "aria-label": def.title } });
+      setIcon(btn, def.icon);
+      // mousedown would blur the textarea and lose the selection; prevent it.
+      btn.addEventListener("mousedown", (event) => event.preventDefault());
+      btn.addEventListener("click", (event) => { event.preventDefault(); def.run(); });
+    }
+  }
+
+  /** Wrap the textarea's current selection with prefix/suffix. When nothing is
+   *  selected, insert `placeholder` between the markers and select it. */
+  private wrapSelection(textarea: HTMLTextAreaElement, prefix: string, suffix: string, placeholder: string): void {
+    const value = textarea.value;
+    const start = textarea.selectionStart ?? value.length;
+    const end = textarea.selectionEnd ?? value.length;
+    const selected = value.slice(start, end);
+    const inner = selected || placeholder;
+    textarea.value = value.slice(0, start) + prefix + inner + suffix + value.slice(end);
+    // Select the inner text so the user can keep typing / re-wrap.
+    const innerStart = start + prefix.length;
+    textarea.focus();
+    textarea.setSelectionRange(innerStart, innerStart + inner.length);
+    textarea.dispatchEvent(new Event("input"));
+  }
+
+  /** When text is selected and a web URL is pasted, wrap the selection into
+   *  a normalized `[selection](url)` markdown link (Notion/editor-like behavior).
+   *  Plain pastes, or pastes without a selection, fall through to default handling. */
+  private attachPasteUrlAsLink(textarea: HTMLTextAreaElement): void {
+    textarea.addEventListener("paste", (event: ClipboardEvent) => {
+      const pasted = event.clipboardData?.getData("text/plain")?.trim();
+      const normalizedUrl = pasted ? normalizeExternalUrlTarget(pasted) : null;
+      if (!normalizedUrl) return;
+      const start = textarea.selectionStart ?? 0;
+      const end = textarea.selectionEnd ?? 0;
+      if (start === end) return; // no selection → let the URL paste normally
+      event.preventDefault();
+      const value = textarea.value;
+      const label = value.slice(start, end);
+      textarea.value = `${value.slice(0, start)}[${label}](${normalizedUrl})${value.slice(end)}`;
+      const caret = start + `[${label}](${normalizedUrl})`.length;
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+      textarea.dispatchEvent(new Event("input"));
+    });
+  }
+
   private editSingleLinePopover(
     td: HTMLElement,
     currentValue: string,
@@ -1560,12 +1692,14 @@ export class CellRenderer {
       void save();
     };
     const onDocumentKeydown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       cancel();
     };
 
     input.onkeydown = (event) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
         void save();
@@ -1636,6 +1770,7 @@ export class CellRenderer {
     save: () => Promise<void>,
     cancel: () => void
   ): void {
+    if (isImeComposing(event)) return;
     if (event.key === "Enter") void save();
     if (event.key === "Escape") cancel();
   }

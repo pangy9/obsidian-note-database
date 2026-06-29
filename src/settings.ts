@@ -6,6 +6,7 @@ import { DeleteDatabaseModal } from "./views/modals/DeleteDatabaseModal";
 import { DEFAULT_STATUS_PRESET_ID, getBuiltinStatusPresets, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
 import { StatusPresetManagerModal } from "./views/modals/StatusPresetManagerModal";
 import { AddDatabaseModal } from "./views/modals/AddDatabaseModal";
+import { AddDatabaseModalResult, applyAddDatabaseResult } from "./data/AddDatabaseResult";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { confirmWithModal } from "./views/modals/ConfirmModal";
 import { createDropdownField, DropdownOption } from "./views/DropdownField";
@@ -194,11 +195,13 @@ export class SettingsTab extends PluginSettingTab {
     btn.onclick = async () => {
       const result = await new AddDatabaseModal(
         this.app,
-        this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+        this.plugin.settings.statusPresets,
+        this.plugin.settings.defaultStatusPresetId,
       ).openAndWait();
       if (!result) return;
       const name = this.getUniqueDatabaseName(result.name || t("defaults.newDatabase"));
-      const db = this.createEmptyDatabase(name, result.sourceFolder, result.typeFilter);
+      const db = this.createEmptyDatabase(result);
+      db.name = name;
       const file = await this.plugin.dataSource.createViewDefFile(
         this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
         name,
@@ -281,13 +284,12 @@ export class SettingsTab extends PluginSettingTab {
     return `${baseName} ${i}`;
   }
 
-  private createEmptyDatabase(name = t("defaults.newDatabase"), sourceFolder = "", typeFilter = ""): DatabaseConfig {
+  private createEmptyDatabase(result: AddDatabaseModalResult): DatabaseConfig {
     const view: ViewConfig = {
       id: generateId(),
       name: t("common.tableView"),
       viewType: "table",
-      sourceFolder,
-      typeFilter,
+      sourceFolder: result.sourceFolder,
       schema: {
         columns: [
           { key: "file.name", label: t("defaults.nameColumn"), type: "text" },
@@ -297,14 +299,15 @@ export class SettingsTab extends PluginSettingTab {
       sortColumn: "",
       sortDirection: "asc",
     };
-    return {
+    const db: DatabaseConfig = {
       id: generateId(),
-      name,
-      sourceFolder,
-      typeFilter: typeFilter || undefined,
+      name: result.name || t("defaults.newDatabase"),
+      sourceFolder: result.sourceFolder,
       schema: view.schema,
       views: [view],
     };
+    applyAddDatabaseResult(db, result);
+    return db;
   }
 
   /** 渲染文件型数据库卡片（含拖拽、路径、元信息、hover 操作按钮） */

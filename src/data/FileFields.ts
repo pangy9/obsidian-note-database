@@ -25,6 +25,8 @@ export const BASE_FILE_FIELD_KEYS = new Set([
 
 const EDITABLE_FILE_FIELD_KEYS = new Set(["file.name", "file.tags"]);
 const FILE_LINK_LIST_FIELD_KEYS = new Set(["file.links", "file.backlinks", "file.embeds"]);
+/** Read-only file identity fields rendered as a link that opens the row's own file. */
+const FILE_SELF_LINK_FIELD_KEYS = new Set(["file.file", "file.path", "file.basename"]);
 
 /** Any file.* key is reserved for virtual file metadata, even if unsupported. */
 export function isFileFieldKey(key: string): boolean {
@@ -49,6 +51,11 @@ export function isReadonlyFileField(key: string): boolean {
 /** File fields that should render as Obsidian links instead of option badges. */
 export function isFileLinkListField(key: string): boolean {
   return FILE_LINK_LIST_FIELD_KEYS.has(key);
+}
+
+/** Read-only file fields (file.file/path/basename) rendered as a link to the row's file. */
+export function isFileSelfLinkField(key: string): boolean {
+  return FILE_SELF_LINK_FIELD_KEYS.has(key);
 }
 
 export function isBaseFileField(key: string): boolean {

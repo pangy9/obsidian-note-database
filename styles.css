@@ -1080,7 +1080,7 @@
 .note-database-container .db-dropdown-field {
   position: relative;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  grid-template-columns: minmax(0, 1fr) 16px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -1102,12 +1102,20 @@
   background: var(--background-modifier-hover);
 }
 
+.note-database-container .db-dropdown-field.has-current-icon {
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+}
+
 .note-database-container .db-dropdown-field:disabled {
   cursor: default;
   opacity: 0.5;
 }
 
-.note-database-container .db-dropdown-field-icon,
+.note-database-container .db-dropdown-field-icon {
+  display: none;
+}
+
+.note-database-container .db-dropdown-field.has-current-icon .db-dropdown-field-icon,
 .note-database-container .db-dropdown-field-chevron {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1185,13 +1193,22 @@
 }
 
 .note-database-container .db-dropdown-search {
-  position: sticky;
-  top: -8px;
-  z-index: 1;
   flex: 0 0 auto;
-  margin: -2px -2px 5px;
-  padding: 2px;
-  background: var(--background-primary);
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+/* When searchable, the popover itself doesn't scroll — an inner .db-dropdown-options
+   does, so the search box stays truly fixed at the top (no sticky drift). */
+.note-database-container .db-dropdown-popover.is-searchable {
+  overflow: hidden;
+}
+
+.note-database-container .db-dropdown-options {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .note-database-container .db-dropdown-search input {
@@ -1351,6 +1368,20 @@
   white-space: nowrap;
 }
 
+/* Right-aligned muted hint on a column-menu item showing the current display
+   style (e.g. "评分" for number, "链接" for text). Menu items live on body. */
+.menu-item .db-menu-item-current {
+  margin-left: auto;
+  max-width: 96px;
+  overflow: hidden;
+  padding-left: 12px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .note-database-modal .db-dropdown-field {
   position: relative;
   display: grid;
@@ -1376,10 +1407,15 @@
   border-color: var(--background-modifier-border-hover);
 }
 
+.note-database-modal .db-dropdown-field.has-current-icon {
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+}
+
 .note-database-modal .db-dropdown-field-icon {
   display: none;
 }
 
+.note-database-modal .db-dropdown-field.has-current-icon .db-dropdown-field-icon,
 .note-database-modal .db-dropdown-field-chevron {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1571,10 +1607,15 @@
   border-color: var(--background-modifier-border-hover);
 }
 
+.note-database-settings .db-dropdown-field.has-current-icon {
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+}
+
 .note-database-settings .db-dropdown-field-icon {
   display: none;
 }
 
+.note-database-settings .db-dropdown-field.has-current-icon .db-dropdown-field-icon,
 .note-database-settings .db-dropdown-field-chevron {
   display: inline-flex;
   flex: 0 0 auto;
@@ -3162,6 +3203,10 @@
   border-bottom: 0;
 }
 
+.note-database-container .db-table.is-create-entry-hidden tbody tr:last-child td {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
 /* 列头单元格（属性名、排序指示器、"..."菜单按钮） */
 .note-database-container .db-table th {
   position: relative;
@@ -3440,32 +3485,32 @@
 .db-num-color-violet { --db-number-color: #7c3aed; }
 .db-num-color-rose { --db-number-color: #e11d48; }
 
-/* number 显示样式选项面板（列菜单"显示样式"子菜单内的多级选项） */
-.db-column-number-style-popover.db-column-menu-subpopover {
+/* 字段显示样式选项面板（列菜单"显示样式"子菜单内的多级选项） */
+.db-column-display-style-popover.db-column-menu-subpopover {
   width: 292px;
   min-width: 292px;
   max-width: 292px;
   padding: 8px;
 }
-.db-column-number-style-popover .db-numopt-section {
+.db-column-display-style-popover .db-displayopt-section {
   padding: 0 0 8px;
 }
-.db-column-number-style-popover .db-numopt-section + .db-numopt-section {
+.db-column-display-style-popover .db-displayopt-section + .db-displayopt-section {
   border-top: 1px solid var(--background-modifier-border);
   padding-top: 8px;
 }
-.db-column-number-style-popover .db-numopt-section:last-child {
+.db-column-display-style-popover .db-displayopt-section:last-child {
   padding-bottom: 0;
 }
-.db-column-number-style-popover .db-numopt-section-title {
+.db-column-display-style-popover .db-displayopt-section-title {
   margin: 0 0 5px;
   padding: 0 6px;
   color: var(--text-normal);
   font-size: 12px;
   font-weight: 700;
 }
-.db-column-number-style-popover .db-numopt-row,
-.db-column-number-style-popover .db-dropdown-field.db-numopt-row {
+.db-column-display-style-popover .db-displayopt-row,
+.db-column-display-style-popover .db-dropdown-field.db-displayopt-row {
   position: relative;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -3486,13 +3531,13 @@
   font-size: 12px;
   text-align: left;
 }
-.db-column-number-style-popover .db-numopt-row:hover,
-.db-column-number-style-popover .db-dropdown-field.db-numopt-row:hover {
+.db-column-display-style-popover .db-displayopt-row:hover,
+.db-column-display-style-popover .db-dropdown-field.db-displayopt-row:hover {
   background: var(--background-modifier-hover);
 }
-.db-column-number-style-popover .db-numopt-row-icon,
-.db-column-number-style-popover .db-dropdown-field-icon,
-.db-column-number-style-popover .db-dropdown-field-chevron {
+.db-column-display-style-popover .db-displayopt-row-icon,
+.db-column-display-style-popover .db-dropdown-field-icon,
+.db-column-display-style-popover .db-dropdown-field-chevron {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -3500,22 +3545,22 @@
   min-width: 0;
   color: var(--text-faint);
 }
-.db-column-number-style-popover .db-numopt-row-icon svg,
-.db-column-number-style-popover .db-dropdown-field-icon svg,
-.db-column-number-style-popover .db-dropdown-field-chevron svg {
+.db-column-display-style-popover .db-displayopt-row-icon svg,
+.db-column-display-style-popover .db-dropdown-field-icon svg,
+.db-column-display-style-popover .db-dropdown-field-chevron svg {
   display: block;
   width: 14px;
   height: 14px;
 }
-.db-column-number-style-popover .db-numopt-row-text,
-.db-column-number-style-popover .db-dropdown-field-text {
+.db-column-display-style-popover .db-displayopt-row-text,
+.db-column-display-style-popover .db-dropdown-field-text {
   display: flex;
   align-items: baseline;
   gap: 10px;
   min-width: 0;
 }
-.db-column-number-style-popover .db-numopt-label,
-.db-column-number-style-popover .db-dropdown-field-label {
+.db-column-display-style-popover .db-displayopt-label,
+.db-column-display-style-popover .db-dropdown-field-label {
   min-width: 0;
   overflow: hidden;
   color: var(--text-normal);
@@ -3524,7 +3569,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.db-column-number-style-popover .db-dropdown-field-value {
+.db-column-display-style-popover .db-dropdown-field-value {
   overflow: hidden;
   color: var(--text-faint);
   font-size: 12px;
@@ -3532,10 +3577,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.db-column-number-style-popover .db-numopt-switch .db-toggle-switch {
+.db-column-display-style-popover .db-displayopt-switch .db-toggle-switch {
   justify-self: end;
 }
-.db-column-number-style-popover .db-toggle-switch {
+.db-column-display-style-popover .db-toggle-switch {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
@@ -3551,7 +3596,7 @@
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.db-column-number-style-popover .db-toggle-switch::before {
+.db-column-display-style-popover .db-toggle-switch::before {
   content: "";
   position: absolute;
   top: 2px;
@@ -3563,20 +3608,20 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
   transition: transform 0.15s ease;
 }
-.db-column-number-style-popover .db-toggle-switch:checked {
+.db-column-display-style-popover .db-toggle-switch:checked {
   border-color: var(--interactive-accent);
   background: var(--interactive-accent);
   background-image: none;
 }
-.db-column-number-style-popover .db-toggle-switch:checked::before {
+.db-column-display-style-popover .db-toggle-switch:checked::before {
   transform: translateX(16px);
 }
-.db-column-number-style-popover .db-toggle-switch::after,
-.db-column-number-style-popover .db-toggle-switch:checked::after {
+.db-column-display-style-popover .db-toggle-switch::after,
+.db-column-display-style-popover .db-toggle-switch:checked::after {
   content: none;
   display: none;
 }
-.db-column-number-style-popover .db-numopt-input {
+.db-column-display-style-popover .db-displayopt-input {
   justify-self: end;
   width: 72px;
   height: 24px;
@@ -3588,11 +3633,11 @@
   color: var(--text-normal);
   font-size: 12px;
 }
-.db-column-number-style-popover .db-numopt-colors {
+.db-column-display-style-popover .db-displayopt-colors {
   grid-template-columns: 18px minmax(0, auto) minmax(0, 1fr);
   align-items: start;
 }
-.db-column-number-style-popover .db-numopt-swatches {
+.db-column-display-style-popover .db-displayopt-swatches {
   display: flex;
   justify-content: flex-start;
   flex-wrap: wrap;
@@ -3600,7 +3645,7 @@
   min-width: 0;
   padding-top: 1px;
 }
-.db-column-number-style-popover .db-numopt-swatch {
+.db-column-display-style-popover .db-displayopt-swatch {
   width: 18px;
   height: 18px;
   border-radius: 2px;
@@ -3609,28 +3654,28 @@
   box-shadow: 0 0 0 1px var(--background-modifier-border);
   cursor: pointer;
 }
-.db-column-number-style-popover .db-numopt-swatch.is-selected {
+.db-column-display-style-popover .db-displayopt-swatch.is-selected {
   box-shadow:
     0 0 0 1px var(--background-primary),
     0 0 0 3px #000;
 }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-gray { background: #787774; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-brown { background: #8f5d45; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-orange { background: #b65f00; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-yellow { background: #8f6a00; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-green { background: #448361; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-blue { background: #2f6fad; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-purple { background: #6940a5; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-pink { background: #a83272; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-red { background: #d44c47; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-slate { background: #64748b; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-cyan { background: #0891b2; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-teal { background: #0f766e; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-lime { background: #65a30d; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-indigo { background: #4f46e5; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-violet { background: #7c3aed; }
-.db-column-number-style-popover .db-numopt-swatch.db-option-color-rose { background: #e11d48; }
-.db-numopt-dropdown-popover {
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-gray { background: #787774; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-brown { background: #8f5d45; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-orange { background: #b65f00; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-yellow { background: #8f6a00; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-green { background: #448361; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-blue { background: #2f6fad; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-purple { background: #6940a5; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-pink { background: #a83272; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-red { background: #d44c47; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-slate { background: #64748b; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-cyan { background: #0891b2; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-teal { background: #0f766e; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-lime { background: #65a30d; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-indigo { background: #4f46e5; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-violet { background: #7c3aed; }
+.db-column-display-style-popover .db-displayopt-swatch.db-option-color-rose { background: #e11d48; }
+.db-displayopt-dropdown-popover {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -3647,7 +3692,7 @@
   font-size: 12px;
   z-index: 1001;
 }
-.db-numopt-dropdown-popover .db-dropdown-option {
+.db-displayopt-dropdown-popover .db-dropdown-option {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
@@ -3666,39 +3711,39 @@
   text-align: left;
   cursor: pointer;
 }
-.db-numopt-dropdown-popover .db-dropdown-option.has-icon {
+.db-displayopt-dropdown-popover .db-dropdown-option.has-icon {
   grid-template-columns: 16px 16px minmax(0, 1fr);
 }
-.db-numopt-dropdown-popover .db-dropdown-option:hover,
-.db-numopt-dropdown-popover .db-dropdown-option.is-selected {
+.db-displayopt-dropdown-popover .db-dropdown-option:hover,
+.db-displayopt-dropdown-popover .db-dropdown-option.is-selected {
   background: var(--background-modifier-hover);
 }
-.db-numopt-dropdown-popover .db-dropdown-option-check,
-.db-numopt-dropdown-popover .db-dropdown-option-icon {
+.db-displayopt-dropdown-popover .db-dropdown-option-check,
+.db-displayopt-dropdown-popover .db-dropdown-option-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   min-width: 0;
 }
-.db-numopt-dropdown-popover .db-dropdown-option-check {
+.db-displayopt-dropdown-popover .db-dropdown-option-check {
   color: var(--text-accent);
 }
-.db-numopt-dropdown-popover .db-dropdown-option-icon {
+.db-displayopt-dropdown-popover .db-dropdown-option-icon {
   color: var(--text-faint);
 }
-.db-numopt-dropdown-popover .db-dropdown-option-check svg {
+.db-displayopt-dropdown-popover .db-dropdown-option-check svg {
   display: block;
   width: 13px;
   height: 13px;
 }
-.db-numopt-dropdown-popover .db-dropdown-option-icon svg {
+.db-displayopt-dropdown-popover .db-dropdown-option-icon svg {
   display: block;
   width: 14px;
   height: 14px;
 }
-.db-numopt-dropdown-popover .db-dropdown-option-text,
-.db-numopt-dropdown-popover .db-dropdown-option-label {
+.db-displayopt-dropdown-popover .db-dropdown-option-text,
+.db-displayopt-dropdown-popover .db-dropdown-option-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5397,8 +5442,8 @@
 
 /* 表头特殊列宽 */
 .note-database-modal .base-import-table thead th:nth-child(1) { width: 110px; text-align: left; }
-.note-database-modal .base-import-table thead th:nth-child(4) { width: 52px; text-align: center; }
-.note-database-modal .base-import-table thead th:nth-child(5) { width: 56px; text-align: center; }
+.note-database-modal .base-import-table thead th:nth-child(4) { width: 56px; text-align: center; }
+.note-database-modal .base-import-table thead th:nth-child(5) { width: 52px; text-align: center; }
 
 /* 3. 表格行：增加高度 + hover 反馈 */
 .note-database-modal .base-import-table tbody tr {
@@ -5495,16 +5540,52 @@
   text-align: center;
 }
 
-.note-database-modal .base-import-check-cell input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+.note-database-modal .db-modal-checkbox {
+  position: relative;
+  width: 18px;
+  height: 18px;
   margin: 0;
+  border: 1px solid var(--checkbox-border-color, var(--background-modifier-border));
+  border-radius: var(--db-radius-sm);
+  background: var(--background-primary);
+  box-shadow: none;
   cursor: pointer;
-  accent-color: var(--interactive-accent);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  vertical-align: middle;
+}
+
+.note-database-modal .db-modal-checkbox:checked,
+.note-database-modal .db-modal-checkbox:indeterminate {
+  border-color: var(--interactive-accent);
+  background-color: var(--interactive-accent);
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.note-database-modal .db-modal-checkbox:checked {
+  background-image: url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.1 7.2L5.7 9.8L10.9 4.2' stroke='white' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 14px 14px;
+}
+
+.note-database-modal .db-modal-checkbox:indeterminate {
+  background-image: url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 7H11' stroke='white' stroke-width='2.1' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 14px 14px;
+}
+
+.note-database-modal .db-modal-checkbox:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+}
+
+.note-database-modal .db-modal-checkbox:checked::after,
+.note-database-modal .db-modal-checkbox:indeterminate::after {
+  display: none;
+  content: "";
 }
 
 /* 8. 文件数列：等宽数字 + 弱化 */
-.note-database-modal .base-import-table td:nth-child(5) {
+.note-database-modal .base-import-table td:nth-child(4) {
   text-align: center;
   color: var(--text-muted);
   font-size: 12px;
@@ -5593,6 +5674,11 @@
 .note-database-container .db-board-column {
   position: relative;
   flex: 0 0 var(--db-board-column-width, 280px);  /* 列宽，可拖拽调整 */
+  /* min-width:0 lets the flex item shrink below its content's min-content, so a
+     long group title no longer pins the column open and the resize clamp (220px)
+     actually takes effect. The whole flex chain (column → header → title) must
+     carry min-width:0 for text-overflow:ellipsis to win over min-width:auto. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -5620,6 +5706,7 @@
   top: calc(var(--db-board-header-top) + 5px + var(--db-selection-status-offset));
   z-index: 24;
   display: flex;
+  min-width: 0;
   align-items: center;
   /* justify-content: space-between; */
   gap: 8px;
@@ -5699,6 +5786,7 @@
 }
 
 .note-database-container .db-board-column-title {
+  min-width: 0;
   overflow: hidden;
   color: var(--text-normal);
   font-size: 13px;
@@ -7021,6 +7109,14 @@
   display: none;
 }
 
+.note-database-container .db-view-config-field-dropdown.has-current-icon {
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+}
+
+.note-database-container .db-view-config-field-dropdown.has-current-icon .db-dropdown-field-icon {
+  display: inline-flex;
+}
+
 .note-database-container .db-view-config-dropdown .db-dropdown-field-text {
   gap: 0;
 }
@@ -7534,6 +7630,10 @@
   background: var(--background-primary);
 }
 
+.note-database-container .db-source-rule-dropdown.db-source-rule-field.has-current-icon {
+  grid-template-columns: 16px minmax(0, 1fr) 18px;
+}
+
 .note-database-container .db-source-rule-dropdown:hover {
   border-color: var(--background-modifier-border-hover);
   background: var(--background-primary);
@@ -7541,6 +7641,37 @@
 
 .note-database-container .db-source-rule-dropdown .db-dropdown-field-icon {
   display: none;
+}
+
+.note-database-container .db-source-rule-field.has-current-icon .db-dropdown-field-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-source-rule-property-picker {
+  grid-template-columns: minmax(0, 1fr) 18px;
+  flex: 1 1 190px;
+  min-width: 150px;
+  max-width: 220px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.note-database-container .db-source-rule-property-picker.has-current-icon {
+  grid-template-columns: 16px minmax(0, 1fr) 18px;
+}
+
+.note-database-container .db-source-rule-property-picker.has-current-icon .db-dropdown-field-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.note-database-container .db-source-rule-property-picker.has-current-icon .db-dropdown-field-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .note-database-container .db-source-rule-dropdown .db-dropdown-field-text {
@@ -7552,7 +7683,7 @@
   color: var(--text-normal);
 }
 
-.note-database-container .db-source-rule-custom-field {
+.note-database-container .db-source-rule-custom-field:not(.db-source-rule-property-picker) {
   max-width: 160px;
 }
 
@@ -7718,6 +7849,16 @@
 
 .note-database-container .db-panel-row .db-panel-dropdown .db-dropdown-field-icon {
   display: none;
+}
+
+.note-database-container .db-panel-row .db-filter-field-dropdown.has-current-icon,
+.note-database-container .db-panel-row .db-sort-field-dropdown.has-current-icon {
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+}
+
+.note-database-container .db-panel-row .db-filter-field-dropdown.has-current-icon .db-dropdown-field-icon,
+.note-database-container .db-panel-row .db-sort-field-dropdown.has-current-icon .db-dropdown-field-icon {
+  display: inline-flex;
 }
 
 .note-database-container .db-panel-row .db-panel-dropdown .db-dropdown-field-text {
@@ -7895,7 +8036,7 @@
 
 .note-database-container .db-column-manager-row {
   display: grid;
-  grid-template-columns: 18px 20px minmax(120px, 1fr) auto auto auto auto auto;
+  grid-template-columns: 18px 20px 18px minmax(120px, 1fr) auto auto auto;
   align-items: center;
   gap: 6px;
   min-height: 30px;
@@ -7953,7 +8094,9 @@
 .note-database-container .db-column-type {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  width: 18px;
   color: var(--text-faint);
   font-size: 11px;
   white-space: nowrap;
@@ -8537,13 +8680,14 @@
   display: none;
   position: absolute;
   z-index: 20;
-  width: min(420px, calc(100% - 24px));
+  min-width: 160px;
+  max-width: min(420px, calc(100% - 24px));
   max-height: 160px;
   overflow: auto;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 10px;
+  border-radius: var(--db-radius-lg);
   background: var(--background-primary);
-  box-shadow: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   padding: 6px;
 }
 
@@ -8559,22 +8703,32 @@
   justify-content: space-between;
   gap: 8px;
   border: 0;
-  border-radius: var(--db-radius-lg);
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0;
+  margin: 0;
   background: transparent;
+  box-shadow: none;
   color: var(--text-normal);
   cursor: pointer;
-  padding: 6px 8px;
+  padding: 8px 12px;
+  min-height: 34px;
   text-align: left;
   width: 100%;
+  box-sizing: border-box;
+}
+
+.note-database-modal .db-formula-property-suggestion:first-child {
+  border-radius: var(--db-radius-md) var(--db-radius-md) 0 0;
+}
+
+.note-database-modal .db-formula-property-suggestion:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 var(--db-radius-md) var(--db-radius-md);
 }
 
 .note-database-modal .db-formula-property-suggestion:hover,
 .note-database-modal .db-formula-property-suggestion.is-selected {
   background: var(--background-modifier-hover);
-}
-
-.note-database-modal .db-formula-property-suggestion.is-selected {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 38%, transparent);
 }
 
 .note-database-modal .db-formula-property-suggestion span {
@@ -8589,6 +8743,26 @@
   flex: 0 1 auto;
   font-family: var(--font-monospace);
   font-size: 11px;
+}
+
+.note-database-modal .db-formula-property-suggestion-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+  overflow: visible;
+}
+
+.note-database-modal .db-formula-property-suggestion-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-database-modal .db-formula-property-suggestion-label {
+  flex: 1 1 auto;
 }
 
 .note-database-modal button {
@@ -13216,6 +13390,10 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   display: inline-flex;
 }
 
+.is-phone .note-database-container .db-column-manager-row {
+  grid-template-columns: 18px auto 20px 18px minmax(120px, 1fr) auto auto auto;
+}
+
 .is-phone .note-database-settings .setting-group {
   padding: 12px 14px;
 }
@@ -13585,4 +13763,91 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 .note-database-container,
 .markdown-preview-view {
   position: relative;
+}
+
+mark.db-search-highlight {
+  background: hsla(var(--interactive-accent-hsl), 0.25);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Inline markdown rendering for text cells/cards (textRenderMode: "markdown").
+   Built via createEl/textContent — no innerHTML. The highlight class is
+   intentionally distinct from .db-search-highlight so the SearchHighlight
+   TreeWalker does not mis-skip these <mark> elements. */
+mark.db-text-md-highlight {
+  background: var(--text-highlight-bg, hsla(var(--interactive-accent-hsl), 0.25));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+code.db-text-md-code {
+  font-family: var(--font-monospace);
+  /* Background must track the surface under it. A fixed --code-background is a
+     light color that stays light when the card/row/cell dims on hover, so the
+     code block looks brighter than the surrounding text. Using a little of the
+     text color at low alpha mixes with whatever is behind (card body, hovered
+     field/table cell), so the block dims together with its container. */
+  background: color-mix(in srgb, var(--text-normal) 8%, transparent);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.88em;
+}
+
+a.db-text-md-link {
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+a.db-text-md-link:hover {
+  text-decoration: underline;
+}
+
+/* Inline LaTeX math (MathJax via Obsidian renderMath). */
+.db-text-md-math {
+  display: inline-block;
+  vertical-align: middle;
+}
+.db-text-md-math mjx-container {
+  display: inline-block;
+  margin: 0;
+}
+
+/* Format toolbar above the textarea for markdown-mode text columns. */
+.db-md-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  margin: 0 6px 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.db-md-toolbar-btn,
+.db-cell-edit-popover .db-md-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  outline: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+.db-md-toolbar-btn:hover,
+.db-cell-edit-popover .db-md-toolbar-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  box-shadow: none;
+}
+.db-md-toolbar-btn .svg-icon {
+  width: 16px;
+  height: 16px;
 }

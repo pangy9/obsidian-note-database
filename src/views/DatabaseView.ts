@@ -6,6 +6,7 @@ import { QueryEngine } from "../data/QueryEngine";
 import { PropertyService } from "../data/PropertyService";
 import { ComputedFieldEngine } from "../data/ComputedField";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
+import { applyRangeSelection } from "../data/RangeSelection";
 import {
   ensureColumnOrder,
   getColumnsInOrder,
@@ -68,6 +69,7 @@ import { ColumnRenameModal } from "./modals/ColumnRenameModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
+import { applyAddDatabaseResult } from "../data/AddDatabaseResult";
 import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportConfirmModal";
 import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
@@ -75,7 +77,7 @@ import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
 import { getColumnDisplayType, getComputedStorageKey } from "../data/ColumnDisplay";
 import { isDateLikeColumnType, setDateDisplayMode } from "../data/DateTimeFormat";
-import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
+import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, mergeDbAndViewSourceRuleTrees, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
@@ -95,6 +97,7 @@ import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
+import { highlightSearchMatches } from "./SearchHighlight";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 const NEW_COLUMN_HIGHLIGHT_MS = 2200;
@@ -394,6 +397,7 @@ export class DatabaseView extends FileView {
       openRow: (row) => { void this.openRow(row); },
       deleteRow: (row) => this.deleteRow(row),
     });
+    const shouldHideResultCreateEntryButtons = () => this.shouldHideResultCreateEntryButtons();
     this.columnHeaderController = new ColumnHeaderController({
       getConfig: () => this.getConfig(),
       ensureColumnOrder: (config) => ensureColumnOrder(config),
@@ -421,6 +425,7 @@ export class DatabaseView extends FileView {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.boardRenderer = new BoardRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -446,6 +451,7 @@ export class DatabaseView extends FileView {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -469,6 +475,7 @@ export class DatabaseView extends FileView {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
@@ -491,6 +498,7 @@ export class DatabaseView extends FileView {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.columnMenu = new ColumnMenu({
       editColumn: (col) => this.showColumnRenameModal(col),
@@ -503,6 +511,7 @@ export class DatabaseView extends FileView {
       moveColumn: (key, offset) => this.columnOperations.moveColumn(key, offset),
       hideColumn: (col) => this.columnOperations.hideColumn(col),
       toggleColumnWrap: (col) => this.toggleColumnWrap(col),
+      setTextRenderMode: (col, mode) => this.setTextRenderMode(col, mode),
       setNumberDisplayStyle: (col, style) => this.setNumberDisplayStyle(col, style),
       updateNumberDisplayConfig: (col, partial) => this.updateNumberDisplayConfig(col, partial),
       sortByColumn: (col) => this.sortByColumn(col),
@@ -522,6 +531,10 @@ export class DatabaseView extends FileView {
     }));
     this.register(this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation)));
     this.rebuildViewEntries();
+  }
+
+  private shouldHideResultCreateEntryButtons(): boolean {
+    return this.vs().searchText.trim().length > 0;
   }
 
   /** Get the current view's transient state (always non-null) */
@@ -1011,13 +1024,26 @@ export class DatabaseView extends FileView {
 
   private refreshOnActivation(): void {
     if (!this.containerEl_?.isConnected) return;
+    // Light refresh on focus / active-leaf return: re-sync db config + re-render,
+    // but do NOT clear the in-memory view state. The search bar (and any open
+    // filter/sort/panel state) must survive a focus round-trip — e.g. user
+    // searches, clicks another pane to take notes, clicks back: the search should
+    // still be there. Record data is already kept fresh by onDataChanged, and
+    // peer db-config changes are handled separately by handlePeerViewConfigChanged
+    // (which does the hard clear). hardRefreshFromSource is reserved for real
+    // structural / peer-config resets.
+    const lightRefresh = () => {
+      this.rebuildViewEntries();
+      this.rerenderToolbar();
+      this.refresh();
+    };
     if (this.configSaveTimer !== null) {
       void this.saveConfigImmediately()
-        .then(() => this.hardRefreshFromSource())
+        .then(lightRefresh)
         .catch((err) => this.reportConfigSaveFailure(err));
       return;
     }
-    this.hardRefreshFromSource();
+    lightRefresh();
   }
 
   protected get hideDatabaseActions(): boolean { return false; }
@@ -1055,6 +1081,9 @@ export class DatabaseView extends FileView {
       setViewType: (value, viewIndex) => this.setViewType(value, viewIndex),
       setDisplayWidth: (value) => this.setDisplayWidth(value),
       setSearchText: (value) => {
+        // Search is intentionally transient: it only mutates the in-memory
+        // view state and is never persisted to config. See
+        // search-transient.test.ts and VIEW_REGRESSION_MATRIX.md.
         this.vs().searchText = value;
         this.refresh({ viewport: "reset-top" });
       },
@@ -1865,22 +1894,21 @@ export class DatabaseView extends FileView {
 
   /** Add a new database via modal dialog */
   private async addDatabase(): Promise<void> {
-    const modal = new AddDatabaseModal(this.app, this.databaseFolder);
+    const modal = new AddDatabaseModal(this.app, this.statusPresets, this.defaultStatusPresetId);
     const result = await modal.openAndWait();
     if (!result) return;
 
     const dbName = this.getUniqueDatabaseName(result.name);
     const sourceFolder = result.sourceFolder || "";
-    const scanRules = result.typeFilter
-      ? [{ field: "type" as const, op: "eq" as const, value: result.typeFilter }]
-      : undefined;
 
-    // Scan frontmatter from source folder
+    // Scan frontmatter from source folder. Pass the modal's source rules (including the
+    // full rule tree) so column inference only considers records that will actually belong
+    // to the database — same semantics as the query engine.
     const allKeys = new Map<string, string>();
     allKeys.set("file.name", t("defaults.nameColumn"));
     const sampleValues = new Map<string, unknown[]>();
     const fileCounts = new Map<string, number>();
-    collectFileFrontmatterKeys(this.app, sourceFolder, scanRules, allKeys, sampleValues, fileCounts);
+    collectFileFrontmatterKeys(this.app, sourceFolder, result.sourceRules, allKeys, sampleValues, fileCounts, result.sourceLogic, result.sourceRuleTree);
 
     // Build column list: always start with file.name
     const columns: ColumnDef[] = [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }];
@@ -1897,7 +1925,7 @@ export class DatabaseView extends FileView {
 
         // Pre-populate options for option-based types
         if (type === "multi-select" && isObsidianTagsKey(key)) {
-          const vaultTags = getVaultTags(this.app, sourceFolder, scanRules);
+          const vaultTags = getVaultTags(this.app, sourceFolder, undefined);
           if (vaultTags.length > 0) {
             col.statusOptions = vaultTags.map((tag: string, i: number) => ({
               value: tag,
@@ -1905,7 +1933,7 @@ export class DatabaseView extends FileView {
             }));
           }
         } else if (type === "multi-select") {
-          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, scanRules);
+          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, undefined);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({
               value: val,
@@ -1913,7 +1941,7 @@ export class DatabaseView extends FileView {
             }));
           }
         } else if (type === "select" || type === "status") {
-          const uniqueValues = collectUniqueStringValues(this.app, key, sourceFolder, scanRules);
+          const uniqueValues = collectUniqueStringValues(this.app, key, sourceFolder, undefined);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({
               value: val,
@@ -1939,7 +1967,7 @@ export class DatabaseView extends FileView {
       // Collect statusOptions for columns where user changed to option types
       for (const col of confirmed) {
         if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && !col.statusOptions) {
-          const uniqueValues = collectUniqueStringValues(this.app, col.key, sourceFolder, scanRules);
+          const uniqueValues = collectUniqueStringValues(this.app, col.key, sourceFolder, undefined);
           if (uniqueValues.length > 0) {
             col.statusOptions = uniqueValues.map((val: string, i: number) => ({
               value: val,
@@ -1965,10 +1993,10 @@ export class DatabaseView extends FileView {
       id: generateId(),
       name: dbName,
       sourceFolder,
-      typeFilter: result.typeFilter || undefined,
       schema: view.schema,
       views: [view],
     };
+    applyAddDatabaseResult(newDb, result);
 
     const file = await this.dataSource.createViewDefFile(
       this.databaseFolder,
@@ -2327,7 +2355,6 @@ export class DatabaseView extends FileView {
       this.getDefaultFrontmatterFromViewFilters(config),
       defaults
     );
-    if (sourceConfig.typeFilter) frontmatter["type"] = sourceConfig.typeFilter;
     for (const col of config.schema.columns) {
       if (isFileFieldKey(col.key) || col.type === "computed") continue;
       if (!Object.prototype.hasOwnProperty.call(frontmatter, col.key)) {
@@ -2615,7 +2642,6 @@ export class DatabaseView extends FileView {
   private getDefaultFrontmatterFromSourceRules(config: ViewConfig): Record<string, unknown> {
     const frontmatter: Record<string, unknown> = {};
     const tags = new Set<string>();
-    if (config.typeFilter) frontmatter["type"] = config.typeFilter;
     const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
     for (const rule of getRequiredSourceRules(sourceRuleTree)) {
       if ((rule.op === "eq" || rule.op === "strictEq") && rule.value != null && this.isWritableSourceRuleField(config, rule.field)) {
@@ -2680,14 +2706,15 @@ export class DatabaseView extends FileView {
 
   private getCreateContextConfig(config: ViewConfig): ViewConfig {
     const db = this.getActiveDb();
+    // View-level source rules apply only when the switch is ON, mirroring getEffectiveConfig.
+    const viewEnabled = config.viewSourceRulesEnabled === true;
     return {
       ...config,
       sourceFolder: config.sourceFolder || db.sourceFolder || "",
-      sourceRules: config.sourceRules || db.sourceRules,
-      sourceLogic: config.sourceLogic || db.sourceLogic,
-      sourceRuleTree: combineSourceRuleTrees(db.sourceRuleTree, config.sourceRuleTree),
+      sourceRules: (viewEnabled ? config.sourceRules : undefined) || db.sourceRules,
+      sourceLogic: (viewEnabled ? config.sourceLogic : undefined) || db.sourceLogic,
+      sourceRuleTree: mergeDbAndViewSourceRuleTrees(db, viewEnabled ? config : undefined),
       newRecordFolder: config.newRecordFolder || db.newRecordFolder,
-      typeFilter: config.typeFilter || db.typeFilter,
       schema: config.schema || db.schema,
     };
   }
@@ -2714,10 +2741,14 @@ export class DatabaseView extends FileView {
       ...dbConfig,
       baseThisFilePath: this.getCurrentEntry()?.sourcePath,
       sourceFolder: this.normalizeVaultFolder(dbConfig.sourceFolder || viewConfig.sourceFolder || ""),
-      sourceRules: dbConfig.sourceRules || viewConfig.sourceRules,
-      sourceLogic: dbConfig.sourceLogic || viewConfig.sourceLogic,
-      sourceRuleTree: combineSourceRuleTrees(dbConfig.sourceRuleTree, viewConfig.sourceRuleTree),
-      typeFilter: dbConfig.typeFilter || viewConfig.typeFilter,
+      sourceRules: dbConfig.sourceRules || (viewConfig.viewSourceRulesEnabled === true ? viewConfig.sourceRules : undefined),
+      sourceLogic: dbConfig.sourceLogic || (viewConfig.viewSourceRulesEnabled === true ? viewConfig.sourceLogic : undefined),
+      // View-level source rules apply only when the switch is ON (enable/disable, not just
+      // visibility). Each side is normalized to a tree first so a legacy flat side is never dropped.
+      sourceRuleTree: mergeDbAndViewSourceRuleTrees(
+        dbConfig,
+        viewConfig.viewSourceRulesEnabled === true ? viewConfig : undefined
+      ),
     };
   }
 
@@ -2741,26 +2772,14 @@ export class DatabaseView extends FileView {
 
   private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
     const path = row.file.path;
-    const rangeAnchor = this.lastSelectedRowPath;
-    const useRangeSelection = Boolean((event?.shiftKey || this.isPhoneLayout()) && rangeAnchor && rangeAnchor !== path);
-    if (useRangeSelection && rangeAnchor) {
-      const range = this.getSelectionRangeRows(rangeAnchor, path);
-      if (range.length > 0) {
-        for (const item of range) {
-          if (selected) this.selectedRows.add(item.file.path);
-          else this.selectedRows.delete(item.file.path);
-        }
-      } else if (selected) {
-        this.selectedRows.add(path);
-      } else {
-        this.selectedRows.delete(path);
-      }
-    } else if (selected) {
-      this.selectedRows.add(path);
-    } else {
-      this.selectedRows.delete(path);
-    }
-    this.lastSelectedRowPath = this.selectedRows.size > 0 ? path : null;
+    this.lastSelectedRowPath = applyRangeSelection({
+      orderedIds: this.getOrderedSelectionRowPaths(),
+      selectedIds: this.selectedRows,
+      anchorId: this.lastSelectedRowPath,
+      targetId: path,
+      selected,
+      range: Boolean(event?.shiftKey || this.isPhoneLayout()),
+    });
     this.renderSelectionStatusBar();
     this.syncSelectionControls();
   }
@@ -2775,15 +2794,10 @@ export class DatabaseView extends FileView {
     this.syncSelectionControls();
   }
 
-  private getSelectionRangeRows(fromPath: string, toPath: string): RowData[] {
+  private getOrderedSelectionRowPaths(): string[] {
     const ordered = this.getRenderedSelectionRows();
     const source = ordered.length > 0 ? ordered : this.rows;
-    const from = source.findIndex((candidate) => candidate.file.path === fromPath);
-    const to = source.findIndex((candidate) => candidate.file.path === toPath);
-    if (from < 0 || to < 0) return [];
-    const start = Math.min(from, to);
-    const end = Math.max(from, to);
-    return source.slice(start, end + 1);
+    return source.map((candidate) => candidate.file.path);
   }
 
   private getRenderedSelectionRows(): RowData[] {
@@ -3050,11 +3064,11 @@ export class DatabaseView extends FileView {
           this.saveConfigImmediatelyInBackground();
         },
         setColumnVisible: (col, visible) => this.columnOperations.setColumnVisible(col, visible),
+        setColumnsVisible: (changes) => this.setColumnsVisible(changes),
         setAllColumnsVisible: (visible) => this.setAllColumnsVisible(visible),
         moveColumn: (key, offset) => this.columnOperations.moveColumn(key, offset),
         moveColumnTo: (key, targetKey, placement) => this.columnOperations.moveColumnTo(key, targetKey, placement),
         toggleColumnWrap: (col) => this.toggleColumnWrap(col),
-        setNumberDisplayStyle: (col, style) => this.setNumberDisplayStyle(col, style),
         editColumn: (col) => this.showColumnRenameModal(col),
         addColumn: () => { void this.columnOperations.appendColumn(); },
         deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
@@ -3167,6 +3181,22 @@ export class DatabaseView extends FileView {
     this.refresh();
   }
 
+  private setColumnsVisible(changes: Array<{ col: ColumnDef; visible: boolean }>): void {
+    const config = this.getConfig();
+    if (!config || changes.length === 0) return;
+    const state = this.vs();
+    for (const change of changes) {
+      if (change.visible) state.hiddenColumns.delete(change.col.key);
+      else state.hiddenColumns.add(change.col.key);
+    }
+    this.pendingUndoLabel = t("undo.hideColumnsConfig");
+    this.viewStateStore.persist(config, state);
+    this.scheduleConfigSave();
+    this.rerenderToolbar();
+    this.renderColumnManager();
+    this.refresh();
+  }
+
   private getRequiredColumnKeys(config: ViewConfig, state: DatabaseViewState): Set<string> {
     const keys = new Set<string>();
     if (config.viewType === "table") return keys;
@@ -3184,6 +3214,13 @@ export class DatabaseView extends FileView {
   private toggleColumnWrap(col: ColumnDef): void {
     col.wrap = !col.wrap || undefined;
     this.pendingUndoLabel = t("undo.columnWrapConfig");
+    this.scheduleConfigSave();
+    this.renderColumnManager();
+    this.refresh();
+  }
+
+  private setTextRenderMode(col: ColumnDef, mode: "plain" | "link" | "markdown"): void {
+    col.textRenderMode = mode === "plain" ? undefined : mode;
     this.scheduleConfigSave();
     this.renderColumnManager();
     this.refresh();
@@ -3593,7 +3630,7 @@ export class DatabaseView extends FileView {
       const startCol = config.schema.columns.find((c) => c.key === edit.startField);
       const endCol = config.schema.columns.find((c) => c.key === edit.endField);
       // Modal 值恒为 datetime-local（YYYY-MM-DDTHH:mm）；写回纯 date 列时必须只取 YYYY-MM-DD，
-      // 否则会把日期列污染成 datetime（再被 types.json 重推断会导致判定口径漂移）。
+      // 否则会把日期列污染成 datetime（列类型口径漂移）。
       const startIsDateOnly = startCol != null && getColumnDisplayType(startCol, config.schema.computedFields) === "date";
       const endIsDateOnly = endCol != null && getColumnDisplayType(endCol, config.schema.computedFields) === "date";
       if (startCol && edit.startValue) changes.push(this.createCurrentCellChange(edit.row, startCol, startIsDateOnly ? edit.startValue.slice(0, 10) : edit.startValue));
@@ -3860,12 +3897,12 @@ export class DatabaseView extends FileView {
         );
       }
     }
+    // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
+    setDateDisplayMode(config.yearDisplayMode || "always");
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(), this.app);
     this.timelineInvalidRowsVersion += 1;
     this.scheduleComputedSync(config, this.rows);
-    // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
-    setDateDisplayMode(config.yearDisplayMode || "always");
 
     if (config.viewType !== "chart") this.renderSummary(config);
     if (!this.containerEl_) return;
@@ -4230,7 +4267,6 @@ export class DatabaseView extends FileView {
     if (sourceFolder && !record.file.path.startsWith(sourceFolder.endsWith("/") ? sourceFolder : `${sourceFolder}/`)) {
       return false;
     }
-    if (config.typeFilter && record.frontmatter["type"] !== config.typeFilter) return false;
     const rules = (config.sourceRules || []).filter((rule) => (
       !sourceFolder ||
       rule.op !== "inFolder" ||
@@ -5877,6 +5913,7 @@ export class DatabaseView extends FileView {
       valueEl.setText(String(Math.round(width)));
     };
     const applyWidth = (width: number) => {
+      if (!Number.isFinite(width)) return;
       const nextWidth = Math.round(Math.max(MOBILE_COLUMN_WIDTH_MIN, width));
       config.columnWidths = { ...(config.columnWidths || {}), [col.key]: nextWidth };
       dirty = true;
@@ -6149,6 +6186,8 @@ export class DatabaseView extends FileView {
     if (this.showViewConfigPanel) {
       this.renderViewConfigPanel();
     }
+    const searchQuery = this.vs().searchText;
+    if (searchQuery) highlightSearchMatches(this.containerEl_, searchQuery);
   }
 
 }

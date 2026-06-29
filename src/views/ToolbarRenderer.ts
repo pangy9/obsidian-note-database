@@ -6,6 +6,7 @@ import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getEffectiveFilterRules } from "../data/FilterRules";
+import { isImeComposing } from "../data/KeyboardUtils";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
 import { CalendarTimelineToolbarRenderer } from "./CalendarTimelineToolbarRenderer";
@@ -234,7 +235,7 @@ export class ToolbarRenderer {
       // Embedded views still show a single active tab so the toolbar shape stays consistent.
       this.renderViewTabs(left, currentDb, currentViewIndex, actions);
     }
-    if (phoneLayout) this.renderSearch(left, state, actions);
+    if (phoneLayout && !isChartView) this.renderSearch(left, state, actions);
 
     if (!actions.hideWidthSelect) this.renderWidthSelect(right, currentEntry, currentView, actions);
     this.renderFilterButton(right, state, actions);
@@ -255,7 +256,7 @@ export class ToolbarRenderer {
     if (isCalendarTimelineView && currentView && actions.updateViewConfig) {
       this.renderCalendarTimelineOptionsButton(right, currentView, actions);
     }
-    if (!phoneLayout) this.renderSearch(right, state, actions);
+    if (!phoneLayout && !isChartView) this.renderSearch(right, state, actions);
     if (!actions.isReadOnly && !isChartView) this.renderNewButton(right, actions);
   }
 
@@ -918,6 +919,7 @@ export class ToolbarRenderer {
     };
     input.onblur = finish;
     input.onkeydown = (e) => {
+      if (isImeComposing(e)) return;
       if (e.key === "Enter") finish();
       if (e.key === "Escape") actions.renameView(viewIndex, nameEl.textContent || ""); // cancel
     };
@@ -956,6 +958,7 @@ export class ToolbarRenderer {
     };
     input.onblur = () => finish(true);
     input.onkeydown = (keyboardEvent) => {
+      if (isImeComposing(keyboardEvent)) return;
       if (keyboardEvent.key === "Escape") finish(false);
       if (keyboardEvent.key === "Enter" && (!multiline || keyboardEvent.metaKey || keyboardEvent.ctrlKey)) {
         keyboardEvent.preventDefault();

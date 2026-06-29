@@ -1,4 +1,4 @@
-import { getColumnOptionValues, hasObsidianTagValue, isObsidianTagsKey, normalizeObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
+import { getColumnOptionValues, hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, normalizeObsidianTagValue, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
 import { getDateGroupMode } from "./GroupDisplay";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
@@ -112,8 +112,13 @@ export class QueryEngine {
       case "lte":
         return values.some((value) => this.compareFilterValue(value, ruleValue, column) <= 0);
       case "empty":
+        // checkbox: "empty" = unchecked. Boolean-aware so false / "" / null / missing key
+        // all count as unchecked (previously `false` was stringified to "false" and counted
+        // as not-empty, splitting two equally-unchecked notes into different buckets).
+        if (column?.type === "checkbox") return this.toBooleanRank(stringifyValue(val)) === 0;
         return values.length === 0;
       case "notempty":
+        if (column?.type === "checkbox") return this.toBooleanRank(stringifyValue(val)) === 1;
         return values.length > 0;
       default:
         return true;
@@ -262,6 +267,9 @@ export class QueryEngine {
     if (field.startsWith("formula.") && field.slice("formula.".length) in row.computed) return row.computed[field.slice("formula.".length)];
     if (field in row.computed) return row.computed[field];
     if (isObsidianTagsKey(field) && field in row.frontmatter) return toObsidianTagValues(row.frontmatter[field]);
+    // aliases is a built-in multitext/list property: normalize comma-strings to a list so
+    // filtering/grouping use list semantics instead of treating "alpha, beta" as one scalar.
+    if (isObsidianAliasesKey(field) && field in row.frontmatter) return toMultiSelectValues(row.frontmatter[field]);
     if (field in row.frontmatter) return row.frontmatter[field];
     return null;
   }

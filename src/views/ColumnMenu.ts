@@ -18,6 +18,7 @@ export interface ColumnMenuActions {
   moveColumn(key: string, offset: -1 | 1): void;
   hideColumn(col: ColumnDef): void;
   toggleColumnWrap(col: ColumnDef): void;
+  setTextRenderMode(col: ColumnDef, mode: "plain" | "link" | "markdown"): void;
   setNumberDisplayStyle(col: ColumnDef, style: NumberDisplayStyle): void;
   updateNumberDisplayConfig(col: ColumnDef, partial: Partial<NumberDisplayConfig>): void;
   sortByColumn(col: ColumnDef): void;
@@ -111,6 +112,32 @@ export class ColumnMenu {
           menuItem.dom?.addEventListener("mouseenter", open);
           menuItem.dom?.addEventListener("mousedown", open, true);
           menuItem.dom?.addEventListener("click", open, true);
+          const numberStyleKey = col.numberDisplayStyle === "rating" ? "menu.numberStyleRating"
+            : col.numberDisplayStyle === "progress" ? "menu.numberStyleProgress"
+            : col.numberDisplayStyle === "ring" ? "menu.numberStyleRing"
+            : "menu.numberStylePlain";
+          this.appendItemHint(menuItem.dom, t(numberStyleKey));
+          return item;
+        });
+      }
+      if (col.type === "text" && !isFileFieldKey(col.key)) {
+        menu.addItem((item) => {
+          item.setTitle(t("menu.numberDisplayStyle")).setIcon("paintbrush");
+          const menuItem = item as unknown as MenuItemWithDom;
+          const open = (evt: MouseEvent) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            this.showTextRenderModePopover(evt, col, menu, menuItem.dom);
+          };
+          menuItem.dom?.addEventListener("mouseenter", open);
+          menuItem.dom?.addEventListener("mousedown", open, true);
+          menuItem.dom?.addEventListener("click", open, true);
+          const textMode = col.textRenderMode ?? "plain";
+          this.appendItemHint(menuItem.dom, t(
+            textMode === "link" ? "menu.textRenderLink"
+            : textMode === "markdown" ? "menu.textRenderMarkdown"
+            : "menu.textRenderPlain",
+          ));
           return item;
         });
       }
@@ -251,7 +278,7 @@ export class ColumnMenu {
   }
 
   private showNumberDisplayStylePopover(evt: MouseEvent | KeyboardEvent, col: ColumnDef, _menu: Menu, anchorEl?: HTMLElement): void {
-    const { panel } = this.createColumnMenuSubpopover(evt, "db-column-number-style-popover", anchorEl);
+    const { panel } = this.createColumnMenuSubpopover(evt, "db-column-display-style-popover db-column-number-style-popover", anchorEl);
     const RATING_ICONS = ["star", "flame", "heart", "thumbs-up", "gem"];
     const DIVISOR_PRESETS = ["100", "10"];
     const DEFAULT_CUSTOM_COLOR: StatusColor = "green";
@@ -268,7 +295,7 @@ export class ColumnMenu {
       const currentStyle = col.numberDisplayStyle ?? "plain";
 
       // 样式 section
-      const styleSection = this.createNumberOptionSection(panel, t("menu.numberDisplayStyle"));
+      const styleSection = this.createDisplayOptionSection(panel, t("menu.numberDisplayStyle"));
       const styles: { value: NumberDisplayStyle; key: string }[] = [
         { value: "plain", key: "menu.numberStylePlain" },
         { value: "rating", key: "menu.numberStyleRating" },
@@ -289,7 +316,7 @@ export class ColumnMenu {
 
       // 选项 section（当前样式有可调项时）
       if (currentStyle === "rating") {
-        const optSection = this.createNumberOptionSection(panel, t("menu.numberDisplayOptions"));
+        const optSection = this.createDisplayOptionSection(panel, t("menu.numberDisplayOptions"));
         const currentRatingSymbol = cfg.ratingSymbol ?? "star";
         this.renderSelect(optSection, t("menu.numberDisplayIcon"),
           [
@@ -321,7 +348,7 @@ export class ColumnMenu {
           this.renderColorControls(optSection, cfg.color, (color) => setColor(color ?? DEFAULT_CUSTOM_COLOR), setColor);
         }
       } else if (currentStyle === "progress" || currentStyle === "ring") {
-        const optSection = this.createNumberOptionSection(panel, t("menu.numberDisplayOptions"));
+        const optSection = this.createDisplayOptionSection(panel, t("menu.numberDisplayOptions"));
         const currentDivisor = String(cfg.progressDivisor ?? 100);
         const divisorIsPreset = DIVISOR_PRESETS.includes(currentDivisor);
         this.renderSelect(optSection, t("menu.numberDisplayDivisor"),
@@ -329,7 +356,11 @@ export class ColumnMenu {
           divisorIsPreset ? currentDivisor : "custom",
           (v) => {
             if (v !== "custom") { this.actions.updateNumberDisplayConfig(col, { progressDivisor: Number(v) }); render(); }
-            else { this.actions.updateNumberDisplayConfig(col, { progressDivisor: 1000 }); render(); }
+            else if (divisorIsPreset) {
+              // preset → custom: seed a non-preset value so the custom divisor input appears.
+              this.actions.updateNumberDisplayConfig(col, { progressDivisor: 1000 }); render();
+            }
+            // Already custom: keep the user's existing divisor (don't reset to a default).
           },
           "percent");
         if (!divisorIsPreset) {
@@ -344,9 +375,41 @@ export class ColumnMenu {
     render();
   }
 
-  private createNumberOptionSection(parent: HTMLElement, title: string): HTMLElement {
-    const section = parent.createDiv({ cls: "db-numopt-section" });
-    section.createDiv({ cls: "db-numopt-section-title", text: title });
+  private appendItemHint(dom: HTMLElement | undefined, text: string): void {
+    if (!dom) return;
+    dom.createSpan({ cls: "db-menu-item-current", text });
+  }
+
+  private showTextRenderModePopover(evt: MouseEvent | KeyboardEvent, col: ColumnDef, _menu: Menu, anchorEl?: HTMLElement): void {
+    const { panel } = this.createColumnMenuSubpopover(evt, "db-column-display-style-popover db-column-text-style-popover", anchorEl);
+    const render = (): void => {
+      panel.empty();
+      panel.setAttr("role", "listbox");
+      const section = this.createDisplayOptionSection(panel, t("menu.numberDisplayStyle"));
+      const options: { value: "plain" | "link" | "markdown"; key: string; icon: string }[] = [
+        { value: "plain", key: "menu.textRenderPlain", icon: "type" },
+        { value: "link", key: "menu.textRenderLink", icon: "link" },
+        { value: "markdown", key: "menu.textRenderMarkdown", icon: "square-m" },
+      ];
+      const current: "plain" | "link" | "markdown" = col.textRenderMode ?? "plain";
+      for (const { value, key, icon } of options) {
+        const row = section.createEl("button", {
+          cls: `db-dropdown-option has-icon${value === current ? " is-selected" : ""}`,
+          attr: { type: "button", role: "option", "aria-selected": value === current ? "true" : "false" },
+        });
+        const check = row.createSpan({ cls: "db-dropdown-option-check" });
+        if (value === current) setIcon(check, "check");
+        setIcon(row.createSpan({ cls: "db-dropdown-option-icon" }), icon);
+        row.createSpan({ cls: "db-dropdown-option-label", text: t(key) });
+        row.onclick = () => { this.actions.setTextRenderMode(col, value); render(); };
+      }
+    };
+    render();
+  }
+
+  private createDisplayOptionSection(parent: HTMLElement, title: string): HTMLElement {
+    const section = parent.createDiv({ cls: "db-displayopt-section" });
+    section.createDiv({ cls: "db-displayopt-section-title", text: title });
     return section;
   }
 
@@ -358,29 +421,29 @@ export class ColumnMenu {
       value,
       onChange,
       icon,
-      className: "db-numopt-row db-numopt-select",
-      popoverClassName: "db-numopt-dropdown-popover",
+      className: "db-displayopt-row db-displayopt-select",
+      popoverClassName: "db-displayopt-dropdown-popover",
       closeOnSelect: true,
       renderIcon: (target, iconName) => setIcon(target, iconName),
     });
   }
 
   private renderSwitch(parent: HTMLElement, label: string, checked: boolean, onChange: (checked: boolean) => void): void {
-    const row = parent.createDiv({ cls: "db-numopt-row db-numopt-switch" });
-    setIcon(row.createSpan({ cls: "db-numopt-row-icon" }), "eye");
-    const text = row.createDiv({ cls: "db-numopt-row-text" });
-    text.createSpan({ cls: "db-numopt-label", text: label });
+    const row = parent.createDiv({ cls: "db-displayopt-row db-displayopt-switch" });
+    setIcon(row.createSpan({ cls: "db-displayopt-row-icon" }), "eye");
+    const text = row.createDiv({ cls: "db-displayopt-row-text" });
+    text.createSpan({ cls: "db-displayopt-label", text: label });
     const checkbox = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch", "aria-label": label } });
     checkbox.checked = checked;
     checkbox.onchange = () => onChange(checkbox.checked);
   }
 
   private renderNumberInput(parent: HTMLElement, value: number, onChange: (value: number) => void): void {
-    const row = parent.createDiv({ cls: "db-numopt-row db-numopt-input-row" });
-    setIcon(row.createSpan({ cls: "db-numopt-row-icon" }), "hash");
-    const text = row.createDiv({ cls: "db-numopt-row-text" });
-    text.createSpan({ cls: "db-numopt-label", text: t("menu.numberStyleCustom") });
-    const input = row.createEl("input", { cls: "db-numopt-input", attr: { type: "number", "aria-label": t("menu.numberDisplayDivisor") } });
+    const row = parent.createDiv({ cls: "db-displayopt-row db-displayopt-input-row" });
+    setIcon(row.createSpan({ cls: "db-displayopt-row-icon" }), "hash");
+    const text = row.createDiv({ cls: "db-displayopt-row-text" });
+    text.createSpan({ cls: "db-displayopt-label", text: t("menu.numberStyleCustom") });
+    const input = row.createEl("input", { cls: "db-displayopt-input", attr: { type: "number", "aria-label": t("menu.numberDisplayDivisor") } });
     input.value = String(value);
     input.onchange = () => {
       const n = parseFloat(input.value);
@@ -389,12 +452,12 @@ export class ColumnMenu {
   }
 
   private renderEmojiInput(parent: HTMLElement, value: string, onChange: (value: string | undefined) => void): void {
-    const row = parent.createDiv({ cls: "db-numopt-row db-numopt-input-row" });
-    setIcon(row.createSpan({ cls: "db-numopt-row-icon" }), "smile");
-    const text = row.createDiv({ cls: "db-numopt-row-text" });
-    text.createSpan({ cls: "db-numopt-label", text: t("menu.numberDisplayEmoji") });
+    const row = parent.createDiv({ cls: "db-displayopt-row db-displayopt-input-row" });
+    setIcon(row.createSpan({ cls: "db-displayopt-row-icon" }), "smile");
+    const text = row.createDiv({ cls: "db-displayopt-row-text" });
+    text.createSpan({ cls: "db-displayopt-label", text: t("menu.numberDisplayEmoji") });
     const input = row.createEl("input", {
-      cls: "db-numopt-input db-numopt-emoji-input",
+      cls: "db-displayopt-input db-displayopt-emoji-input",
       attr: { type: "text", "aria-label": t("menu.numberDisplayEmoji"), maxlength: "8" },
     });
     input.value = value;
@@ -422,14 +485,14 @@ export class ColumnMenu {
   }
 
   private renderColorSwatches(parent: HTMLElement, current: StatusColor, onChange: (color: StatusColor | undefined) => void): void {
-    const row = parent.createDiv({ cls: "db-numopt-row db-numopt-colors" });
-    setIcon(row.createSpan({ cls: "db-numopt-row-icon" }), "palette");
-    const text = row.createDiv({ cls: "db-numopt-row-text" });
-    text.createSpan({ cls: "db-numopt-label", text: t("menu.numberDisplayColorCustom") });
-    const grid = row.createDiv({ cls: "db-numopt-swatches" });
+    const row = parent.createDiv({ cls: "db-displayopt-row db-displayopt-colors" });
+    setIcon(row.createSpan({ cls: "db-displayopt-row-icon" }), "palette");
+    const text = row.createDiv({ cls: "db-displayopt-row-text" });
+    text.createSpan({ cls: "db-displayopt-label", text: t("menu.numberDisplayColorCustom") });
+    const grid = row.createDiv({ cls: "db-displayopt-swatches" });
     for (const color of OPTION_COLORS) {
       const sw = grid.createEl("button", {
-        cls: `db-numopt-swatch db-option-color-${color}${current === color ? " is-selected" : ""}`,
+        cls: `db-displayopt-swatch db-option-color-${color}${current === color ? " is-selected" : ""}`,
         attr: { type: "button", title: color, "aria-label": color, "aria-pressed": current === color ? "true" : "false" },
       });
       sw.onclick = () => onChange(color);
@@ -480,10 +543,10 @@ export class ColumnMenu {
     this.closeActiveColumnSubmenu();
     const doc = window.activeDocument;
     const view = doc.defaultView || window;
-    doc.querySelectorAll(".db-column-menu-subpopover, .db-column-type-popover, .db-number-style-popover, .db-column-number-style-popover")
+    doc.querySelectorAll(".db-column-menu-subpopover, .db-column-type-popover, .db-number-style-popover, .db-column-display-style-popover, .db-column-number-style-popover, .db-column-text-style-popover")
       .forEach((existing) => existing.remove());
     const panel = doc.body.createDiv({ cls: `db-dropdown-popover db-column-menu-subpopover ${className}` });
-    const estimatedWidth = className === "db-column-number-style-popover" ? 292 : 220;
+    const estimatedWidth = className.includes("db-column-display-style-popover") ? 292 : 220;
     if (anchorEl?.isConnected) {
       const rect = anchorEl.getBoundingClientRect();
       panel.setCssProps({
@@ -517,7 +580,7 @@ export class ColumnMenu {
       clearHoverTimer();
       hoverTimer = view.setTimeout(() => {
         hoverTimer = undefined;
-        const nestedDropdownActive = doc.querySelector(".db-numopt-dropdown-popover:hover") != null;
+        const nestedDropdownActive = doc.querySelector(".db-displayopt-dropdown-popover:hover") != null;
         if (!pointerInsidePanel && !pointerInsideAnchor && !nestedDropdownActive) cleanup();
       }, 140);
     };

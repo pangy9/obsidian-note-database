@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { normalizeOptionValueForKey, toValidObsidianTagValues } from "../data/ColumnTypes";
-import { isFileLinkListField } from "../data/FileFields";
+import { isFileLinkListField, isFileSelfLinkField } from "../data/FileFields";
 import { stringifyValue } from "../data/Stringify";
 import { ColumnDef, RowData } from "../data/types";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -17,7 +17,7 @@ export interface FileFieldRenderContext {
 }
 
 export function shouldRenderSpecialFileField(col: ColumnDef): boolean {
-  return col.key === "file.tags" || isFileLinkListField(col.key);
+  return col.key === "file.tags" || isFileLinkListField(col.key) || isFileSelfLinkField(col.key);
 }
 
 export function renderSpecialFileFieldValue(
@@ -34,6 +34,10 @@ export function renderSpecialFileFieldValue(
   }
   if (isFileLinkListField(col.key)) {
     renderFileLinkList(parent, app, row, value, context);
+    return true;
+  }
+  if (isFileSelfLinkField(col.key)) {
+    renderFileSelfLink(parent, app, row, value, context);
     return true;
   }
   return false;
@@ -76,6 +80,29 @@ export function renderFileLinkList(
       void app?.workspace.openLinkText(link.target, row.file.path, false);
     };
   }
+}
+
+/** Render file.file/file.path/file.basename as a link that opens the row's own file. */
+export function renderFileSelfLink(
+  parent: HTMLElement,
+  app: App | undefined,
+  row: RowData,
+  value: unknown,
+  context: FileFieldRenderContext = {}
+): void {
+  const text = stringifyValue(value).trim();
+  if (!text) return;
+  const itemClass = context.linkItemClass || "db-file-self-link";
+  const anchor = parent.createEl("a", {
+    cls: `internal-link ${itemClass}`,
+    text,
+    attr: { title: row.file.path, href: "#" },
+  });
+  anchor.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void app?.workspace.getLeaf(false).openFile(row.file);
+  };
 }
 
 function normalizeFileLinkValues(value: unknown): ParsedFileLink[] {

@@ -61,6 +61,26 @@ describe("QueryEngine filters", () => {
   });
 });
 
+describe("QueryEngine checkbox filters", () => {
+  it("treats false / empty-string / null / missing key all as unchecked (empty), true as checked (notempty)", () => {
+    // Regression: previously `false` was stringified to "false" and counted as not-empty,
+    // so two equally-unchecked notes (one `""`, one `false`) landed in different buckets.
+    const engine = new QueryEngine();
+    const columns: ColumnDef[] = [{ key: "done", label: "Done", type: "checkbox" }];
+    const rows = [
+      row("checked.md", { done: true }),
+      row("false.md", { done: false }),
+      row("empty-string.md", { done: "" }),
+      row("missing.md", {}),
+    ];
+    const filter = (op: "empty" | "notempty") =>
+      engine.applyFilters(rows, [{ field: "done", op }], "and", columns).map((item) => item.file.path);
+
+    expect(filter("empty")).toEqual(["false.md", "empty-string.md", "missing.md"]);
+    expect(filter("notempty")).toEqual(["checked.md"]);
+  });
+});
+
 describe("QueryEngine date sorting", () => {
   it("sorts a date column ascending by local timestamp", () => {
     const engine = new QueryEngine();
@@ -189,5 +209,26 @@ describe("QueryEngine uncategorized grouping", () => {
     ];
 
     expect(engine.groupBy(rows, "status", [], col).map((group) => group.key).sort()).toEqual(["Todo", "Uncategorized"]);
+  });
+});
+
+describe("QueryEngine aliases", () => {
+  it("treats a comma-string aliases value as a list for filtering and grouping", () => {
+    const engine = new QueryEngine();
+    const columns: ColumnDef[] = [{ key: "aliases", label: "Aliases", type: "multi-select" }];
+    const rows = [
+      row("ab.md", { aliases: "alpha, beta" }),
+      row("g.md", { aliases: "gamma" }),
+      row("arr.md", { aliases: ["alpha", "delta"] }),
+    ];
+
+    // eq matches by list element; the comma-string row must match "alpha" like the array row.
+    expect(engine.applyFilters(rows, [{ field: "aliases", op: "eq", value: "alpha" }], "and", columns).map((r) => r.file.path).sort()).toEqual(["ab.md", "arr.md"]);
+
+    // grouping splits the comma-string into separate groups (not one "alpha, beta" group).
+    expect(engine.groupBy(rows, "aliases", [], columns[0]).map((group) => group.key).sort()).toEqual(["alpha", "beta", "delta", "gamma"]);
+
+    // contains must not substring-match across the comma boundary of the combined string.
+    expect(engine.applyFilters(rows, [{ field: "aliases", op: "contains", value: "lpha, b" }], "and", columns)).toEqual([]);
   });
 });

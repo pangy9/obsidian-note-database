@@ -4,10 +4,10 @@ import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
 import { safeString } from "./SafeString";
-import { hasObsidianTagValue, normalizeStatusPresets, toObsidianTagValues } from "./ColumnTypes";
+import { hasObsidianTagValue, normalizeStatusPresets, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { normalizeComputedSyncMode } from "./ComputedSync";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
-import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
+import { absorbTypeFilterIntoRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { linkDatabaseSchema } from "./ColumnConfig";
 import { t } from "../i18n";
 
@@ -119,7 +119,7 @@ export class DataSource {
   }
 
   /** Get all notes in a folder */
-  getNotesInFolder(folderPath: string, typeFilter?: string): NoteRecord[] {
+  getNotesInFolder(folderPath: string): NoteRecord[] {
     const allFiles = this.vault.getMarkdownFiles();
     const normalizedFolder = this.normalizeVaultFolder(folderPath);
     const prefix = normalizedFolder ? (normalizedFolder.endsWith("/") ? normalizedFolder : normalizedFolder + "/") : "";
@@ -137,19 +137,15 @@ export class DataSource {
         );
         return { file: f, frontmatter };
       })
-      .filter((r) => {
-        if (r.frontmatter["db_view"] === true) return false;
-        if (!typeFilter) return true;
-        return r.frontmatter["type"] === typeFilter;
-      });
+      .filter((r) => r.frontmatter["db_view"] !== true);
   }
 
-  /** Query records using database-level config (sourceFolder, sourceRules, typeFilter) */
+  /** Query records using database-level config (sourceFolder, sourceRules) */
   getRecordsForDatabase(db: DatabaseConfig): NoteRecord[] {
     const effectiveRules = this.getEffectiveSourceRules(db);
     const sourceRuleTree = getSourceRuleTree(db.sourceRuleTree, effectiveRules, db.sourceLogic);
     if (!sourceRuleTree && effectiveRules.length === 0) {
-      return this.getNotesInFolder(db.sourceFolder, db.typeFilter);
+      return this.getNotesInFolder(db.sourceFolder);
     }
     const records = this.vault.getMarkdownFiles()
       .map((file) => this.toRecord(file))
@@ -162,8 +158,7 @@ export class DataSource {
         (rule) => this.matchesSourceRule(record, rule, db),
         (rule) => this.matchesSourceExpression(record, rule.expression, db)
       )) return false;
-      if (!db.typeFilter) return true;
-      return record.frontmatter["type"] === db.typeFilter;
+      return true;
     });
   }
 
@@ -261,6 +256,7 @@ export class DataSource {
     const allFiles = this.vault.getMarkdownFiles();
     const cleanupTargets: TFile[] = [];
     const idBackfillTargets: { file: TFile; id: string }[] = [];
+    const typeFilterTargets: TFile[] = [];
 
     for (const f of allFiles) {
       const override = this.getViewDefOverride(f.path);
@@ -286,6 +282,22 @@ export class DataSource {
         if (databaseObj && typeof databaseObj === "object" && databaseObj["id"] == null) {
           idBackfillTargets.push({ file: f, id: config.id });
         }
+        // Migration: absorb a legacy `typeFilter` (a special-case filter on the
+        // `type` frontmatter field, superseded by general source rules) into the
+        // source-rule tree. Done in-memory here so the first scan after upgrade is
+        // already correct (avoids a brief window where the filter is lost before the
+        // disk write lands); the disk write is persisted asynchronously below.
+        if (databaseObj && typeof databaseObj === "object") {
+          let typeFilterMigrated = absorbTypeFilterIntoRules(config, databaseObj["typeFilter"]);
+          const rawViews = Array.isArray(databaseObj["views"]) ? databaseObj["views"] as Record<string, unknown>[] : [];
+          rawViews.forEach((rawView, index) => {
+            const viewConfig = config.views[index];
+            if (viewConfig && absorbTypeFilterIntoRules(viewConfig, rawView["typeFilter"])) {
+              typeFilterMigrated = true;
+            }
+          });
+          if (typeFilterMigrated) typeFilterTargets.push(f);
+        }
       }
     }
 
@@ -297,6 +309,11 @@ export class DataSource {
     // Asynchronously persist a stable id into db_view files missing database.id
     if (idBackfillTargets.length > 0) {
       void this.migrateBackfillDatabaseId(idBackfillTargets);
+    }
+
+    // Asynchronously absorb legacy typeFilter into source rules and remove it from disk
+    if (typeFilterTargets.length > 0) {
+      void this.migrateTypeFilterToSourceRules(typeFilterTargets);
     }
 
     return results;
@@ -341,6 +358,34 @@ export class DataSource {
     }
   }
 
+  /** Migrate a legacy `typeFilter` (database-level and per-view) into the general
+   *  source-rule tree as `{ field: "type", op: "eq" }` and remove `typeFilter` from
+   *  disk. typeFilter was a special-case filter on the `type` frontmatter field that
+   *  predates source rules. Idempotent via the empty-value guard in
+   *  absorbTypeFilterIntoRules, so re-running on an already-migrated file is a no-op.
+   *  The in-memory config is migrated synchronously during the scan (see
+   *  getViewDefFiles); this persists the same change to the db_view file. */
+  private async migrateTypeFilterToSourceRules(files: TFile[]): Promise<void> {
+    for (const file of files) {
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+          const frontmatter = fm as Record<string, unknown>;
+          const database = frontmatter["database"];
+          if (frontmatter["db_view"] !== true || !database || typeof database !== "object") return;
+          const db = database as Record<string, unknown>;
+          absorbTypeFilterIntoRules(db, db["typeFilter"]);
+          const views = Array.isArray(db["views"]) ? db["views"] as Record<string, unknown>[] : [];
+          for (const view of views) {
+            absorbTypeFilterIntoRules(view, view["typeFilter"]);
+          }
+        });
+      } catch (err) {
+        // Non-critical migration; log and continue
+        console.warn("Note Database: failed to migrate typeFilter in", file.path, err);
+      }
+    }
+  }
+
   /** Parse DatabaseConfig from a view definition file's frontmatter */
   parseDatabaseConfig(fm: Record<string, unknown>): DatabaseConfig | null {
     try {
@@ -374,7 +419,6 @@ export class DataSource {
           sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
           sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
           newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
-          typeFilter: safeString(source["typeFilter"]) || undefined,
           schema: sharedSchema,
           statusPresets: normalizeStatusPresets(source["viewStatusPresets"] || [], []),
           defaultStatusPresetId: safeString(source["viewDefaultStatusPresetId"]) || undefined,
@@ -395,7 +439,6 @@ export class DataSource {
           hiddenColumns: Array.isArray(source["hiddenColumns"]) ? source["hiddenColumns"] as string[] : undefined,
           sortColumnOrder: safeString(source["sortColumnOrder"]) || undefined,
           statusFilter: safeString(source["statusFilter"]) || undefined,
-          searchText: safeString(source["searchText"]) || undefined,
           groupByField: safeString(source["groupByField"]) || undefined,
           groupOrders: source["groupOrders"] && typeof source["groupOrders"] === "object"
             ? source["groupOrders"] as Record<string, string[]>
@@ -479,7 +522,6 @@ export class DataSource {
         sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
         sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
         newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
-        typeFilter: safeString(source["typeFilter"]) || undefined,
         computedSyncMode: normalizeComputedSyncMode(source["computedSyncMode"]),
         summaryFormulas: this.parseStringMap(source["summaryFormulas"]),
         schema: sharedSchema,
@@ -494,6 +536,8 @@ export class DataSource {
   }
 
   private parseViewConfig(v: Record<string, unknown>, sharedSchema: RecordSchema): ViewConfig {
+    const parsedSourceRuleTree = parseSourceRuleTree(v["sourceRuleTree"]);
+    const hasLegacyViewSourceRules = Array.isArray(v["sourceRules"]) && (v["sourceRules"] as unknown[]).length > 0;
     return {
       id: (v["id"] as string) || generateId(),
       name: safeString(v["name"]) || this.getDefaultViewName(this.parseViewType(v["viewType"])),
@@ -501,9 +545,8 @@ export class DataSource {
       sourceFolder: safeString(v["sourceFolder"]),
       sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as SourceRule[] : undefined,
       sourceLogic: v["sourceLogic"] === "or" ? "or" : "and",
-      sourceRuleTree: parseSourceRuleTree(v["sourceRuleTree"]),
+      sourceRuleTree: parsedSourceRuleTree,
       newRecordFolder: safeString(v["newRecordFolder"]) || undefined,
-      typeFilter: safeString(v["typeFilter"]) || undefined,
       schema: sharedSchema,
       statusPresets: normalizeStatusPresets(v["statusPresets"] || [], []),
       defaultStatusPresetId: safeString(v["defaultStatusPresetId"]) || undefined,
@@ -524,7 +567,6 @@ export class DataSource {
       hiddenColumns: Array.isArray(v["hiddenColumns"]) ? v["hiddenColumns"] as string[] : undefined,
       sortColumnOrder: safeString(v["sortColumnOrder"]) || undefined,
       statusFilter: safeString(v["statusFilter"]) || undefined,
-      searchText: safeString(v["searchText"]) || undefined,
       groupByField: safeString(v["groupByField"]) || undefined,
       groupOrders: v["groupOrders"] && typeof v["groupOrders"] === "object"
         ? v["groupOrders"] as Record<string, string[]>
@@ -607,6 +649,7 @@ export class DataSource {
       calendarAllDayMaxLanes: this.parsePositiveNumber(v["calendarAllDayMaxLanes"]),
       calendarFirstDayOfWeek: v["calendarFirstDayOfWeek"] === 0 ? 0 : v["calendarFirstDayOfWeek"] === 1 ? 1 : v["calendarFirstDayOfWeek"] === 6 ? 6 : undefined,
       yearDisplayMode: v["yearDisplayMode"] === "always" ? "always" : v["yearDisplayMode"] === "smart" ? "smart" : v["yearDisplayMode"] === "never" ? "never" : undefined,
+      viewSourceRulesEnabled: v["viewSourceRulesEnabled"] === true ? true : v["viewSourceRulesEnabled"] === false ? false : (parsedSourceRuleTree || hasLegacyViewSourceRules) ? true : undefined,
       calendarMonthVisibleLanes: this.parsePositiveNumber(v["calendarMonthVisibleLanes"]),
       timelineStartDateField: safeString(v["timelineStartDateField"]) || undefined,
       timelineEndDateField: safeString(v["timelineEndDateField"]) || undefined,
@@ -679,7 +722,6 @@ export class DataSource {
       sourceLogic: dbConfig.sourceLogic || "and",
       sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
-      typeFilter: dbConfig.typeFilter || "",
       computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
       summaryFormulas: dbConfig.summaryFormulas || {},
       columns: dbConfig.schema.columns || [],
@@ -700,7 +742,6 @@ export class DataSource {
       sourceLogic: view.sourceLogic || "and",
       sourceRuleTree: view.sourceRuleTree,
       newRecordFolder: view.newRecordFolder || "",
-      typeFilter: view.typeFilter || "",
       displayWidth: view.displayWidth || "default",
       sortColumn: view.sortColumn || "",
       sortDirection: view.sortDirection || "asc",
@@ -710,7 +751,6 @@ export class DataSource {
       hiddenColumns: view.hiddenColumns || [],
       sortColumnOrder: view.sortColumnOrder || "",
       statusFilter: view.statusFilter || "",
-      searchText: view.searchText || "",
       groupByField: view.groupByField || "",
       groupOrders: view.groupOrders || {},
       showEmptyGroups: view.showEmptyGroups || {},
@@ -794,6 +834,7 @@ export class DataSource {
       calendarAllDayMaxLanes: typeof view.calendarAllDayMaxLanes === "number" ? view.calendarAllDayMaxLanes : undefined,
       calendarFirstDayOfWeek: view.calendarFirstDayOfWeek === 0 || view.calendarFirstDayOfWeek === 1 || view.calendarFirstDayOfWeek === 6 ? view.calendarFirstDayOfWeek : undefined,
       yearDisplayMode: view.yearDisplayMode === "always" || view.yearDisplayMode === "smart" || view.yearDisplayMode === "never" ? view.yearDisplayMode : undefined,
+      viewSourceRulesEnabled: typeof view.viewSourceRulesEnabled === "boolean" ? view.viewSourceRulesEnabled : undefined,
       calendarMonthVisibleLanes: typeof view.calendarMonthVisibleLanes === "number" ? view.calendarMonthVisibleLanes : undefined,
       timelineStartDateField: view.timelineStartDateField || "",
       timelineEndDateField: view.timelineEndDateField || "",
@@ -816,7 +857,6 @@ export class DataSource {
       "sourceLogic",
       "sourceRuleTree",
       "newRecordFolder",
-      "typeFilter",
       "computedSyncMode",
       "summaryFormulas",
       "columns",
@@ -845,6 +885,8 @@ export class DataSource {
       "hiddenColumns",
       "sortColumnOrder",
       "statusFilter",
+      // searchText is no longer persisted (search is transient); kept here only
+      // to strip it from legacy flat-format frontmatter on the next write.
       "searchText",
       "groupByField",
       "groupOrders",
@@ -1393,6 +1435,9 @@ export class DataSource {
     }
     if (field === "folder") return record.file.parent?.path || "";
     if (field === "tags") return this.getTags(record).join(" ");
+    // aliases is a built-in multitext list: return it as an array so source-rule contains/eq
+    // use list semantics (any-element) instead of substring on a raw comma string.
+    if (field === "aliases") return toMultiSelectValues(record.frontmatter[field]);
     return record.frontmatter[field];
   }
 
@@ -1451,7 +1496,11 @@ function isBaseSourceEmptyValue(value: unknown): boolean {
 }
 
 function baseSourceValuesEqual(value: unknown, rule: SourceRule, columns?: ColumnDef[]): boolean {
-  if (Array.isArray(value)) return value.length === 1 && baseSourceScalarValuesEqual(value[0], rule, columns);
+  // Multi-value fields (aliases, multi-select) follow the same list semantics as
+  // Bases/QueryEngine filters: any element equal to the rule value counts as a match.
+  // neq is the caller's negation (!baseSourceValuesEqual), which then correctly means
+  // "no element equals". See ARCHITECTURE_CONTRACTS.md (source-rule eq/contains).
+  if (Array.isArray(value)) return value.some((item) => baseSourceScalarValuesEqual(item, rule, columns));
   return baseSourceScalarValuesEqual(value, rule, columns);
 }
 

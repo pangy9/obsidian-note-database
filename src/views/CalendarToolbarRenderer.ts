@@ -7,6 +7,7 @@ import { HOUR_HEIGHT_MIN } from "../data/CalendarLayoutModel";
 import { createDropdownField, DropdownOption } from "./DropdownField";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 
 /** Actions exposed by the calendar toolbar settings panel. */
 export interface CalendarToolbarActions {
@@ -387,7 +388,9 @@ export class CalendarToolbarRenderer {
 			className: "db-chart-options-dropdown",
 			popoverClassName: "db-calendar-options-dropdown",
 			searchable: options.length > 8,
-			renderIcon: (iconEl, iconName) => setIcon(iconEl, iconName),
+			renderIcon: (iconEl, iconName) => {
+				if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
+			},
 		});
 	}
 
@@ -454,18 +457,21 @@ export class CalendarToolbarRenderer {
 			{ value: "", text: t("common.notSet") },
 			...config.schema.columns
 				.filter((col) => col.key !== "file.name" && isDateLikeColumnType(getColumnDisplayType(col, config.schema.computedFields)))
-				.map((col) => ({
-					value: col.key,
-					text: col.label,
-					icon: getColumnDisplayType(col, config.schema.computedFields) === "datetime" ? "clock" : "calendar",
-				})),
+				.map((col) => {
+					const type = getColumnDisplayType(col, config.schema.computedFields);
+					return { value: col.key, text: col.label || col.key, icon: getPropertyDropdownIcon(type) };
+				}),
 		];
 	}
 
 	private getAnyFieldOptions(config: ViewConfig): DropdownOption[] {
 		return [
 			{ value: "", text: t("viewConfig.titleAuto") },
-			...config.schema.columns.map((col) => ({ value: col.key, text: col.label, icon: this.getColumnIcon(col) })),
+			...config.schema.columns.map((col) => ({
+				value: col.key,
+				text: col.label || col.key,
+				icon: getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields)),
+			})),
 		];
 	}
 
@@ -475,19 +481,12 @@ export class CalendarToolbarRenderer {
 			{ value: "", text: t("viewConfig.noColorField") },
 			...config.schema.columns
 				.filter((col) => colorTypes.has(getColumnDisplayType(col, config.schema.computedFields)))
-				.map((col) => ({ value: col.key, text: col.label, icon: this.getColumnIcon(col) })),
+				.map((col) => ({
+					value: col.key,
+					text: col.label || col.key,
+					icon: getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields)),
+				})),
 		];
-	}
-
-	private getColumnIcon(col: ColumnDef): string {
-		if (col.type === "status") return "circle-dot";
-		if (col.type === "select") return "list";
-		if (col.type === "multi-select") return "tags";
-		if (col.type === "datetime") return "clock";
-		if (col.type === "date") return "calendar";
-		if (col.type === "number" || col.type === "currency") return "hash";
-		if (col.type === "checkbox") return "check-square";
-		return "text";
 	}
 
 	private isInsideDropdown(target: Node): boolean {

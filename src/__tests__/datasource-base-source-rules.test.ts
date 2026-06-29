@@ -129,4 +129,100 @@ describe("DataSource Bases source rules", () => {
 
     expect(new DataSource(app as unknown as ConstructorParameters<typeof DataSource>[0]).getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/late.md"]);
   });
+
+  it("evaluates aliases contains as a list (array and comma-string), not a raw substring", () => {
+    const arr = file("Projects/arr.md");
+    const str = file("Projects/str.md");
+    const other = file("Projects/other.md");
+    const frontmatterByPath: Record<string, Record<string, unknown>> = {
+      [arr.path]: { aliases: ["alpha", "beta"] },
+      [str.path]: { aliases: "alpha, gamma" },
+      [other.path]: { aliases: "delta" },
+    };
+    const app: MockApp = {
+      vault: { getMarkdownFiles: () => [arr, str, other], getAbstractFileByPath: () => null },
+      metadataCache: {
+        getFileCache: (target: { path: string }) => ({ frontmatter: frontmatterByPath[target.path] || {} }),
+        getFirstLinkpathDest: () => null,
+      },
+    };
+    const db: DatabaseConfig = {
+      id: "db",
+      name: "DB",
+      sourceFolder: "",
+      sourceRules: [{ field: "aliases", op: "contains", value: "alpha" }],
+      schema: { columns: [{ key: "aliases", label: "Aliases", type: "multi-select" }], computedFields: [] },
+      views: [],
+    };
+    // Both the array ["alpha","beta"] and the comma-string "alpha, gamma" match "alpha"
+    // via list semantics; "delta" does not.
+    const ds = new DataSource(app as unknown as ConstructorParameters<typeof DataSource>[0]);
+    expect(ds.getRecordsForDatabase(db).map((record) => record.file.path)).toEqual(["Projects/arr.md", "Projects/str.md"]);
+
+    // Regression: contains must use list membership, not whole-value substring. "alp" is a
+    // substring of "alpha" but not a list element, so it must match nothing.
+    const dbSubstring: DatabaseConfig = { ...db, sourceRules: [{ field: "aliases", op: "contains", value: "alp" }] };
+    expect(ds.getRecordsForDatabase(dbSubstring)).toEqual([]);
+  });
+
+  it("evaluates aliases eq/neq as a list (any-element equality), matching Bases/QueryEngine filters", () => {
+    const arr = file("Projects/arr.md");
+    const str = file("Projects/str.md");
+    const other = file("Projects/other.md");
+    const frontmatterByPath: Record<string, Record<string, unknown>> = {
+      [arr.path]: { aliases: ["alpha", "beta"] },
+      [str.path]: { aliases: "beta, gamma" },
+      [other.path]: { aliases: "delta" },
+    };
+    const app: MockApp = {
+      vault: { getMarkdownFiles: () => [arr, str, other], getAbstractFileByPath: () => null },
+      metadataCache: {
+        getFileCache: (target: { path: string }) => ({ frontmatter: frontmatterByPath[target.path] || {} }),
+        getFirstLinkpathDest: () => null,
+      },
+    };
+    const ds = new DataSource(app as unknown as ConstructorParameters<typeof DataSource>[0]);
+
+    const db = (op: "eq" | "neq", value: string): DatabaseConfig => ({
+      id: "db",
+      name: "DB",
+      sourceFolder: "",
+      sourceRules: [{ field: "aliases", op, value }],
+      schema: { columns: [{ key: "aliases", label: "Aliases", type: "multi-select" }], computedFields: [] },
+      views: [],
+    });
+
+    // eq matches when ANY element equals the rule value (array or comma-string),
+    // matching QueryEngine's `values.some(compareFilterValue === 0)` list semantics.
+    expect(ds.getRecordsForDatabase(db("eq", "alpha")).map((r) => r.file.path)).toEqual(["Projects/arr.md"]);
+    expect(ds.getRecordsForDatabase(db("eq", "beta")).map((r) => r.file.path)).toEqual(["Projects/arr.md", "Projects/str.md"]);
+    // eq must NOT substring-match: "alph" is a substring of "alpha" but not a list element.
+    expect(ds.getRecordsForDatabase(db("eq", "alph"))).toEqual([]);
+    // neq is the dual (!baseSourceValuesEqual): keeps rows where NO element equals the value.
+    expect(ds.getRecordsForDatabase(db("neq", "beta")).map((r) => r.file.path)).toEqual(["Projects/other.md"]);
+  });
+
+  it("migrates legacy flat view-level sourceRules to viewSourceRulesEnabled=true (backward compat)", () => {
+    const ds = new DataSource({} as unknown as ConstructorParameters<typeof DataSource>[0]);
+    const config = ds.parseDatabaseConfig({
+      db_view: true,
+      database: {
+        id: "db",
+        name: "DB",
+        sourceFolder: "",
+        columns: [],
+        computedFields: [],
+        views: [{
+          id: "v1",
+          name: "Table",
+          viewType: "table",
+          sourceRules: [{ field: "status", op: "eq", value: "active" }],
+          sourceLogic: "and",
+          // No sourceRuleTree, no viewSourceRulesEnabled → migration must set true
+        }],
+      },
+    });
+    expect(config?.views[0].viewSourceRulesEnabled).toBe(true);
+    expect(config?.views[0].sourceRules).toEqual([{ field: "status", op: "eq", value: "active" }]);
+  });
 });

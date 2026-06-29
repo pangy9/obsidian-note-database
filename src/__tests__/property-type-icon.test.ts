@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 // eslint-disable-next-line import/no-nodejs-modules
 import { readFileSync } from "node:fs";
 import { ColumnDef } from "../data/types";
-import { PROPERTY_TYPE_ICON_NAMES, renderPropertyTypeIcon } from "../views/PropertyTypeIcon";
+import { getPropertyDropdownIcon, isPropertyDropdownIcon, PROPERTY_TYPE_ICON_NAMES, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "../views/PropertyTypeIcon";
 
 class FakeClassList {
   private values = new Set<string>();
@@ -92,6 +92,21 @@ describe("PropertyTypeIcon", () => {
     const icon = renderPropertyTypeIcon(doc.createElement("div") as unknown as HTMLElement, column("number", "file.name"));
 
     expect(icon.getAttribute("data-icon")).toBe(PROPERTY_TYPE_ICON_NAMES.text);
+  });
+
+  it("renders dropdown property icons without depending on Obsidian setIcon", () => {
+    const doc = new FakeDocument();
+    const parent = doc.createElement("div");
+
+    expect(renderDropdownPropertyTypeIcon(parent as unknown as HTMLElement, getPropertyDropdownIcon("status"))).toBe(true);
+    expect(renderDropdownPropertyTypeIcon(parent as unknown as HTMLElement, "calendar")).toBe(false);
+    expect(parent.children[0]?.getAttribute("data-icon")).toBe(PROPERTY_TYPE_ICON_NAMES.status);
+  });
+
+  it("distinguishes property type icons from regular lucide dropdown icons", () => {
+    expect(isPropertyDropdownIcon(getPropertyDropdownIcon("number"))).toBe(true);
+    expect(isPropertyDropdownIcon("table")).toBe(false);
+    expect(isPropertyDropdownIcon(undefined)).toBe(false);
   });
 });
 

@@ -21,7 +21,7 @@ import { isHTMLElement } from "./DomGuards";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { clamp, getVisiblePopoverBounds, positionToolbarPopover, setPosition } from "./PopoverPosition";
 import { createDropdownField, DropdownOption } from "./DropdownField";
-import { PROPERTY_TYPE_ICON_NAMES, renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 
 export interface ChartToolbarActions {
   onChange(label?: string): void;
@@ -89,7 +89,7 @@ function toChartFieldOption(col: ColumnDef): SelectOption {
   return {
     value: col.key,
     text: col.label || col.key,
-    icon: PROPERTY_TYPE_ICON_NAMES[col.type] ? `property:${col.type}` : undefined,
+    icon: getPropertyDropdownIcon(col.type),
     section: getChartFieldSection(col),
   };
 }
@@ -977,8 +977,7 @@ export class ChartToolbarRenderer {
     if (icon.startsWith("chart:")) {
       wrap.createSpan({ cls: `db-chart-custom-icon db-chart-icon-${icon.slice("chart:".length)}` });
     } else if (icon.startsWith("property:")) {
-      const type = icon.slice("property:".length) as ColumnDef["type"];
-      renderPropertyTypeIcon(wrap, { key: "", label: "", type }, "db-dropdown-option-type-icon");
+      renderDropdownPropertyTypeIcon(wrap, icon);
     } else {
       setIcon(wrap, icon);
     }

@@ -221,7 +221,8 @@ describe("chart view UI wiring", () => {
     expect(chartToolbar).toContain("toChartFieldOption");
     expect(chartToolbar).toContain("getChartFieldSection");
     expect(chartToolbar).toContain("section: getChartFieldSection(col)");
-    expect(chartToolbar).toContain("PROPERTY_TYPE_ICON_NAMES");
+    expect(chartToolbar).toContain("getPropertyDropdownIcon(col.type)");
+    expect(chartToolbar).toContain("renderDropdownPropertyTypeIcon(wrap, icon)");
     expect(chartToolbar).toContain("searchable: isFieldPicker");
     expect(chartToolbar).toContain("getDateBucketOptions");
     expect(chartToolbar).toContain("db-chart-options-popover");
@@ -402,12 +403,12 @@ describe("chart view UI wiring", () => {
     const chartIndex = toolbar.indexOf("this.renderChartOptionsButton(right, actions)");
     const settingsIndex = toolbar.indexOf("this.renderViewConfigButton(right, actions)");
     const exportIndex = toolbar.indexOf("this.renderExportButton(right, actions)");
-    const searchIndex = toolbar.indexOf("if (!phoneLayout) this.renderSearch(right, state, actions)");
 
     expect(settingsIndex).toBeGreaterThan(0);
     expect(exportIndex).toBeGreaterThan(settingsIndex);
     expect(chartIndex).toBeGreaterThan(exportIndex);
-    expect(searchIndex).toBeGreaterThan(chartIndex);
+    // Chart view does not show the search box.
+    expect(toolbar).toContain("if (!phoneLayout && !isChartView) this.renderSearch(right, state, actions)");
   });
 
   it("keeps chart-applied filters in the normal undoable filter config path", () => {

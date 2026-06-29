@@ -13,11 +13,16 @@ vi.mock("obsidian", () => ({
 
 _g.moment = Object.assign(
   (value: unknown) => {
-    const date = value == null ? new Date() : new Date(value as string | number | Date);
+    // Parse YYYY-MM-DD with local construction so day()/toDate() are timezone-stable.
+    const m = typeof value === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(value) : null;
+    const date = m
+      ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      : (value == null ? new Date() : new Date(value as string | number | Date));
     return {
       format: () => "2026-06-03",
       isValid: () => !Number.isNaN(date.getTime()),
       toDate: () => date,
+      day: () => date.getDay(),
     };
   },
   { isMoment: () => false, ISO_8601: "ISO_8601" }
@@ -125,5 +130,34 @@ describe("computed datetime functions and result type (source-level)", () => {
     expect(modal).toContain('type === "datetime"');
     expect(modal).toContain('name: "HOUR"');
     expect(modal).toContain("formula.ex.dateTime");
+  });
+});
+
+describe("Excel function extensions: TEXT / WEEKDAY / NETWORKDAYS", () => {
+  const evalExpr = (expression: string): unknown => {
+    const defs: ComputedFieldDef[] = [{ key: "r", label: "R", expression, type: "text" }];
+    return evaluateComputedFields(defs, columns, {}, { app, file: file as never }).r;
+  };
+
+  it("TEXT formats numbers (thousands / percent / padding / fixed)", () => {
+    expect(evalExpr('TEXT(1234.5, "#,##0.00")')).toBe("1,234.50");
+    expect(evalExpr('TEXT(0.25, "0%")')).toBe("25%");
+    expect(evalExpr('TEXT(5, "00")')).toBe("05");
+    expect(evalExpr('TEXT(3.14159, "0.00")')).toBe("3.14");
+    expect(evalExpr('TEXT(-1234, "#,##0")')).toBe("-1,234");
+  });
+
+  it("WEEKDAY keeps 0-6 default and honors return_type", () => {
+    // 2026-06-01 is Monday.
+    expect(evalExpr('WEEKDAY("2026-06-01")')).toBe(1);     // default 0-6: Mon=1
+    expect(evalExpr('WEEKDAY("2026-06-01", 2)')).toBe(1);  // type 2: Mon=1
+    expect(evalExpr('WEEKDAY("2026-06-07", 2)')).toBe(7);  // type 2: Sun=7
+    expect(evalExpr('WEEKDAY("2026-06-01", 3)')).toBe(0);  // type 3: Mon=0
+  });
+
+  it("NETWORKDAYS counts working days and excludes holidays", () => {
+    expect(evalExpr('NETWORKDAYS("2026-06-01", "2026-06-05")')).toBe(5);                    // Mon–Fri
+    expect(evalExpr('NETWORKDAYS("2026-06-01", "2026-06-06")')).toBe(5);                    // Saturday not counted
+    expect(evalExpr('NETWORKDAYS("2026-06-01", "2026-06-05", "2026-06-01")')).toBe(4);      // exclude the Monday
   });
 });

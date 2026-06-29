@@ -170,6 +170,13 @@ export function isObsidianTagsKey(key: string): boolean {
   return key === "tags";
 }
 
+/** `aliases` is an Obsidian built-in multitext/list property (like `tags`). Unlike tags it
+ *  has no inline-source fusion and no nesting, so it is treated as a regular multi-select
+ *  list (comma-split via `toMultiSelectValues`, no `#` stripping). */
+export function isObsidianAliasesKey(key: string): boolean {
+  return key === "aliases";
+}
+
 export function normalizeObsidianTagValue(value: unknown): string {
   return stringifyValue(value).trim().replace(/^#/, "");
 }

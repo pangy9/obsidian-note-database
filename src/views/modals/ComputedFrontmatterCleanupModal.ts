@@ -1,9 +1,11 @@
 import { App, Modal } from "obsidian";
 import { ComputedFrontmatterCleanupOption } from "../../data/ComputedCleanup";
+import { applyRangeSelection } from "../../data/RangeSelection";
 import { t } from "../../i18n";
 
 export class ComputedFrontmatterCleanupModal extends Modal {
   private selectedKeys: Set<string>;
+  private lastSelectedKey: string | null = null;
 
   constructor(
     app: App,
@@ -29,12 +31,20 @@ export class ComputedFrontmatterCleanupModal extends Modal {
     for (const option of this.options) {
       const row = list.createEl("label", { cls: "db-computed-cleanup-option" });
       const checkbox = row.createEl("input", {
+        cls: "db-modal-checkbox",
         attr: { type: "checkbox", value: option.key },
       });
       checkbox.checked = this.selectedKeys.has(option.key);
-      checkbox.onchange = () => {
-        if (checkbox.checked) this.selectedKeys.add(option.key);
-        else this.selectedKeys.delete(option.key);
+      checkbox.onclick = (event) => {
+        this.lastSelectedKey = applyRangeSelection({
+          orderedIds: this.getOptionKeys(),
+          selectedIds: this.selectedKeys,
+          anchorId: this.lastSelectedKey,
+          targetId: option.key,
+          selected: checkbox.checked,
+          range: event.shiftKey,
+        });
+        this.syncCheckboxes(list);
         updateConfirmState();
       };
       const text = row.createDiv({ cls: "db-computed-cleanup-option-text" });
@@ -65,6 +75,16 @@ export class ComputedFrontmatterCleanupModal extends Modal {
       await this.onConfirm(keys);
       this.close();
     };
+  }
+
+  private getOptionKeys(): string[] {
+    return this.options.map((option) => option.key);
+  }
+
+  private syncCheckboxes(list: HTMLElement): void {
+    list.querySelectorAll<HTMLInputElement>("input[type='checkbox'][value]").forEach((checkbox) => {
+      checkbox.checked = this.selectedKeys.has(checkbox.value);
+    });
   }
 
   onClose(): void {

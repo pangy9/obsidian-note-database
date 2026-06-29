@@ -50,7 +50,6 @@ interface PropertyServiceMock {
   copyKey: ReturnType<typeof vi.fn>;
   convertKeyType: ReturnType<typeof vi.fn>;
   getDefaultValue: ReturnType<typeof vi.fn>;
-  setObsidianPropertyType: ReturnType<typeof vi.fn>;
 }
 
 interface OpsDeps {
@@ -84,7 +83,6 @@ function makeOps(db: DatabaseConfig, view: ViewConfig) {
     copyKey: vi.fn().mockResolvedValue({ changed: 0, skipped: 0 }),
     convertKeyType: vi.fn().mockResolvedValue({ changed: 0, skipped: 0 }),
     getDefaultValue: vi.fn().mockReturnValue(""),
-    setObsidianPropertyType: vi.fn().mockResolvedValue(undefined),
   };
   const deps: OpsDeps = {
     app: {},
@@ -398,7 +396,6 @@ describe("ColumnOperations", () => {
 
     expect(tagsCol.type).toBe("multi-select");
     expect(schema.columns.map((candidate) => candidate.key)).toEqual(["file.name", "file.tags"]);
-    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
     expect(propertyService.copyKey).not.toHaveBeenCalled();
   });
 
@@ -423,7 +420,6 @@ describe("ColumnOperations", () => {
     expect(tagsCol).toMatchObject({ key: "file.tags", label: "Note tags", type: "multi-select", wrap: true });
     expect(propertyService.renameKey).not.toHaveBeenCalled();
     expect(propertyService.deleteKey).not.toHaveBeenCalled();
-    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
   });
 
   it("deletes old frontmatter when a normal property is converted to a supported file field", async () => {
@@ -447,7 +443,6 @@ describe("ColumnOperations", () => {
     expect(customCol).toMatchObject({ key: "file.path", label: "Path", type: "text" });
     expect(propertyService.renameKey).not.toHaveBeenCalled();
     expect(propertyService.deleteKey).toHaveBeenCalledWith([], "custom");
-    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
   });
 
   it("does not create pending frontmatter values for file fields", () => {
@@ -518,6 +513,5 @@ describe("ColumnOperations", () => {
     expect(customCol.key).toBe("custom");
     expect(propertyService.renameKey).not.toHaveBeenCalled();
     expect(propertyService.deleteKey).not.toHaveBeenCalled();
-    expect(propertyService.setObsidianPropertyType).not.toHaveBeenCalled();
   });
 });

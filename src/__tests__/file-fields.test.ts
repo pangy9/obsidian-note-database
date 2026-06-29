@@ -131,7 +131,6 @@ describe("PropertyService file field guards", () => {
     } as never, mutate);
     const files = [{ path: "Projects/task.md" }] as never[];
 
-    await service.setObsidianPropertyType("file.path", "text");
     await service.renameKey(files, "file.path", "path", undefined, true);
     await service.ensureKey(files, "file.path");
     await service.copyKey(files, "file.path", "path_copy");

@@ -1,5 +1,6 @@
 import { App, Modal } from "obsidian";
 import { COLUMN_TYPE_LABELS } from "../../data/ColumnTypes";
+import { applyRangeSelection, clearSelection, selectAll } from "../../data/RangeSelection";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
 import { createDropdownField } from "../DropdownField";
@@ -25,6 +26,10 @@ export class BaseImportConfirmModal extends Modal {
   private titleText: string;
   private descText: string;
   private defaultUnchecked: boolean;
+  private selectedColumnKeys = new Set<string>();
+  private lastSelectedColumnKey: string | null = null;
+  private headerSelectionCheckbox?: HTMLInputElement;
+  private columnSelectionRows: Array<{ key: string; row: HTMLElement; checkbox: HTMLInputElement }> = [];
 
   private static TYPES: ColumnDef["type"][] = [
     "text", "number", "date", "datetime", "currency", "select", "multi-select", "status", "checkbox",
@@ -59,6 +64,8 @@ export class BaseImportConfirmModal extends Modal {
       cls: "db-modal-help",
     });
 
+    this.initializeColumnSelection();
+
     const table = contentEl.createEl("table", {
       cls: "base-import-table",
     });
@@ -67,15 +74,12 @@ export class BaseImportConfirmModal extends Modal {
     headRow.createEl("th", { text: t("baseImport.property") });
     headRow.createEl("th", { text: t("baseImport.displayName") });
     headRow.createEl("th", { text: t("baseImport.inferredType") });
-    headRow.createEl("th", { text: t("baseImport.include") });
     headRow.createEl("th", { text: t("baseImport.fileCount") });
+    this.renderHeaderSelectionCheckbox(headRow.createEl("th", { cls: "base-import-check-cell" }));
 
     const tbody = table.createEl("tbody");
+    this.columnSelectionRows = [];
     for (const col of this.columns) {
-      // Initialize excluded state based on defaultUnchecked
-      if (this.defaultUnchecked) {
-        col.excluded = true;
-      }
       const tr = tbody.createEl("tr");
       if (col.excluded) tr.addClass("base-import-excluded");
       tr.createEl("td", { text: col.key });
@@ -99,22 +103,33 @@ export class BaseImportConfirmModal extends Modal {
         hideLabel: true,
         onChange: (value) => {
           col.type = value as ColumnDef["type"];
-        iconEl.remove();
-        iconEl = renderPropertyTypeIcon(typeTd, col);
+          iconEl.remove();
+          iconEl = renderPropertyTypeIcon(typeTd, col);
           typeTd.insertBefore(iconEl, typeDropdown.button);
         },
       });
+      tr.createEl("td", { text: col.fileCount > 0 ? String(col.fileCount) : "-" });
       const checkTd = tr.createEl("td");
       checkTd.addClass("base-import-check-cell");
       const checkbox = checkTd.createEl("input", {
-        attr: { type: "checkbox" },
+        cls: "db-modal-checkbox base-import-include-checkbox",
+        attr: { type: "checkbox", "aria-label": t("baseImport.include") },
       });
-      checkbox.checked = !this.defaultUnchecked;
-      checkbox.onchange = () => {
-        col.excluded = !checkbox.checked;
-        tr.toggleClass("base-import-excluded", col.excluded);
+      checkbox.checked = this.selectedColumnKeys.has(col.key);
+      this.columnSelectionRows.push({ key: col.key, row: tr, checkbox });
+      checkbox.onclick = (event) => {
+        event.stopPropagation();
+        const useRangeSelection = event.shiftKey && !event.metaKey && !event.ctrlKey;
+        this.lastSelectedColumnKey = applyRangeSelection({
+          orderedIds: this.getColumnKeys(),
+          selectedIds: this.selectedColumnKeys,
+          anchorId: this.lastSelectedColumnKey,
+          targetId: col.key,
+          selected: checkbox.checked,
+          range: useRangeSelection,
+        });
+        this.syncColumnSelectionRows();
       };
-      tr.createEl("td", { text: col.fileCount > 0 ? String(col.fileCount) : "-" });
     }
 
     const btnRow = contentEl.createDiv({ cls: "base-import-buttons" });
@@ -126,6 +141,61 @@ export class BaseImportConfirmModal extends Modal {
       this.resolve?.(this.columns.filter((c) => !c.excluded));
       this.close();
     };
+  }
+
+  private initializeColumnSelection(): void {
+    this.selectedColumnKeys.clear();
+    for (const col of this.columns) {
+      if (this.defaultUnchecked) col.excluded = true;
+      else col.excluded = Boolean(col.excluded);
+      if (!col.excluded) this.selectedColumnKeys.add(col.key);
+    }
+    if (this.lastSelectedColumnKey && !this.selectedColumnKeys.has(this.lastSelectedColumnKey)) {
+      this.lastSelectedColumnKey = null;
+    }
+  }
+
+  private renderHeaderSelectionCheckbox(parent: HTMLElement): void {
+    const checkbox = parent.createEl("input", {
+      cls: "db-modal-checkbox base-import-include-checkbox",
+      attr: { type: "checkbox", "aria-label": t("baseImport.include") },
+    });
+    this.headerSelectionCheckbox = checkbox;
+    this.syncHeaderSelectionCheckbox();
+    checkbox.onchange = () => {
+      if (checkbox.checked) {
+        selectAll(this.getColumnKeys(), this.selectedColumnKeys);
+        this.lastSelectedColumnKey = this.columns[this.columns.length - 1]?.key || null;
+      } else {
+        clearSelection(this.getColumnKeys(), this.selectedColumnKeys);
+        this.lastSelectedColumnKey = null;
+      }
+      this.syncColumnSelectionRows();
+    };
+  }
+
+  private getColumnKeys(): string[] {
+    return this.columns.map((col) => col.key);
+  }
+
+  private syncColumnSelectionRows(): void {
+    for (const col of this.columns) {
+      col.excluded = !this.selectedColumnKeys.has(col.key);
+    }
+    for (const item of this.columnSelectionRows) {
+      const selected = this.selectedColumnKeys.has(item.key);
+      item.checkbox.checked = selected;
+      item.row.toggleClass("base-import-excluded", !selected);
+    }
+    this.syncHeaderSelectionCheckbox();
+  }
+
+  private syncHeaderSelectionCheckbox(): void {
+    const checkbox = this.headerSelectionCheckbox;
+    if (!checkbox) return;
+    const selectedCount = this.selectedColumnKeys.size;
+    checkbox.checked = this.columns.length > 0 && selectedCount === this.columns.length;
+    checkbox.indeterminate = selectedCount > 0 && selectedCount < this.columns.length;
   }
 
   onClose(): void {

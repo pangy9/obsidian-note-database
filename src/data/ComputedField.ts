@@ -58,7 +58,8 @@ function parseMoment(value: string): MomentLike | null {
  *   endsWith(s, p)   - check if string ends with suffix
  *   replace(s, f, r) - replace all occurrences in string
  *   eomonth(d, n)    - end of month, n months from date d
- *   weekday(d)       - day of week (0=Sun, 1=Mon, ..., 6=Sat)
+ *   weekday(d[,t])   - day of week; optional return_type t (Excel 1/2/3/11-17),
+ *                     default 0=Sun, 1=Mon, ..., 6=Sat
  *   quarter(d)       - quarter of year (1-4)
  *   weeknum(d)       - ISO week number
  *   iferror(v, fb)   - return v if valid, else fallback
@@ -260,10 +261,20 @@ export class ComputedFieldEngine {
         if (!md) return "";
         return md.add(n || 0, "months").endOf("month").format("YYYY-MM-DD");
       },
-      weekday: (d: string) => {
+      weekday: (d: string, returnType?: unknown) => {
         if (d == null) return null;
         const md = parseMoment(d);
-        return md ? md.day() : null;
+        if (!md) return null;
+        const day = md.day(); // 0=Sun..6=Sat
+        // No second arg ⇒ unchanged legacy behavior (0-6).
+        if (returnType == null) return day;
+        const rt = Math.floor(Number(returnType));
+        if (rt === 3) return (day + 6) % 7; // 0=Mon..6=Sun
+        // Excel return-type: which weekday is "1".
+        const startDay: Record<number, number> = { 1: 0, 17: 0, 2: 1, 11: 1, 12: 2, 13: 3, 14: 4, 15: 5, 16: 6 };
+        const start = startDay[rt];
+        if (start === undefined) return day + 1; // unknown type ⇒ behave as type 1 (1=Sun..7=Sat)
+        return ((day - start + 7) % 7) + 1;
       },
       quarter: (d: string) => {
         if (d == null) return null;
@@ -275,6 +286,7 @@ export class ComputedFieldEngine {
         const md = parseMoment(d);
         return md ? md.isoWeek() : null;
       },
+      networkdays: (start: string, end: string, ...holidays: unknown[]) => this.networkdays(start, end, holidays),
       // Error handling
       iferror: (value: unknown, fallback: unknown) => {
         try {
@@ -350,6 +362,7 @@ export class ComputedFieldEngine {
       EOMONTH: context.eomonth,
       WEEKDAY: context.weekday,
       WEEKNUM: context.weeknum,
+      NETWORKDAYS: context.networkdays,
       DAYS: context.days,
       DAYSFROMNOW: context.daysFromNow,
       MOD: context.mod,
@@ -592,11 +605,83 @@ export class ComputedFieldEngine {
     const md = typeof value === "string" ? parseMoment(value) : null;
     if (md && /[YMDHms]/.test(format)) return md.format(format);
     const num = Number(value);
-    if (!isNaN(num) && /^0(?:\.0+)?$/.test(format)) {
-      const decimals = format.includes(".") ? format.split(".")[1].length : 0;
-      return num.toFixed(decimals);
+    if (!isNaN(num) && typeof format === "string" && /^[0#,.\s%]+$/.test(format) && format.includes("0")) {
+      return this.formatExcelNumber(num, format);
     }
     return safeString(value);
+  }
+
+  /** Format a number with an Excel-style numeric format string.
+   *  Supports: 0 / 0.00 (fixed), 00 / 000 (zero-padded integer width),
+   *  #,##0 / #,##0.00 (thousands separators), 0% / 0.00% (percent). */
+  private formatExcelNumber(num: number, format: string): string {
+    const isPercent = format.includes("%");
+    let value = isPercent ? num * 100 : num;
+    const negative = value < 0;
+    value = Math.abs(value);
+
+    const core = format.replace(/%/g, "");
+    const [intFmt = "", decFmt = ""] = core.split(".");
+    const decimals = (decFmt.match(/0/g) || []).length;
+    const minIntDigits = (intFmt.match(/0/g) || []).length;
+    const useThousands = intFmt.includes(",");
+
+    const fixed = value.toFixed(decimals);
+    let [intPart, decPart] = fixed.split(".");
+
+    if (useThousands) {
+      intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    }
+    if (minIntDigits > 1) {
+      const digitsOnly = intPart.replace(/,/g, "");
+      if (digitsOnly.length < minIntDigits) {
+        const pad = "0".repeat(minIntDigits - digitsOnly.length);
+        intPart = useThousands ? pad + intPart : pad + digitsOnly;
+      }
+    }
+
+    let result = decimals > 0 && decPart ? `${intPart}.${decPart}` : intPart;
+    if (negative) result = "-" + result;
+    if (isPercent) result += "%";
+    return result;
+  }
+
+  /** Count working days (Mon–Fri) between two dates, inclusive, optionally
+   *  excluding a list of holidays. Uses native Date to walk day by day
+   *  (MomentLike has no clone()). Order of start/end does not matter. */
+  private networkdays(start: string, end: string, holidays: unknown[]): number | null {
+    if (start == null || end == null) return null;
+    const ms = parseMoment(start);
+    const me = parseMoment(end);
+    if (!ms || !me) return null;
+
+    const holidaySet = new Set<string>();
+    for (const h of holidays) {
+      const list = Array.isArray(h) ? h : [h];
+      for (const hh of list) {
+        if (hh == null || hh === "") continue;
+        const mh = parseMoment(safeString(hh));
+        if (mh) holidaySet.add(mh.format("YYYY-MM-DD"));
+      }
+    }
+
+    const fromDate = ms.toDate();
+    const toDate = me.toDate();
+    const from = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+    const to = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
+    const lo = from <= to ? from : to;
+    const hi = from <= to ? to : from;
+
+    let count = 0;
+    const cur = new Date(lo);
+    for (; cur <= hi; cur.setDate(cur.getDate() + 1)) {
+      const dow = cur.getDay(); // 0=Sun, 6=Sat
+      if (dow === 0 || dow === 6) continue;
+      const iso = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`;
+      if (holidaySet.has(iso)) continue;
+      count += 1;
+    }
+    return count;
   }
 
   private countIf(values: unknown, criterion: unknown): number {

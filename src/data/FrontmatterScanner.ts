@@ -2,7 +2,7 @@ import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian"
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleNode } from "./types";
-import { hasObsidianTagValue, isObsidianTagsKey, toObsidianTagValues } from "./ColumnTypes";
+import { hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { hasDateTimeValue } from "./DateTimeFormat";
 import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { fileHasLink, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey } from "./FileFields";
@@ -83,6 +83,7 @@ function getSourceFieldValue(
 	if (isBaseFileField(field)) return getFileFieldValue(file, field, fm, cache, app);
 	if (field === "folder") return file.parent?.path || "";
 	if (field === "tags") return getTags(fm, cache).join(" ");
+	if (field === "aliases") return toMultiSelectValues(fm[field]);
 	return fm[field];
 }
 
@@ -324,7 +325,7 @@ export function inferColumnType(key: string, sampleValues: unknown[] = []): Colu
 	if (sampleValues.length > 0) {
 		const nonNull = sampleValues.filter((v) => v != null && v !== "");
 		if (nonNull.length > 0) {
-			if (isObsidianTagsKey(key)) return "multi-select";
+			if (isObsidianTagsKey(key) || isObsidianAliasesKey(key)) return "multi-select";
 			if (nonNull.some((v) => Array.isArray(v))) return "multi-select";
 			if (nonNull.every((v) => v instanceof Date || (typeof v === "string" && /\d{4}-\d{2}-\d{2}/.test(v) && !isNaN(Date.parse(v))))) {
 				return nonNull.some((v) => hasDateTimeValue(v)) ? "datetime" : "date";
@@ -336,6 +337,7 @@ export function inferColumnType(key: string, sampleValues: unknown[] = []): Colu
 
 	const lower = key.toLowerCase();
 	if (isFileFieldKey(lower)) return getFileFieldFixedType(lower);
+	if (isObsidianAliasesKey(lower)) return "multi-select";
 	if (lower.includes("datetime") || lower.includes("date_time") || lower.includes("date-time")) return "datetime";
 	if (lower.includes("date") || lower.includes("time") || key.includes("日期") || key.includes("时间")) return "date";
 	if (lower.includes("price") || lower.includes("cost") || lower.includes("amount") || key.includes("费用") || key.includes("金额") || key.includes("花费")) return "currency";
@@ -423,6 +425,8 @@ export function collectUniqueListValues(
 		const val = getSourceFieldValue(f, fm, fieldKey, cache, app, computedFields, columns, baseThisFile);
 		if (isObsidianTagsKey(fieldKey)) {
 			for (const tag of toObsidianTagValues(val)) valueSet.add(tag);
+		} else if (isObsidianAliasesKey(fieldKey)) {
+			for (const alias of toMultiSelectValues(val)) valueSet.add(alias);
 		} else if (Array.isArray(val)) {
 			for (const item of val) if (typeof item === "string" && item) valueSet.add(item);
 		}

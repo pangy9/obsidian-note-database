@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { App, FuzzySuggestModal, loadMathJax, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
@@ -18,7 +18,8 @@ import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/Embedde
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
-import { combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
+import { absorbTypeFilterIntoRules, combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
+import { refreshVaultPropertyCache } from "./data/VaultProperties";
 import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
 import { hasDateTimeValue, parseDateTimeParts } from "./data/DateTimeFormat";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
@@ -64,6 +65,7 @@ export default class NoteDatabasePlugin extends Plugin {
   private pendingDatabaseFileOpen: number | null = null;
   private pendingDatabaseFileOpenFile?: TFile;
   private pendingDatabaseFileOpenLeaf?: WorkspaceLeaf;
+  private pendingVaultPropertyRefresh: number | null = null;
   private readonly commandNameKeys: Record<string, string> = {
     "open-dashboard": "command.openDashboard",
     "convert-active-base-to-database": "command.convertBase",
@@ -74,6 +76,9 @@ export default class NoteDatabasePlugin extends Plugin {
   };
 
   async onload(): Promise<void> {
+    // Preload MathJax at startup so inline-markdown `$...$` rendering (renderMath)
+    // works on first paint; without this Obsidian throws "MathJax is not defined".
+    void loadMathJax();
     // Load and migrate settings with defensive fallback
     try {
       const loaded: unknown = await this.loadData();
@@ -99,7 +104,7 @@ export default class NoteDatabasePlugin extends Plugin {
             if (v.viewType !== "board" && v.viewType !== "gallery" && v.viewType !== "list" && v.viewType !== "chart") v.viewType = "table";
             // Wrap as DatabaseConfig with one ViewConfig child
             const viewCopy = { ...v, id: (v.id as string) || generateId() };
-            return {
+            const migrated = {
               id: generateId(),
               name: v.name as string,
               description: v.description as string | undefined,
@@ -108,10 +113,13 @@ export default class NoteDatabasePlugin extends Plugin {
               sourceLogic: v.sourceLogic as "and" | "or" | undefined,
               sourceRuleTree: v.sourceRuleTree as SourceRuleNode | undefined,
               newRecordFolder: v.newRecordFolder as string | undefined,
-              typeFilter: v.typeFilter as string[] | undefined,
               schema: schema as DatabaseConfig["schema"],
               views: [viewCopy as unknown as ViewConfig],
             } as DatabaseConfig;
+            // Legacy `typeFilter` (a special-case filter on the `type` frontmatter field)
+            // is absorbed into the source-rule tree, matching the db_view-file migration.
+            absorbTypeFilterIntoRules(migrated, v.typeFilter);
+            return migrated;
           });
           delete (rawSettings as unknown as Record<string, unknown>)["views"];
         }
@@ -180,12 +188,17 @@ export default class NoteDatabasePlugin extends Plugin {
     }
     setLocale(this.settings.language);
 
+    // Build our source-rule property picker cache from Obsidian's public metadata cache.
+    // Refreshed below as metadata changes; no dependency on types.json/internal registries.
+    refreshVaultPropertyCache(this.app);
+
     // Add settings tab
     this.addSettingTab(new SettingsTab(this.app, this));
 
     // Initialize data source
     this.dataSource = new DataSource(this.app);
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleVaultPropertyCacheRefresh()));
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFileTabs();
@@ -203,6 +216,7 @@ export default class NoteDatabasePlugin extends Plugin {
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
     }));
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      this.scheduleVaultPropertyCacheRefresh();
       this.databaseFileConfigCache.delete(file.path);
       if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) return;
       const activeFile = this.app.workspace.getActiveFile();
@@ -210,6 +224,9 @@ export default class NoteDatabasePlugin extends Plugin {
         this.scheduleDatabaseFileViewOpen(file);
       }
     }));
+    this.registerEvent(this.app.vault.on("create", () => this.scheduleVaultPropertyCacheRefresh()));
+    this.registerEvent(this.app.vault.on("delete", () => this.scheduleVaultPropertyCacheRefresh()));
+    this.registerEvent(this.app.vault.on("rename", () => this.scheduleVaultPropertyCacheRefresh()));
     this.registerDomEvent(window.activeDocument, "click", (event) => {
       this.handleDatabaseFileExplorerClick(event);
     }, { capture: true });
@@ -221,6 +238,7 @@ export default class NoteDatabasePlugin extends Plugin {
       const file = this.app.workspace.getActiveFile();
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFilesInExplorer();
+      this.scheduleVaultPropertyCacheRefresh();
       // Migrate legacy settings-based databases to files
       const legacyDatabases = this.getLegacySettingsDatabases();
       if (!this.settings.databasesMigrated && legacyDatabases.length > 0) {
@@ -366,6 +384,16 @@ export default class NoteDatabasePlugin extends Plugin {
       this.pendingDatabaseFileOpenFile = undefined;
       this.pendingDatabaseFileOpenLeaf = undefined;
       if (pendingFile) void this.openDatabaseFileViewIfNeeded(pendingFile, pendingLeaf);
+    }, delay);
+  }
+
+  private scheduleVaultPropertyCacheRefresh(delay = 250): void {
+    if (this.pendingVaultPropertyRefresh !== null) {
+      window.clearTimeout(this.pendingVaultPropertyRefresh);
+    }
+    this.pendingVaultPropertyRefresh = window.setTimeout(() => {
+      this.pendingVaultPropertyRefresh = null;
+      refreshVaultPropertyCache(this.app);
     }, delay);
   }
 
@@ -1105,7 +1133,6 @@ export default class NoteDatabasePlugin extends Plugin {
     config.sourceRules = undefined;
     config.sourceLogic = undefined;
     config.sourceRuleTree = undefined;
-    config.typeFilter = undefined;
     config.schema = schema;
     config.views = (config.views || []).map((view) => {
       const cloned = JSON.parse(JSON.stringify(view)) as ViewConfig;
@@ -1115,7 +1142,6 @@ export default class NoteDatabasePlugin extends Plugin {
       cloned.sourceRules = undefined;
       cloned.sourceLogic = undefined;
       cloned.sourceRuleTree = undefined;
-      cloned.typeFilter = undefined;
       cloned.schema = schema;
       cloned.manualOrder = undefined;
       cloned.boardCardOrders = undefined;
@@ -1277,10 +1303,11 @@ export default class NoteDatabasePlugin extends Plugin {
       expressionSyntax: "base" as const,
     }));
 
-    // Collect all columns from all views. Obsidian Bases can show file.*
-    // fields, but only file.name maps to a supported built-in column here.
-    // Other file.* fields are preserved for sort/group rules, not editable
-    // frontmatter columns.
+    // Collect all columns from all views. file.* fields listed in BASE_FILE_FIELD_KEYS
+    // (file.name, file.basename, file.tags, file.links, ...) become supported schema
+    // columns; any other file.* field is dropped as unsupported — it is neither a column
+    // nor usable in sort/group rules (isBaseViewRuleField only accepts schema columns or
+    // BASE_FILE_FIELD_KEYS).
     const allColumnKeys = new Map<string, string>();
     for (const bv of parsed.views) {
       for (const raw of this.getBaseViewOrderKeys(bv)) {
@@ -1415,9 +1442,15 @@ export default class NoteDatabasePlugin extends Plugin {
         name: bv.name || (viewType === "gallery" ? t("common.galleryView") : viewType === "list" ? t("common.listView") : t("common.tableView")),
         viewType,
         sourceFolder,
-        sourceRules: (bv.sourceRules || sourceRules).length > 0 ? (bv.sourceRules || sourceRules) : undefined,
-        sourceLogic: bv.sourceLogic || parsed.sourceLogic,
+        // A view carries only its OWN source rules; global rules live on the db level and are
+        // inherited at query time. Copying them here made parseViewConfig flag every view as
+        // having view-level rules after a save/reload cycle.
+        sourceRules: bv.sourceRules && bv.sourceRules.length > 0 ? bv.sourceRules : undefined,
+        sourceLogic: bv.sourceLogic,
         sourceRuleTree: bv.sourceRuleTree,
+        // Auto-expand the per-view source-rules editor when the view brings its own rules
+        // (tree or legacy flat), so the runtime-active view-level filter is visible/editable.
+        viewSourceRulesEnabled: bv.sourceRuleTree || (bv.sourceRules && bv.sourceRules.length > 0) ? true : undefined,
         newRecordFolder: createFolder,
         schema,
         columnOrder,
@@ -1448,9 +1481,6 @@ export default class NoteDatabasePlugin extends Plugin {
         name: t("common.tableView"),
         viewType: "table",
         sourceFolder,
-        sourceRules: sourceRules.length > 0 ? sourceRules : undefined,
-        sourceLogic: parsed.sourceLogic,
-        sourceRuleTree,
         newRecordFolder: createFolder,
         schema,
         columnOrder: schema.columns.map(c => c.key),
@@ -1781,6 +1811,9 @@ export default class NoteDatabasePlugin extends Plugin {
     if (key.startsWith("properties.")) key = key.slice("properties.".length);
     if (key.startsWith("file.properties.")) key = key.slice("file.properties.".length);
     if (key === "name") return "file.name";
+    // Bases exposes aliases as a built-in list property; map file.aliases to the regular
+    // aliases column (it is not a reserved file.* field like file.tags).
+    if (key === "file.aliases") return "aliases";
     return key;
   }
 
@@ -2618,6 +2651,14 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   onunload(): void {
+    if (this.pendingVaultPropertyRefresh !== null) {
+      window.clearTimeout(this.pendingVaultPropertyRefresh);
+      this.pendingVaultPropertyRefresh = null;
+    }
+    if (this.pendingDatabaseFileOpen !== null) {
+      window.clearTimeout(this.pendingDatabaseFileOpen);
+      this.pendingDatabaseFileOpen = null;
+    }
     this.dataSource.destroy();
   }
 }

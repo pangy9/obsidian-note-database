@@ -43,6 +43,10 @@ export interface ColumnDef {
   statusPresetId?: string;
   statusOptions?: StatusOptionDef[];
   wrap?: boolean;
+  /** Per-column text render mode. "link" renders text values as note/URL links;
+   *  "markdown" renders inline markdown (bold/italic/strike/highlight/code/links);
+   *  undefined = plain text. */
+  textRenderMode?: "plain" | "link" | "markdown";
   /** Per-column display style for number values. Undefined = plain number. */
   numberDisplayStyle?: NumberDisplayStyle;
   /** Per-column tuning for the number display style (icon/max/divisor/showValue/color). */
@@ -120,7 +124,6 @@ export interface SortRule {
 export interface ViewModeStateDef {
   hiddenColumns?: string[];
   statusFilter?: string;
-  searchText?: string;
   groupByField?: string;
   filterLogic?: "and" | "or";
   filters?: FilterRule[];
@@ -222,7 +225,6 @@ export interface DatabaseConfig {
   /** Runtime-only file path used for Bases `this`; not persisted. */
   baseThisFilePath?: string;
   newRecordFolder?: string;
-  typeFilter?: string;
   schema: RecordSchema;
   /** Database-specific status presets. Global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
@@ -248,15 +250,19 @@ export interface ViewConfig {
   id?: string;
   name: string;
   sourceFolder: string;
-  /** File collection rules. When absent, sourceFolder/typeFilter are used for backwards compatibility. */
+  /** File collection rules. When absent, sourceFolder is used for backwards compatibility. */
   sourceRules?: SourceRule[];
   sourceLogic?: "and" | "or";
   /** Recursive source rules used by advanced filters. Takes precedence over legacy flat rules. */
   sourceRuleTree?: SourceRuleNode;
+  /** Enables/disables per-view source rules at runtime. When false, view-level source
+   *  rules (sourceRuleTree, sourceRules, sourceLogic) are NOT applied by getEffectiveConfig
+   *  and the editor is hidden. When true, they are combined with db-level rules and the
+   *  editor is shown. */
+  viewSourceRulesEnabled?: boolean;
   /** Runtime-only file path used for Bases `this`; not persisted. */
   baseThisFilePath?: string;
   newRecordFolder?: string;
-  typeFilter?: string;
   schema: RecordSchema;
   sortColumn?: string;
   sortDirection?: "asc" | "desc";
@@ -288,8 +294,6 @@ export interface ViewConfig {
   sortColumnOrder?: string;
   /** Persisted status filter for this view. */
   statusFilter?: string;
-  /** Persisted text search for this view. */
-  searchText?: string;
   /** Persisted group-by property key. */
   groupByField?: string;
   /** Explicit group display order keyed by grouped property. */

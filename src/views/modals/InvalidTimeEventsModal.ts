@@ -5,6 +5,7 @@ import {
   InvalidTimeEventOption,
   toTimelineDateTimeInputValue,
 } from "../../data/InvalidTimeEvents";
+import { applyRangeSelection, clearSelection, selectAll } from "../../data/RangeSelection";
 import { RowData } from "../../data/types";
 import { t } from "../../i18n";
 
@@ -43,6 +44,7 @@ export class InvalidTimeEventsModal extends Modal {
   private selectAllInput?: HTMLInputElement;
   private selectedCountEl?: HTMLElement;
   private resizeObserver?: ResizeObserver;
+  private lastSelectedEventKey: string | null = null;
 
   constructor(
     app: App,
@@ -63,12 +65,15 @@ export class InvalidTimeEventsModal extends Modal {
     const grid = contentEl.createDiv({ cls: "db-invalid-event-grid" });
     const header = grid.createDiv({ cls: "db-invalid-event-grid-header" });
     const selectAll = header.createEl("input", {
-      cls: "db-invalid-event-select",
+      cls: "db-modal-checkbox db-invalid-event-select",
       attr: { type: "checkbox", "aria-label": t("timeline.invalidEventsSelectAll") },
     });
     this.selectAllInput = selectAll;
     selectAll.checked = true;
-    selectAll.onchange = () => this.setAllSelected(selectAll.checked);
+    selectAll.onchange = () => {
+      this.setAllSelected(selectAll.checked);
+      this.lastSelectedEventKey = selectAll.checked ? this.getEventKeys()[this.options.length - 1] || null : null;
+    };
     header.createDiv({ cls: "db-invalid-event-col-note", text: t("timeline.invalidEventsNote") });
     header.createDiv({ cls: "db-invalid-event-col-time", text: t("timeline.invalidEventsStart") });
     header.createDiv({ cls: "db-invalid-event-col-time", text: t("timeline.invalidEventsEnd") });
@@ -89,13 +94,21 @@ export class InvalidTimeEventsModal extends Modal {
         rowEl: row,
       };
       const checkbox = row.createEl("input", {
-        cls: "db-invalid-event-select",
+        cls: "db-modal-checkbox db-invalid-event-select",
         attr: { type: "checkbox", "aria-label": t("timeline.invalidEventsSelectRow", { name: option.fileName }) },
       });
       checkbox.checked = true;
-      checkbox.onchange = () => {
-        draft.selected = checkbox.checked;
-        this.updateSelectionSummary();
+      checkbox.onclick = (event) => {
+        const selectedKeys = this.getSelectedEventKeys();
+        this.lastSelectedEventKey = applyRangeSelection({
+          orderedIds: this.getEventKeys(),
+          selectedIds: selectedKeys,
+          anchorId: this.lastSelectedEventKey,
+          targetId: key,
+          selected: checkbox.checked,
+          range: event.shiftKey,
+        });
+        this.syncEventSelection(selectedKeys);
       };
       draft.checkbox = checkbox;
       row.createDiv({ cls: "db-invalid-event-name", text: option.fileName, attr: { title: option.row.file.path } });
@@ -226,9 +239,26 @@ export class InvalidTimeEventsModal extends Modal {
   }
 
   private setAllSelected(selected: boolean): void {
-    for (const draft of this.edits.values()) {
-      draft.selected = selected;
-      if (draft.checkbox) draft.checkbox.checked = selected;
+    const selectedKeys = this.getSelectedEventKeys();
+    if (selected) selectAll(this.getEventKeys(), selectedKeys);
+    else clearSelection(this.getEventKeys(), selectedKeys);
+    this.syncEventSelection(selectedKeys);
+  }
+
+  private getEventKeys(): string[] {
+    return this.options.map((option) => option.row.file.path);
+  }
+
+  private getSelectedEventKeys(): Set<string> {
+    return new Set(Array.from(this.edits.entries())
+      .filter(([, draft]) => draft.selected)
+      .map(([key]) => key));
+  }
+
+  private syncEventSelection(selectedKeys: Set<string>): void {
+    for (const [key, draft] of this.edits.entries()) {
+      draft.selected = selectedKeys.has(key);
+      if (draft.checkbox) draft.checkbox.checked = draft.selected;
     }
     this.updateSelectionSummary();
   }

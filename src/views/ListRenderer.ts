@@ -5,6 +5,8 @@ import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDispl
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { parseTextLink } from "../data/TextLink";
+import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -14,6 +16,7 @@ import { safeString } from "../data/SafeString";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderInlineMarkdown, valueToTooltip } from "./InlineMarkdownRenderer";
 import { getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
@@ -54,6 +57,7 @@ export interface ListRendererActions {
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
   readonly isReadOnly?: boolean;
+  readonly hideCreateEntry?: boolean;
 }
 
 interface ParsedLink {
@@ -390,7 +394,7 @@ export class ListRenderer {
   }
 
   private renderNewRow(list: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
-    if (this.actions.isReadOnly) return;
+    if (this.actions.isReadOnly || this.actions.hideCreateEntry) return;
     const button = list.createEl("button", { cls: "db-list-new-row", text: `+ ${t("toolbar.new")}` });
     button.onclick = () => this.createEntryNearEnd(defaults, rows);
   }
@@ -485,13 +489,37 @@ export class ListRenderer {
       return;
     }
 
-    const values = Array.isArray(value) ? value : [value];
-    const links = values
-      .map((entry) => this.parseLink(entry))
-      .filter((entry): entry is ParsedLink => entry !== null);
-    if (links.length > 0) {
-      for (const link of links) this.renderLink(valueEl, row, link);
-      return;
+    if (col.textRenderMode === "markdown" && !isFileFieldKey(col.key)) {
+      const mdValues = Array.isArray(value) ? value : [value];
+      const parsed = mdValues.map((entry) => parseInlineMarkdown(entry));
+      if (parsed.some((nodes) => nodes !== null)) {
+        valueEl.empty();
+        const onOpenLink = (target: string, external: boolean): void => {
+          void this.openTarget(row, target, external);
+        };
+        parsed.forEach((nodes, idx) => {
+          if (idx > 0) valueEl.appendText(", ");
+          if (nodes) {
+            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink });
+            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink });
+          } else {
+            valueEl.appendText(String(mdValues[idx]));
+          }
+        });
+        valueEl.title = valueToTooltip(value);
+        return;
+      }
+    }
+
+    if (col.textRenderMode === "link") {
+      const values = Array.isArray(value) ? value : [value];
+      const links = values
+        .map((entry) => parseTextLink(entry))
+        .filter((entry): entry is ParsedLink => entry !== null);
+      if (links.length > 0) {
+        for (const link of links) this.renderLink(valueEl, row, link);
+        return;
+      }
     }
 
     if (displayType === "number") {
@@ -545,41 +573,12 @@ export class ListRenderer {
     };
   }
 
-  private parseLink(value: unknown): ParsedLink | null {
-    if (typeof value !== "string") return null;
-    const text = value.trim();
-    if (!text) return null;
-
-    const markdownLink = text.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (markdownLink) return this.toParsedLink(markdownLink[2], markdownLink[1]);
-
-    const wikiLink = text.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
-    if (wikiLink) return this.toParsedLink(wikiLink[1], wikiLink[2] || wikiLink[1]);
-
-    if (this.isExternalUrl(text)) return this.toParsedLink(text, text);
-    if (text.endsWith(".md") || text.includes("/")) return this.toParsedLink(text, text);
-    return null;
-  }
-
-  private toParsedLink(target: string, label: string): ParsedLink {
-    const cleanTarget = target.trim();
-    return {
-      label: label.trim() || cleanTarget,
-      target: cleanTarget,
-      external: this.isExternalUrl(cleanTarget),
-    };
-  }
-
   private async openTarget(row: RowData, target: string, external: boolean): Promise<void> {
     if (external) {
       window.open(target);
       return;
     }
     await this.app.workspace.openLinkText(target, row.file.path);
-  }
-
-  private isExternalUrl(target: string): boolean {
-    return /^https?:\/\//i.test(target);
   }
 
   private clear(container: HTMLElement): void {

@@ -1,21 +1,24 @@
 import { App, Notice, setIcon } from "obsidian";
 import { ColumnDef, ComputedSyncMode, DatabaseConfig, DatabaseViewType, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusPresetDef, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
-import { isObsidianTagsKey } from "../data/ColumnTypes";
+import { isObsidianAliasesKey, isObsidianTagsKey } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { BASE_FILE_FIELD_KEYS, getBaseFileFieldType, isBaseFileField } from "../data/FileFields";
 import { getSourceRuleTree, isSourceRuleExpression, isSourceRuleGroup, isSourceRuleNot } from "../data/SourceRules";
+import { getVaultProperties, VaultProperty } from "../data/VaultProperties";
 import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { confirmWithModal } from "./modals/ConfirmModal";
-import { createDropdownField, DropdownOption } from "./DropdownField";
+import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
+import { getPropertyDropdownIcon, isPropertyDropdownIcon, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
 
 interface SourceRuleFieldOption {
   value: string;
   label: string;
+  type: ColumnDef["type"];
 }
 
 interface SourceRuleFieldGroup {
@@ -145,6 +148,7 @@ function getRecommendedSourceRuleOperatorGroups(database: DatabaseConfig, field:
 
 function getSourceRuleFieldDisplayType(database: DatabaseConfig, field: string): ColumnDef["type"] {
   if (isBaseFileField(field)) return getBaseFileFieldType(field);
+  if (isObsidianAliasesKey(field)) return "multi-select";
   const formulaKey = field.startsWith("formula.") ? field.slice("formula.".length) : undefined;
   const column = getSourceRuleColumns(database).find((candidate) => (
     candidate.key === field ||
@@ -249,6 +253,7 @@ export class ViewConfigPanelRenderer {
 
     this.renderSectionTitle(panel, t("viewConfig.viewSection"));
     this.renderViewType(panel, config, actions);
+    this.renderViewSourceRulesSection(panel, config, actions);
     const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
     if (showViewStatusPresets) {
       this.renderStatusPresetSettings(panel, {
@@ -335,7 +340,30 @@ export class ViewConfigPanelRenderer {
     );
   }
 
-  private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
+  /** Per-view source rules (from embeds / .base conversion). The switch ENABLES/DISABLES the
+   *  rules at runtime (getEffectiveConfig combines view.sourceRuleTree only when ON), not just
+   *  show/hide. OFF → rules not applied; ON → rules applied + editor shown. Deleting all nodes
+   *  does not auto-collapse (switch stays ON). */
+  private renderViewSourceRulesSection(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
+    const enabled = config.viewSourceRulesEnabled === true;
+    this.renderSwitch(panel, t("viewConfig.viewSourceRules"), enabled, (value) => {
+      config.viewSourceRulesEnabled = value;
+      actions.onChange(t("undo.viewSourceRulesConfig"));
+    });
+    if (enabled) {
+      panel.createDiv({ cls: "db-view-config-help", text: t("viewConfig.viewSourceRulesHint") });
+      this.renderSourceRules(panel, config as unknown as DatabaseConfig, actions, actions.isDatabaseReadOnly);
+    }
+  }
+
+  /** Render the core database-global settings shared by the settings popover and the
+   *  new-database modal: name, description, source folder, source rules, and the
+   *  new-record folder. Status presets (and, in the popover, computed-sync mode) are
+   *  rendered separately so the creation modal can omit computed-sync mode, which is a
+   *  no-op before any formula column exists. `actions.onDatabaseChange` persists in the
+   *  popover and is a no-op in the creation modal, where changes accumulate in the temp
+   *  config until "Create". */
+  renderDatabaseGlobals(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
     const readOnly = actions.isDatabaseReadOnly;
     const syncSourceFolder = (value: string) => {
       database.sourceFolder = value;
@@ -360,13 +388,11 @@ export class ViewConfigPanelRenderer {
     });
     this.renderSourceRules(panel, database, actions, readOnly);
     this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
-    this.renderText(panel, t("viewConfig.typeFilter"), database.typeFilter || "", t("settings.typeFilter.placeholder"), (value) => {
-      database.typeFilter = value || undefined;
-      actions.onDatabaseChange?.(t("undo.typeFilterConfig"));
-    }, readOnly, t("settings.typeFilter.desc"), (value) => {
-      database.typeFilter = value || undefined;
-    });
-    this.renderComputedSyncMode(panel, database, actions, readOnly);
+  }
+
+  private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
+    this.renderDatabaseGlobals(panel, database, actions);
+    this.renderComputedSyncMode(panel, database, actions, actions.isDatabaseReadOnly);
     this.renderStatusPresetSettings(panel, {
       presets: actions.statusPresets || [],
       defaultPresetId: actions.defaultStatusPresetId,
@@ -374,7 +400,7 @@ export class ViewConfigPanelRenderer {
       managedPresetCount: actions.managedStatusPresetCount,
       onDefaultPresetChange: (presetId) => actions.onDefaultStatusPresetChange?.(presetId),
       onManagePresets: () => actions.onManageStatusPresets?.(),
-    }, readOnly);
+    }, actions.isDatabaseReadOnly);
   }
 
   private renderSourceRules(
@@ -401,7 +427,7 @@ export class ViewConfigPanelRenderer {
       actions.onDatabaseChange?.(t("undo.sourceRulesConfig"));
     };
     if (tree) {
-      this.renderSourceRuleNode(editor, tree, commit, !!readOnly, database);
+      this.renderSourceRuleNode(editor, tree, commit, !!readOnly, database, getVaultProperties(actions.app));
     } else {
       editor.createDiv({ cls: "db-source-rules-empty", text: t("viewConfig.sourceRules.empty") });
     }
@@ -424,10 +450,11 @@ export class ViewConfigPanelRenderer {
     node: SourceRuleNode,
     onReplace: (node: SourceRuleNode | undefined) => void,
     readOnly: boolean,
-    database: DatabaseConfig
+    database: DatabaseConfig,
+    vaultProperties: VaultProperty[]
   ): void {
     if (isSourceRuleGroup(node)) {
-      this.renderSourceRuleGroup(parent, node, onReplace, readOnly, database);
+      this.renderSourceRuleGroup(parent, node, onReplace, readOnly, database, vaultProperties);
       return;
     }
     if (isSourceRuleNot(node)) {
@@ -440,14 +467,14 @@ export class ViewConfigPanelRenderer {
         this.createSourceRuleIconButton(actions, "trash-2", t("viewConfig.sourceRules.remove"), () => onReplace(undefined));
       }
       const content = wrap.createDiv({ cls: "db-source-rule-children" });
-      this.renderSourceRuleNode(content, node.rule, (next) => next ? onReplace({ ...node, rule: next }) : onReplace(undefined), readOnly, database);
+      this.renderSourceRuleNode(content, node.rule, (next) => next ? onReplace({ ...node, rule: next }) : onReplace(undefined), readOnly, database, vaultProperties);
       return;
     }
     if (isSourceRuleExpression(node)) {
       this.renderSourceRuleExpression(parent, node, onReplace, readOnly);
       return;
     }
-    this.renderSourceRuleLeaf(parent, node, onReplace, readOnly, database);
+    this.renderSourceRuleLeaf(parent, node, onReplace, readOnly, database, vaultProperties);
   }
 
   private renderSourceRuleGroup(
@@ -455,7 +482,8 @@ export class ViewConfigPanelRenderer {
     group: SourceRuleGroup,
     onReplace: (node: SourceRuleNode | undefined) => void,
     readOnly: boolean,
-    database: DatabaseConfig
+    database: DatabaseConfig,
+    vaultProperties: VaultProperty[]
   ): void {
     const wrap = parent.createDiv({ cls: "db-source-rule-node db-source-rule-group" });
     const header = wrap.createDiv({ cls: "db-source-rule-header" });
@@ -498,7 +526,7 @@ export class ViewConfigPanelRenderer {
         if (next) rules[index] = next;
         else rules.splice(index, 1);
         onReplace({ ...group, rules });
-      }, readOnly, database);
+      }, readOnly, database, vaultProperties);
     }
   }
 
@@ -507,13 +535,18 @@ export class ViewConfigPanelRenderer {
     rule: SourceRule,
     onReplace: (node: SourceRuleNode | undefined) => void,
     readOnly: boolean,
-    database: DatabaseConfig
+    database: DatabaseConfig,
+    vaultProperties: VaultProperty[]
   ): void {
     const wrap = parent.createDiv({ cls: "db-source-rule-node db-source-rule-leaf" });
     const controls = wrap.createDiv({ cls: "db-source-rule-leaf-controls" });
     const fieldGroups = this.getSourceRuleFieldGroups(database);
     const knownFields = new Set(fieldGroups.flatMap((group) => group.options.map((option) => option.value)));
     const isKnownField = knownFields.has(rule.field);
+    // When the vault property cache has entries, the custom-property slot is a
+    // searchable picker (with type icons) instead of a free-text input. Empty registry
+    // (e.g. fresh vault) falls back to the text input.
+    const usePicker = vaultProperties.length > 0 && !readOnly;
     let selectedFieldValue = isKnownField ? rule.field : CUSTOM_SOURCE_RULE_FIELD;
     createDropdownField({
       parent: controls,
@@ -526,12 +559,14 @@ export class ViewConfigPanelRenderer {
       className: "db-source-rule-dropdown db-source-rule-field",
       hideLabel: true,
       disabled: readOnly,
+      renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (nextValue) => {
         selectedFieldValue = nextValue;
         const custom = nextValue === CUSTOM_SOURCE_RULE_FIELD;
         customField.style.display = custom ? "" : "none";
         if (custom) {
-          customField.focus();
+          // The text-input fallback is focused; the property picker opens on click.
+          if (!usePicker) (customField as HTMLInputElement).focus();
         } else {
           rule.field = nextValue;
           refreshOperators(rule.op, false);
@@ -541,12 +576,22 @@ export class ViewConfigPanelRenderer {
         }
       },
     });
-    const customField = controls.createEl("input", {
-      cls: "db-view-config-text db-source-rule-custom-field",
-      attr: { type: "text", placeholder: t("viewConfig.sourceRules.fieldPlaceholder") },
-    });
-    customField.value = isKnownField ? "" : rule.field;
-    customField.disabled = readOnly;
+    const customField: HTMLElement = usePicker
+      ? this.createCustomPropertyPicker(controls, rule, vaultProperties, knownFields, () => {
+          refreshOperators(rule.op, false);
+          refreshTypeValues();
+          updateValueDisabled();
+          commit();
+        })
+      : controls.createEl("input", {
+          cls: "db-view-config-text db-source-rule-custom-field",
+          attr: { type: "text", placeholder: t("viewConfig.sourceRules.fieldPlaceholder") },
+        });
+    if (!usePicker) {
+      const customInput = customField as HTMLInputElement;
+      customInput.value = isKnownField ? "" : rule.field;
+      customInput.disabled = readOnly;
+    }
     customField.style.display = isKnownField ? "none" : "";
     const value = controls.createEl("input", {
       cls: "db-view-config-text db-source-rule-value",
@@ -564,7 +609,11 @@ export class ViewConfigPanelRenderer {
       value.disabled = readOnly || isType || noValue;
     };
     const getFieldValue = () => (
-      selectedFieldValue === CUSTOM_SOURCE_RULE_FIELD && customField.style.display !== "none" ? customField.value.trim() : rule.field
+      // For the text-input fallback, read the live typed value (may be "" right after
+      // switching to custom). The picker writes `rule.field` directly, so use that.
+      selectedFieldValue === CUSTOM_SOURCE_RULE_FIELD && customField.style.display !== "none" && !usePicker
+        ? (customField as HTMLInputElement).value.trim()
+        : rule.field
     );
     const getOperatorOptions = (selectedOp: SourceRuleOperator, preserveUnsupported = true): DropdownOption[] => {
       const groups = getSourceRuleOperatorGroupsForField(database, getFieldValue(), preserveUnsupported ? selectedOp : undefined);
@@ -662,18 +711,21 @@ export class ViewConfigPanelRenderer {
         valueType: keepsValueType ? rule.valueType : undefined,
       });
     };
-    customField.oninput = () => {
-      rule.field = customField.value.trim();
-      refreshOperators(rule.op, false);
-      refreshTypeValues();
-      updateValueDisabled();
-    };
-    customField.onchange = () => {
-      refreshOperators(rule.op, false);
-      refreshTypeValues();
-      updateValueDisabled();
-      commit();
-    };
+    if (!usePicker) {
+      const customInput = customField as HTMLInputElement;
+      customInput.oninput = () => {
+        rule.field = customInput.value.trim();
+        refreshOperators(rule.op, false);
+        refreshTypeValues();
+        updateValueDisabled();
+      };
+      customInput.onchange = () => {
+        refreshOperators(rule.op, false);
+        refreshTypeValues();
+        updateValueDisabled();
+        commit();
+      };
+    }
     value.oninput = () => { rule.value = value.value; };
     value.onchange = commit;
     if (!readOnly) {
@@ -685,6 +737,60 @@ export class ViewConfigPanelRenderer {
     }
   }
 
+  /** A searchable picker for the custom-property slot of a source-rule leaf. Lists every
+   *  frontmatter property from the plugin-owned vault property cache (passed in as
+   *  `vaultProperties`) except those already offered by the main field dropdown
+   *  (`knownFields`) — each row prefixed with its type icon. Replaces the old free-text
+   *  input so users don't have to remember exact property names. */
+  private createCustomPropertyPicker(
+    parent: HTMLElement,
+    rule: SourceRule,
+    vaultProperties: VaultProperty[],
+    knownFields: Set<string>,
+    onPick: () => void
+  ): HTMLButtonElement {
+    const button = parent.createEl("button", {
+      cls: "db-dropdown-field db-source-rule-dropdown db-source-rule-custom-field db-source-rule-property-picker",
+      attr: { type: "button", "aria-haspopup": "listbox" },
+    });
+    const renderContent = () => {
+      button.empty();
+      const selectedKey = knownFields.has(rule.field) ? "" : rule.field;
+      const propType = selectedKey ? vaultProperties.find((p) => p.key === selectedKey)?.type : undefined;
+      button.toggleClass("has-current-icon", Boolean(propType));
+      if (propType) {
+        renderPropertyTypeIcon(button, { key: selectedKey, type: propType, label: selectedKey }, "db-dropdown-field-icon");
+      }
+      const text = button.createSpan({ cls: "db-dropdown-field-text" });
+      text.createSpan({ cls: "db-dropdown-field-value", text: selectedKey || t("viewConfig.sourceRules.pickProperty") });
+      setIcon(button.createSpan({ cls: "db-dropdown-field-chevron" }), "chevron-down");
+    };
+    renderContent();
+    button.onclick = () => {
+      const options: DropdownOption[] = vaultProperties
+        .filter((p) => !knownFields.has(p.key))
+        .map((p) => ({ value: p.key, text: p.key, icon: getPropertyDropdownIcon(p.type) }));
+      if (options.length === 0) {
+        options.push({ value: "", text: t("viewConfig.sourceRules.noProperties"), disabled: true });
+      }
+      openDropdownMenu({
+        anchor: button,
+        label: t("viewConfig.sourceRules.customField"),
+        value: knownFields.has(rule.field) ? "" : rule.field,
+        searchable: true,
+        searchPlaceholder: t("viewConfig.sourceRules.searchProperties"),
+        options,
+        renderIcon: renderDropdownPropertyTypeIcon,
+        onChange: (key) => {
+          rule.field = key;
+          renderContent();
+          onPick();
+        },
+      });
+    };
+    return button;
+  }
+
   private getSourceRuleFieldGroups(database: DatabaseConfig): SourceRuleFieldGroup[] {
     const seen = new Set<string>();
     const unique = (options: SourceRuleFieldOption[]) => options.filter((option) => {
@@ -694,10 +800,11 @@ export class ViewConfigPanelRenderer {
     });
     const columns = getSourceRuleColumns(database);
     const noteProperties = unique(columns
-      .filter((col) => col.type !== "computed" && !isBaseFileField(col.key))
+      .filter((col) => col.type !== "computed" && !isBaseFileField(col.key) && !isObsidianAliasesKey(col.key))
       .map((col) => ({
         value: col.key,
         label: col.label && col.label !== col.key ? `${col.label} (${col.key})` : col.key,
+        type: getColumnDisplayType(col, database.schema.computedFields),
       })));
     const formulaProperties = unique(columns
       .filter((col) => col.type === "computed")
@@ -707,12 +814,19 @@ export class ViewConfigPanelRenderer {
         return {
           value,
           label: col.label && col.label !== value ? `${col.label} (${value})` : value,
+          type: getColumnDisplayType(col, database.schema.computedFields),
         };
       }));
-    const fileProperties = unique(Array.from(BASE_FILE_FIELD_KEYS).map((key) => ({
-      value: key,
-      label: key,
-    })));
+    const fileProperties = unique([
+      // aliases is a built-in Obsidian list property (like file.tags); offer it alongside
+      // the file.* fields so it is directly selectable, not buried in the custom picker.
+      { value: "aliases", label: "aliases", type: "multi-select" },
+      ...Array.from(BASE_FILE_FIELD_KEYS).map((key) => ({
+        value: key,
+        label: key,
+        type: getBaseFileFieldType(key),
+      })),
+    ]);
     return [
       { label: t("viewConfig.sourceRules.fieldGroup.noteProperties"), options: noteProperties },
       { label: t("viewConfig.sourceRules.fieldGroup.formulaProperties"), options: formulaProperties },
@@ -725,6 +839,7 @@ export class ViewConfigPanelRenderer {
       value: option.value,
       text: option.label,
       section: group.label,
+      icon: getPropertyDropdownIcon(option.type),
     })));
   }
 
@@ -856,7 +971,7 @@ export class ViewConfigPanelRenderer {
     }
   }
 
-  private renderStatusPresetSettings(
+  renderStatusPresetSettings(
     panel: HTMLElement,
     options: {
       presets: StatusPresetDef[];
@@ -943,7 +1058,7 @@ export class ViewConfigPanelRenderer {
         { value: "", text: t("viewConfig.noCover") },
         ...config.schema.columns
           .filter((col) => col.key !== "file.name")
-          .map((col) => ({ value: col.key, text: col.label })),
+          .map((col) => this.toFieldDropdownOption(config, col)),
       ],
       config.galleryImageField || "",
       (value) => {
@@ -1001,7 +1116,7 @@ export class ViewConfigPanelRenderer {
       [
         { value: "", text: t("viewConfig.titleAuto") },
         { value: NO_TITLE_FIELD, text: t("viewConfig.noTitle") },
-        ...config.schema.columns.map((col) => ({ value: col.key, text: col.label })),
+        ...config.schema.columns.map((col) => this.toFieldDropdownOption(config, col)),
       ],
       config.titleField || "",
       (value) => {
@@ -1020,7 +1135,7 @@ export class ViewConfigPanelRenderer {
         { value: "", text: t("viewConfig.noSubgroup") },
         ...config.schema.columns
           .filter((col) => col.key !== "file.name" && col.key !== groupField)
-          .map((col) => ({ value: col.key, text: col.label })),
+          .map((col) => this.toFieldDropdownOption(config, col)),
       ],
       config.boardSubgroupEnabled === true || config.boardSubgroupField ? config.boardSubgroupField || "" : "",
       (value) => {
@@ -1091,17 +1206,27 @@ export class ViewConfigPanelRenderer {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
     const field = row.createDiv({ cls: "db-view-config-field" });
+    const hasPropertyIcons = options.some((option) => isPropertyDropdownIcon(option.icon));
     createDropdownField({
       parent: field,
       label,
       options,
       value,
       onChange,
-      className: "db-view-config-dropdown",
+      className: `db-view-config-dropdown${hasPropertyIcons ? " db-view-config-field-dropdown" : ""}`,
       popoverClassName: "db-view-config-dropdown-popover",
       placeholder: t("common.notSet"),
       hideLabel: true,
+      renderIcon: hasPropertyIcons ? renderDropdownPropertyTypeIcon : undefined,
     });
+  }
+
+  private toFieldDropdownOption(config: ViewConfig, col: ColumnDef): DropdownOption {
+    return {
+      value: col.key,
+      text: col.label || col.key,
+      icon: getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields)),
+    };
   }
 
   private renderText(

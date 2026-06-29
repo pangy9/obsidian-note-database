@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { combineSourceRuleTrees, sourceRuleValuesStrictEqual, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
-import { SourceRuleNode } from "../data/types";
+import { combineSourceRuleTrees, getAllSourceRules, mergeDbAndViewSourceRuleTrees, sourceRuleValuesStrictEqual, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
+import { SourceRule, SourceRuleNode } from "../data/types";
 
 vi.mock("obsidian", () => ({
   normalizePath: (path: string) => path.replace(/\/+/g, "/").replace(/\/+$/, ""),
@@ -65,5 +65,41 @@ describe("SourceRules", () => {
       value: "Books/Design",
       valueType: "string",
     })).toBe(false);
+  });
+});
+
+describe("mergeDbAndViewSourceRuleTrees", () => {
+  const statusRule: SourceRule = { field: "status", op: "eq", value: "active" };
+  const priorityRule: SourceRule = { field: "priority", op: "eq", value: "high" };
+  const statusTree: SourceRuleNode = { type: "group", logic: "and", rules: [statusRule] };
+  const priorityTree: SourceRuleNode = { type: "group", logic: "and", rules: [priorityRule] };
+
+  it("keeps both db flat sourceRules and view sourceRuleTree (neither side dropped)", () => {
+    const db = { sourceRules: [statusRule] };
+    const view = { sourceRuleTree: priorityTree };
+    const merged = mergeDbAndViewSourceRuleTrees(db, view);
+    expect(getAllSourceRules(merged).map((rule) => rule.field).sort()).toEqual(["priority", "status"]);
+  });
+
+  it("keeps both db sourceRuleTree and view flat sourceRules (reverse flat/tree mix)", () => {
+    const db = { sourceRuleTree: statusTree };
+    const view = { sourceRules: [priorityRule] };
+    const merged = mergeDbAndViewSourceRuleTrees(db, view);
+    expect(getAllSourceRules(merged).map((rule) => rule.field).sort()).toEqual(["priority", "status"]);
+  });
+
+  it("drops the view side when view is undefined (view source-rules switch off)", () => {
+    const db = { sourceRules: [statusRule] };
+    const merged = mergeDbAndViewSourceRuleTrees(db, undefined);
+    expect(getAllSourceRules(merged).map((rule) => rule.field)).toEqual(["status"]);
+  });
+
+  it("returns undefined when neither side carries rules", () => {
+    expect(mergeDbAndViewSourceRuleTrees({}, undefined)).toBeUndefined();
+  });
+
+  it("does not duplicate the db tree when the view inherits an identical tree", () => {
+    const merged = mergeDbAndViewSourceRuleTrees({ sourceRuleTree: statusTree }, { sourceRuleTree: JSON.parse(JSON.stringify(statusTree)) as SourceRuleNode });
+    expect(merged).toEqual(statusTree);
   });
 });

@@ -64,6 +64,7 @@ export class TableRenderer {
     const visibleColumns = this.actions.getVisibleColumns(config, rows);
     const tableWrap = container.createDiv({ cls: "db-table-wrap" });
     const table = tableWrap.createEl("table", { cls: "db-table" });
+    table.toggleClass("is-create-entry-hidden", Boolean(this.actions.hideCreateEntry));
     const availableWidth = this.getAvailableTableWidth(tableWrap);
     this.applyTableWidth(table, config, visibleColumns, availableWidth);
     this.renderColgroup(table, config, visibleColumns, availableWidth);
@@ -129,6 +130,7 @@ export class TableRenderer {
       const tableWrap = container.createDiv({ cls: "db-table-wrap" });
       if (groupField) this.setupGroupDropTarget(tableWrap, groupField, group.key);
       const table = tableWrap.createEl("table", { cls: "db-table" });
+      table.toggleClass("is-create-entry-hidden", Boolean(this.actions.hideCreateEntry));
       const availableWidth = this.getAvailableTableWidth(tableWrap);
       this.applyTableWidth(table, config, visibleColumns, availableWidth);
       tableWrap.style.minWidth = `${this.getTableWidth(config, visibleColumns, availableWidth)}px`;

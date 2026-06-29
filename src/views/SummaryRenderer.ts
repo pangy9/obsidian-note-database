@@ -2,9 +2,11 @@ import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "../data/types";
 import { toChartNumber } from "../data/ChartAggregation";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "../data/DateTimeFormat";
 import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { stringifyValue } from "../data/Stringify";
 import { t } from "../i18n";
 import { DropdownOption, openDropdownMenu } from "./DropdownField";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 
 /** 汇总渲染选项 */
 interface SummaryRenderOptions {
@@ -89,6 +91,7 @@ function getSummaryFieldOptions(config: ViewConfig, includeNone = false): Dropdo
     .map((col) => ({
       value: col.key,
       text: col.label || col.key,
+      icon: getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields)),
     }));
   return includeNone ? [{ value: "", text: t("viewConfig.summaryFieldNone") }, ...options] : options;
 }
@@ -199,6 +202,7 @@ export class SummaryRenderer {
       popoverClassName: "db-summary-dropdown-popover",
       searchable: true,
       options: getSummaryFieldOptions(config, Boolean(currentField)),
+      renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (field) => {
         if (!field) {
           if (!currentField) return;

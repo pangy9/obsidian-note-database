@@ -11,7 +11,10 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Seven database views**: switch the same notes between table, board, gallery, list, chart, calendar, and timeline layouts.
 - **Markdown-first storage**: every database is saved as a normal `db_view: true` Markdown file in your vault.
 - **Inline property editing**: edit text, numbers, dates, currency, checkboxes, selects, multi-selects, statuses, and file names directly from the view.
+- **Inline markdown in text properties**: render bold, italic, highlight, strikethrough, inline code, links, wikilinks, and LaTeX inside any text column, with a floating format toolbar while editing.
+- **Number display styles**: show number fields as a rating (stars or emoji), a progress bar, or a progress ring.
 - **Flexible filtering and grouping**: combine filters, sorting, grouping, hidden fields, title fields, manual order, and per-view layout settings.
+- **Unified source rules**: decide which notes belong to a database with folder, tag, property, and Bases-compatible rules, with a per-view enable/disable switch and built-in `aliases` support.
 - **Chart view**: visualize the current filtered records with bar, line, area, donut, number, stacked, grouped, and mixed charts.
 - **Calendar and timeline views**: schedule date and datetime properties with month, week, day, and long-range timeline scales.
 - **Board subgroups and drag feedback**: organize board columns with secondary grouping and clearer drag targets.
@@ -45,6 +48,36 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 
 Each view can keep its own filters, sorting, grouping, visible fields, title field, and layout settings.
 
+## Text Properties And Inline Markdown
+
+Any text property can choose how it renders from its column menu:
+
+- **Plain** — show the raw value as text (the default).
+- **Link** — turn URLs and paths into clickable links.
+- **Markdown** — render inline markdown.
+
+Markdown mode supports bold, italic, strikethrough, highlight, inline code, standard links `[label](target)`, `[[wikilinks]]`, line breaks, and LaTeX math `$...$`. Parsing is recursive, so markup can nest (for example bold text containing an italic span). Unpaired markers like `5 * 3` or a stray `**` are left untouched, so ordinary text is never mangled.
+
+While editing a markdown cell, a small floating toolbar lets you toggle bold, italic, strikethrough, highlight, code, and links without typing the markers by hand.
+
+| ![](assets/screenshots/en-inline-markdown-toolbar.png) | ![](assets/screenshots/en-inline-markdown.png) |
+| --- | --- |
+
+Rendering is built from text nodes only; the plugin never injects raw HTML, and dangerous link schemes (`javascript:`, `data:`, `file:`, etc.) are rejected. The original markdown source stays intact for sorting, search, and editing.
+
+## Number Display Styles
+
+Number fields can be presented in several ways without changing the stored value:
+
+- **Rating** — stars or a custom emoji scale, useful for priority, difficulty, or reviews.
+- **Progress bar** — a horizontal fill, where you choose the value that equals 100%.
+- **Progress ring** — a circular fill for compact dashboards.
+
+These styles are display-only: the underlying number in frontmatter is never rewritten, so sorting, formulas, and export keep working on the real value.
+
+| ![](assets/screenshots/en-number-styles-popover.png) | ![](assets/screenshots/en-number-styles.png) |
+| --- | --- |
+
 ## Chart Views
 
 Chart views use the same records as the current database after search, filters, and result limits. They support count and numeric aggregations, date and number buckets, visible group controls, cumulative series, reference lines, data labels, legends, and PNG export.
@@ -59,7 +92,7 @@ Summary rules can combine count-style, numeric, date, checkbox, and unique-value
 
 ## Calendar And Timeline Views
 
-Calendar views turn date and datetime fields into month, week, and day schedules. Multi-day events stay readable across cells, all-day spans can be moved or resized, and week/day time grids support timed event creation and editing.
+Calendar views turn date and datetime fields into month, week, and day schedules. Multi-day events stay readable across cells, all-day spans can be moved or resized, and week/day time grids support timed event creation and editing. Datetime fields can also be grouped by date only, so events at different times on the same day land in the same group.
 
 Timeline views focus on planning across short and long ranges. Use day scale for datetime detail, week scale for near-term review, month scale for multi-day overview, and quarter scale for compressed long-range planning. Events can be grouped, dragged, resized, and inspected with compact range labels.
 
@@ -122,13 +155,16 @@ Common helpers:
 | `DAYSFROMNOW(date)` | Days from today |
 | `ADDDAYS(date, days)` | Add days to a date |
 | `DATEADD(date, amount, "days")` | Add days, weeks, months, or years to a date |
+| `NETWORKDAYS(start, end, [holidays])` | Working days between two dates, skipping weekends and optional holidays |
+| `WEEKDAY(date, [return_type])` | Day of week; default 0=Sun..6=Sat, optional Excel return type |
 | `ROUND(number, digits)` | Round a number |
 | `FLOOR(number)`, `CEILING(number)` | Math rounding helpers |
 | `MAX(a, b, ...)`, `MIN(a, b, ...)` | Compare values |
+| `TEXT(value, format)` | Format a number (e.g. `#,##0.00`, `0%`) or date |
 | `CONCAT(text1, text2, ...)` | Join text |
 | `IF(condition, trueValue, falseValue)` | Conditional logic |
 
-The formula editor shows available fields, function lists, examples, live preview results, referenced values, and step-by-step substitutions, so users do not have to write formulas in a blank textarea. It also includes a copyable AI prompt helper for sending the current formula draft, fields, and function context to an assistant.
+The formula editor shows available fields (each with its type icon), function lists, examples, live preview results, referenced values, and step-by-step substitutions, so users do not have to write formulas in a blank textarea. It also includes a copyable AI prompt helper for sending the current formula draft, fields, and function context to an assistant.
 
 Computed values refresh for display whenever a database view is opened. In the database settings, choose whether those values remain display-only virtual properties, are written back to frontmatter automatically, or are written back only when you click the manual sync button.
 
@@ -137,6 +173,16 @@ Computed values refresh for display whenever a database view is opened. In the d
 If you previously saved a computed result into note frontmatter and later decide to keep it display-only, use the cleanup action to remove that saved property from notes in the current database scope.
 
 ![Computed cleanup](assets/screenshots/en-computed-cleanup.png)
+
+## Search And Source Rules
+
+**Search** matches text across every visible property value plus the file name, and highlights the matched text inside the results. Search is a transient in-session filter — it is never written to your database or note files, so switching panes never leaves a stale query behind. Date properties match their visible localized text or explicit date shapes (`YYYY-MM-DD`, `YYYY-MM`, `MM-DD`).
+
+![Search highlight](assets/screenshots/en-search-highlight.png)
+
+**Source rules** decide which notes belong to a database. Combine folder, tag, property, link, and expression rules with `AND` / `OR` / `NOT` logic. Each view can enable or disable its own source rules on top of the database-level rules, so one database can power several scoped views. The custom-property picker is searchable and shows each property's type icon, and built-in list properties like Obsidian `aliases` are treated as multi-value fields.
+
+If you already use Obsidian Bases, source rules, `aliases`, and `.base` conversion stay aligned with how regular filters, grouping, and sorting treat multi-value fields.
 
 ## File Metadata Fields
 
@@ -191,14 +237,23 @@ If Note Database helps you, a star or donation helps support continued developme
 
 ## Changelog
 
+### 1.2.2
+
+- Added inline markdown rendering for text properties (bold, italic, highlight, strikethrough, code, links, wikilinks, LaTeX) with a plain / link / markdown render-mode switch per column and a floating format toolbar.
+- Added number display styles: rating (stars or emoji), progress bar, and progress ring — display-only, never rewriting the stored value.
+- Extended formulas with `NETWORKDAYS`, `WEEKDAY` (with optional return type), and `TEXT`, and added type icons to the formula editor property suggestions.
+- Smarter search: matches every property value plus file name, highlights matched text in results, and keeps search transient across pane switches.
+- Unified source rules: legacy type filters migrated to source rules, per-view enable/disable switch, searchable type-icon property picker, and full `aliases` / Bases multi-value alignment.
+- Added checkbox range (shift-click) selection across the table and option modals, IME-safe Enter/Esc in text editors, and group record-count limits.
+- Improved mobile layout, including a dedicated column-width panel and refined card field widths.
+
 ### 1.2.1
 
-- Fixed database-file tab and header behavior so `db_view: true` files use Obsidian's native file-view header path.
-- Made embedded database references prefer database ids, improving resilience when database files are moved or renamed.
-- Added number display styles for number fields: rating, horizontal progress bar, and ring progress, with configurable icons, emoji, colors, max values, divisors, and value display.
-- Added datetime grouping by date with an "ignore time" option, and fixed datetime edit popovers to use segmented time input consistently.
-- Added per-group row limits with progressive expand controls.
-- Improved mobile settings, status preset dropdowns, table checkbox alignment, card/list field widths, column-width adjustment, and popover input styling.
+- Added a mobile table column-width adjustment panel and refined mobile settings and column selection.
+- Added group record-count limits and board card field width controls (board/gallery width cap, list effective width).
+- Added number rating / progress bar / progress ring display styles and a fixed board long-group header that no longer pins column width.
+- Improved datetime editing (segmented time input) and datetime "ignore time" grouping.
+- Refined embedded-view reference handling and read-only invalid-event warnings.
 
 ### 1.2.0
 

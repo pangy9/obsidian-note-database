@@ -26,12 +26,6 @@ export function buildRatingSlots(value: number, max: number = RATING_MAX_STARS):
   return slots;
 }
 
-/** Progress fill percentage clamped to [0, 100]. Non-finite → null (caller shows "-"). */
-export function progressPercent(value: number): number | null {
-  if (!Number.isFinite(value)) return null;
-  return clampNumber(value, 0, 100);
-}
-
 /** Progress fill percentage as value/divisor*100, clamped to [0, 100].
  *  divisor = the value that represents 100% (default 100 → value is already a percent).
  *  Non-finite value or divisor (or 0 divisor) → null. */

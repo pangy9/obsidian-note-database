@@ -1,9 +1,11 @@
 import { getColumnOptions, isObsidianTagsKey } from "../data/ColumnTypes";
+import { isImeComposing } from "../data/KeyboardUtils";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { createDropdownField } from "./DropdownField";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { renderDropdownPropertyTypeIcon, toPropertyDropdownOption } from "./PropertyTypeIcon";
 import { DatabaseViewState } from "./ViewStateStore";
 
 export interface FilterPanelActions {
@@ -115,10 +117,11 @@ export class FilterPanelRenderer {
     createDropdownField({
       parent: row,
       label: t("panel.field"),
-      options: allCols.map((col) => ({ value: col.key, text: col.label })),
+      options: allCols.map((col) => toPropertyDropdownOption(col)),
       value: currentField,
       className: "db-panel-dropdown db-filter-field-dropdown",
       hideLabel: true,
+      renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (value) => {
         rule.field = value;
         const nextCol = allCols.find((col) => col.key === rule.field);
@@ -131,6 +134,14 @@ export class FilterPanelRenderer {
       },
     });
 
+    // Migrate legacy checkbox eq/neq filters to empty/notempty, preserving intent
+    // (eq "true" → checked/notempty, eq "false" → unchecked/empty; neq inverts). Idempotent:
+    // once the op is empty/notempty this no longer triggers; it persists on the next save.
+    if (currentCol?.type === "checkbox" && (rule.op === "eq" || rule.op === "neq")) {
+      const wantChecked = rule.op === "eq" ? rule.value === "true" : rule.value !== "true";
+      rule.op = wantChecked ? "notempty" : "empty";
+      rule.value = "";
+    }
     const ops = this.getOperatorsForColumn(currentCol);
     if (!ops.some(([op]) => op === rule.op)) rule.op = ops[0]?.[0] || "eq";
     createDropdownField({
@@ -184,7 +195,9 @@ export class FilterPanelRenderer {
       return [...base, ["contains", t("filter.contains")], ...emptyOps];
     }
     if (col.type === "checkbox") {
-      return [...base, ...emptyOps];
+      // checkbox only offers "is checked" / "is unchecked" (empty/notempty under the hood,
+      // evaluated boolean-aware in QueryEngine). eq/neq are not meaningful for a checkbox.
+      return [["notempty", t("filter.checkboxChecked")], ["empty", t("filter.checkboxUnchecked")]];
     }
     return [...base, ["contains", t("filter.contains")], ...emptyOps];
   }
@@ -253,6 +266,7 @@ export class FilterPanelRenderer {
       this.scheduleRefresh(actions);
     };
     inp.onkeydown = (event) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
         this.commitDraftValue(rule, inp.value, committedValue, actions, (value) => {
@@ -314,6 +328,7 @@ export class FilterPanelRenderer {
       actions.refresh();
     };
     const keyHandler = (event: KeyboardEvent, input: HTMLInputElement, prev?: HTMLInputElement) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Backspace" && input.value === "" && prev) {
         event.preventDefault();
         prev.focus();

@@ -539,7 +539,7 @@ describe("calendar and timeline render integration", () => {
     expect(calendarTimelineToolbar).toContain("viewConfig.calendarWeekSlotDuration");
     expect(calendarTimelineToolbar).toContain("undo.calendarSlotDurationConfig");
 
-    const searchIndex = toolbar.indexOf("if (!phoneLayout) this.renderSearch(right, state, actions)");
+    const searchIndex = toolbar.indexOf("if (!phoneLayout && !isChartView) this.renderSearch(right, state, actions)");
     const optionsIndex = toolbar.indexOf("this.renderCalendarTimelineOptionsButton(right, currentView, actions)");
     expect(searchIndex).toBeGreaterThan(0);
     expect(optionsIndex).toBeGreaterThan(0);
@@ -627,7 +627,6 @@ describe("calendar and timeline render integration", () => {
       "actions.onDatabaseChange?.(t(\"undo.sourceFolderConfig\"))",
       "actions.onDatabaseChange?.(t(\"undo.sourceRulesConfig\"))",
       "actions.onDatabaseChange?.(t(\"undo.newRecordFolderConfig\"))",
-      "actions.onDatabaseChange?.(t(\"undo.typeFilterConfig\"))",
       "actions.onDatabaseChange?.(t(\"undo.computedSyncModeConfig\"))",
       "actions.onChange(t(\"undo.galleryCoverFieldConfig\"))",
       "actions.onChange(t(\"undo.galleryImageFitConfig\"))",
@@ -647,7 +646,6 @@ describe("calendar and timeline render integration", () => {
       "undo.sourceFolderConfig",
       "undo.sourceRulesConfig",
       "undo.newRecordFolderConfig",
-      "undo.typeFilterConfig",
       "undo.computedSyncModeConfig",
       "undo.galleryCoverFieldConfig",
       "undo.galleryImageFitConfig",

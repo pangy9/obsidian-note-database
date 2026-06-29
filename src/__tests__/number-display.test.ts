@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { roundHalf, clampNumber, buildRatingSlots, progressPercent, progressFillPercent, formatProgressValue, ringGeometry } from "../data/NumberDisplay";
+import { roundHalf, clampNumber, buildRatingSlots, progressFillPercent, formatProgressValue, ringGeometry } from "../data/NumberDisplay";
 import { DataSource } from "../data/DataSource";
 
 vi.mock("obsidian", () => ({
@@ -61,20 +61,6 @@ describe("NumberDisplay.buildRatingSlots", () => {
     expect(buildRatingSlots(7, 10)).toHaveLength(10);
     expect(buildRatingSlots(7, 10).filter((s) => s === "full").length).toBe(7);
     expect(buildRatingSlots(10, 10)).toEqual(["full", "full", "full", "full", "full", "full", "full", "full", "full", "full"]);
-  });
-});
-
-describe("NumberDisplay.progressPercent", () => {
-  it("returns the value clamped to [0, 100]", () => {
-    expect(progressPercent(0)).toBe(0);
-    expect(progressPercent(50)).toBe(50);
-    expect(progressPercent(100)).toBe(100);
-    expect(progressPercent(150)).toBe(100);
-    expect(progressPercent(-10)).toBe(0);
-  });
-
-  it("returns null for non-finite values (caller renders '-')", () => {
-    expect(progressPercent(NaN)).toBeNull();
   });
 });
 

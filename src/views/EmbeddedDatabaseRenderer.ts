@@ -53,10 +53,12 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
+import { highlightSearchMatches } from "./SearchHighlight";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey, isNumberDisplayColumn } from "../data/ColumnDisplay";
-import { combineSourceRuleTrees, getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, sourceRuleTreesEqual } from "../data/SourceRules";
+import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, mergeDbAndViewSourceRuleTrees } from "../data/SourceRules";
 import { getRowFileFieldValue, isFileFieldKey } from "../data/FileFields";
+import { applyRangeSelection } from "../data/RangeSelection";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
@@ -149,6 +151,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private currentViewIndex = 0;
   private viewIndexOverride: number | null = null;
   private selectedRows = new Set<string>();
+  private lastSelectedRowPath: string | null = null;
   private cellSelection: { anchor: CellAddress; focus: CellAddress } | null = null;
   private isSelectingCells = false;
   private syncingComputed = false;
@@ -183,6 +186,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
+    const shouldHideResultCreateEntryButtons = () =>
+      isCodeBlock || (this.config ? this.vs(this.config).searchText.trim().length > 0 : false);
     this.cellRenderer = new CellRenderer(
       this.dataSource,
       () => this.refreshAfterSave(),
@@ -214,7 +219,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.tableRenderer = new TableRenderer({
       getVisibleColumns: (config, rows) => getVisibleColumns(config, rows, this.vs(config), this.pendingShowColumns),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
-      toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
+      toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       setupColumnHeader: (th, col) => this.columnHeaderController.setup(th, col),
@@ -230,7 +235,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
-      hideCreateEntry: isCodeBlock,
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
       isReadOnly: isCodeBlock,
     });
     this.boardRenderer = new BoardRenderer(this.app, {
@@ -242,7 +247,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       updateColumnWidth: (width) => this.updateBoardColumnWidth(width),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
-      toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
+      toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
@@ -254,12 +259,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       isReadOnly: isCodeBlock,
       canReorderGroups: true,
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
-      toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
+      toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
@@ -272,12 +278,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       isReadOnly: isCodeBlock,
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
-      toggleRowSelected: (row, selected) => this.toggleRowSelected(row, selected),
+      toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
@@ -289,6 +296,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       isReadOnly: isCodeBlock,
+      get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
   }
 
@@ -701,6 +709,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       this.restoreScroll(viewTypeChanged && options.viewport !== "preserve-raw" ? { top: 0, left: scroll.left } : scroll);
     }
     this.restoreEmbeddedHostViewport(hostViewport);
+    const searchQuery = this.vs(config).searchText;
+    if (searchQuery) highlightSearchMatches(this.containerEl, searchQuery);
   }
 
   private applyViewTypeClass(viewType: NonNullable<ViewConfig["viewType"]>): void {
@@ -786,8 +796,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.saveEmbeddedConfigInBackground();
       },
       setSearchText: (value) => {
+        // Search is intentionally transient: it only mutates the in-memory
+        // view state and is never persisted to the source. See
+        // search-transient.test.ts and VIEW_REGRESSION_MATRIX.md.
         this.vs(config).searchText = value;
-        this.persistEmbeddedConfigLocally(config);
         this.updateToolbarIndicators(config);
         this.renderResults(config, { viewport: "reset-top" });
       },
@@ -1088,6 +1100,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.updateToolbarIndicators(config);
         this.renderResults(config);
       },
+      setColumnsVisible: (changes) => {
+        for (const change of changes) {
+          if (change.visible) this.vs(config).hiddenColumns.delete(change.col.key);
+          else this.vs(config).hiddenColumns.add(change.col.key);
+        }
+        this.persistEmbeddedConfigLocally(config);
+        this.updateToolbarIndicators(config);
+        this.renderColumnManager(config);
+        this.renderResults(config);
+      },
       setAllColumnsVisible: (visible) => {
         if (visible) {
           this.vs(config).hiddenColumns.clear();
@@ -1129,12 +1151,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       },
       toggleColumnWrap: (col) => {
         col.wrap = !col.wrap || undefined;
-        this.persistEmbeddedConfigLocally(config);
-        this.renderColumnManager(config);
-        this.renderResults(config);
-      },
-      setNumberDisplayStyle: (col, style) => {
-        col.numberDisplayStyle = style === "plain" ? undefined : style;
         this.persistEmbeddedConfigLocally(config);
         this.renderColumnManager(config);
         this.renderResults(config);
@@ -2073,7 +2089,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private getDefaultFrontmatterFromSourceRules(config: ViewConfig): Record<string, unknown> {
     const frontmatter: Record<string, unknown> = {};
     const tags = new Set<string>();
-    if (config.typeFilter) frontmatter["type"] = config.typeFilter;
     const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
     for (const rule of getRequiredSourceRules(sourceRuleTree)) {
       if ((rule.op === "eq" || rule.op === "strictEq") && rule.value != null && this.isWritableSourceRuleField(config, rule.field)) {
@@ -2118,19 +2133,21 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const dbSourceRules = this.currentDbConfig?.sourceRules;
     const dbSourceLogic = this.currentDbConfig?.sourceLogic;
     const dbSourceRuleTree = this.currentDbConfig?.sourceRuleTree;
-    const viewSourceRuleTree = sourceRuleTreesEqual(config.sourceRuleTree, dbSourceRuleTree)
-      ? undefined
-      : config.sourceRuleTree;
+    // View-level source rules apply only when the switch is ON; each side is normalized to a tree
+    // first so a legacy flat side is never dropped (mergeDbAndViewSourceRuleTrees).
+    const viewEnabled = config.viewSourceRulesEnabled === true;
     const db: DatabaseConfig = {
       id: "embedded",
       name: config.name,
       baseThisFilePath: this.sourcePath,
       sourceFolder: this.normalizeVaultFolder(dbSourceFolder || config.sourceFolder || ""),
-      sourceRules: dbSourceRules || config.sourceRules,
-      sourceLogic: dbSourceLogic || config.sourceLogic,
-      sourceRuleTree: combineSourceRuleTrees(dbSourceRuleTree, viewSourceRuleTree),
+      sourceRules: dbSourceRules || (viewEnabled ? config.sourceRules : undefined),
+      sourceLogic: dbSourceLogic || (viewEnabled ? config.sourceLogic : undefined),
+      sourceRuleTree: mergeDbAndViewSourceRuleTrees(
+        { sourceRuleTree: dbSourceRuleTree, sourceRules: dbSourceRules, sourceLogic: dbSourceLogic },
+        viewEnabled ? config : undefined
+      ),
       newRecordFolder: config.newRecordFolder || this.currentDbConfig?.newRecordFolder,
-      typeFilter: this.currentDbConfig?.typeFilter || config.typeFilter,
       schema: config.schema,
       views: [config],
     };
@@ -2161,9 +2178,15 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
   }
 
-  private toggleRowSelected(row: RowData, selected: boolean): void {
-    if (selected) this.selectedRows.add(row.file.path);
-    else this.selectedRows.delete(row.file.path);
+  private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
+    this.lastSelectedRowPath = applyRangeSelection({
+      orderedIds: this.getOrderedSelectionRowPaths(),
+      selectedIds: this.selectedRows,
+      anchorId: this.lastSelectedRowPath,
+      targetId: row.file.path,
+      selected,
+      range: Boolean(event?.shiftKey || this.isPhoneLayout()),
+    });
     if (this.config) this.renderResults(this.config);
   }
 
@@ -2172,7 +2195,35 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (selected) this.selectedRows.add(row.file.path);
       else this.selectedRows.delete(row.file.path);
     }
+    this.lastSelectedRowPath = this.selectedRows.size > 0 ? rows[rows.length - 1]?.file.path || this.lastSelectedRowPath : null;
     if (this.config) this.renderResults(this.config);
+  }
+
+  private getOrderedSelectionRowPaths(): string[] {
+    const ordered = this.getRenderedSelectionRows();
+    const source = ordered.length > 0 ? ordered : this.rows;
+    return source.map((candidate) => candidate.file.path);
+  }
+
+  private getRenderedSelectionRows(): RowData[] {
+    const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
+    const seen = new Set<string>();
+    const selectors = [
+      "tr[data-note-database-row-path]",
+      ".db-board-card[data-note-database-row-path]",
+      ".db-gallery-card[data-note-database-row-path]",
+      ".db-list-row[data-note-database-row-path]",
+    ];
+    const rows: RowData[] = [];
+    for (const element of Array.from(this.containerEl.querySelectorAll<HTMLElement>(selectors.join(",")))) {
+      const path = element.dataset.noteDatabaseRowPath;
+      if (!path || seen.has(path)) continue;
+      const renderedRow = rowByPath.get(path);
+      if (!renderedRow) continue;
+      seen.add(path);
+      rows.push(renderedRow);
+    }
+    return rows;
   }
 
   private async deleteSelectedRows(): Promise<void> {
@@ -2180,6 +2231,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       new Notice(t("notice.embedReadonly", { action: t("notice.deleteEntry") }));
     }
     this.selectedRows.clear();
+    this.lastSelectedRowPath = null;
   }
 
   private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
@@ -2673,9 +2725,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     origView.filters = this.config.filters;
     origView.filterLogic = this.config.filterLogic;
     origView.sortRules = this.config.sortRules;
-    origView.searchText = this.config.searchText;
     origView.groupByField = this.config.groupByField;
     origView.viewStates = this.config.viewStates;
+    origView.sourceRules = this.config.sourceRules;
+    origView.sourceLogic = this.config.sourceLogic;
+    origView.sourceRuleTree = this.config.sourceRuleTree;
+    origView.viewSourceRulesEnabled = this.config.viewSourceRulesEnabled;
     for (const col of this.config.schema.columns) {
       const sourceCol = this.currentDbConfig.schema.columns.find((candidate) => candidate.key === col.key);
       if (!sourceCol) continue;

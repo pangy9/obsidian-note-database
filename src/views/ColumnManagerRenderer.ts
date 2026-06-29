@@ -1,7 +1,6 @@
-import { Menu, setIcon } from "obsidian";
-import { ColumnDef, NumberDisplayStyle, ViewConfig } from "../data/types";
-import { COLUMN_TYPE_LABELS } from "../data/ColumnTypes";
-import { isNumberDisplayColumn } from "../data/ColumnDisplay";
+import { setIcon } from "obsidian";
+import { applyRangeSelection } from "../data/RangeSelection";
+import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
@@ -11,11 +10,11 @@ import { isHTMLElement } from "./DomGuards";
 export interface ColumnManagerActions {
   close(): void;
   setColumnVisible(col: ColumnDef, visible: boolean): void;
+  setColumnsVisible?(changes: Array<{ col: ColumnDef; visible: boolean }>): void;
   setAllColumnsVisible(visible: boolean): void;
   moveColumn(key: string, offset: -1 | 1): void;
   moveColumnTo(key: string, targetKey: string, placement: "before" | "after"): void;
   toggleColumnWrap(col: ColumnDef): void;
-  setNumberDisplayStyle(col: ColumnDef, style: NumberDisplayStyle): void;
   editColumn(col: ColumnDef): void;
   addColumn(): void;
   deleteColumn(col: ColumnDef): void;
@@ -25,6 +24,7 @@ export interface ColumnManagerActions {
 
 export class ColumnManagerRenderer {
   private draggedKey: string | null = null;
+  private lastSelectedColumnVisibilityKey: string | null = null;
 
   render(
     containerEl: HTMLElement,
@@ -50,7 +50,7 @@ export class ColumnManagerRenderer {
 
     this.renderHeader(panel, columns, config, state, actions);
     columns.forEach((col, index) => {
-      this.renderColumnRow(panel, col, config, state, actions, index, columns.length);
+      this.renderColumnRow(panel, col, config, state, actions, columns, index, columns.length);
     });
 
     if (!actions.isReadOnly) {
@@ -80,7 +80,11 @@ export class ColumnManagerRenderer {
     const visibleCount = columns.filter((col) => !state.hiddenColumns.has(col.key)).length;
     toggleAll.checked = visibleCount === columns.length;
     toggleAll.indeterminate = visibleCount > 0 && visibleCount < columns.length;
-    toggleAll.onchange = () => actions.setAllColumnsVisible(toggleAll.checked);
+    toggleAll.onchange = () => {
+      actions.setAllColumnsVisible(toggleAll.checked);
+      const selectableKeys = this.getColumnVisibilityKeys(columns, config, state);
+      this.lastSelectedColumnVisibilityKey = toggleAll.checked ? selectableKeys[selectableKeys.length - 1] || null : null;
+    };
     toggleLabel.createSpan({ text: t("panel.all") });
   }
 
@@ -90,6 +94,7 @@ export class ColumnManagerRenderer {
     config: ViewConfig,
     state: DatabaseViewState,
     actions: ColumnManagerActions,
+    columns: ColumnDef[],
     index: number,
     total: number
   ): void {
@@ -158,7 +163,25 @@ export class ColumnManagerRenderer {
       cb.checked = true;
       cb.disabled = true;
     }
-    cb.onchange = () => actions.setColumnVisible(col, cb.checked);
+    cb.onclick = (event) => {
+      const selectedKeys = new Set(columns.filter((candidate) => !state.hiddenColumns.has(candidate.key)).map((candidate) => candidate.key));
+      if (requiredReason) selectedKeys.add(col.key);
+      this.lastSelectedColumnVisibilityKey = applyRangeSelection({
+        orderedIds: this.getColumnVisibilityKeys(columns, config, state),
+        selectedIds: selectedKeys,
+        anchorId: this.lastSelectedColumnVisibilityKey,
+        targetId: col.key,
+        selected: cb.checked,
+        range: event.shiftKey,
+      });
+      this.syncColumnVisibility(columns, config, state, actions, selectedKeys);
+    };
+
+    const typeEl = row.createSpan({
+      cls: "db-column-type",
+      attr: { title: col.type },
+    });
+    renderPropertyTypeIcon(typeEl, col, "db-column-type-icon");
 
     const nameWrap = row.createDiv({ cls: "db-column-name-wrap" });
     const nameEl = nameWrap.createSpan({
@@ -174,50 +197,12 @@ export class ColumnManagerRenderer {
         attr: { title: requiredReason },
       });
     }
-    const typeEl = row.createSpan({
-      cls: "db-column-type",
-      attr: { title: COLUMN_TYPE_LABELS()[col.type] },
-    });
-    renderPropertyTypeIcon(typeEl, col, "db-column-type-icon");
-    typeEl.createSpan({ text: COLUMN_TYPE_LABELS()[col.type] });
     const wrapBtn = row.createEl("button", {
       cls: `clickable-icon db-column-wrap-toggle${col.wrap ? " is-active" : ""}`,
       attr: { title: t("panel.wrap"), "aria-label": t("panel.wrap") },
     });
     setIcon(wrapBtn, "wrap-text");
     wrapBtn.onclick = () => actions.toggleColumnWrap(col);
-
-    if (isNumberDisplayColumn(col, config.schema.computedFields)) {
-      const styleIcon = col.numberDisplayStyle === "rating" ? "star"
-        : col.numberDisplayStyle === "progress" ? "bar-chart-horizontal"
-        : col.numberDisplayStyle === "ring" ? "target"
-        : "hash";
-      const styleBtn = row.createEl("button", {
-        cls: `clickable-icon db-column-number-style-toggle${col.numberDisplayStyle ? " is-active" : ""}`,
-        attr: { title: t("panel.numberDisplayStyle"), "aria-label": t("panel.numberDisplayStyle") },
-      });
-      setIcon(styleBtn, styleIcon);
-      styleBtn.onclick = (event) => {
-        const menu = new Menu();
-        const currentStyle = col.numberDisplayStyle ?? "plain";
-        const numberStyles: { value: NumberDisplayStyle; key: string }[] = [
-          { value: "plain", key: "menu.numberStylePlain" },
-          { value: "rating", key: "menu.numberStyleRating" },
-          { value: "progress", key: "menu.numberStyleProgress" },
-          { value: "ring", key: "menu.numberStyleRing" },
-        ];
-        for (const { value, key } of numberStyles) {
-          menu.addItem((item) => item
-            .setTitle(t(key))
-            .setChecked(currentStyle === value)
-            .onClick(() => actions.setNumberDisplayStyle(col, value))
-          );
-        }
-        const rect = styleBtn.getBoundingClientRect();
-        menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
-        event.stopPropagation();
-      };
-    }
 
     if (!actions.isReadOnly) {
       const editBtn = row.createEl("button", { cls: "clickable-icon" });
@@ -257,5 +242,30 @@ export class ColumnManagerRenderer {
   private shouldIgnoreColumnDrag(event: DragEvent): boolean {
     return isHTMLElement(event.target)
       && event.target.closest("input, select, textarea, button, .db-dropdown-field, .db-mobile-reorder-controls") != null;
+  }
+
+  private getColumnVisibilityKeys(columns: ColumnDef[], config: ViewConfig, state: DatabaseViewState): string[] {
+    return columns
+      .filter((candidate) => this.getRequiredColumnReason(config, state, candidate) == null)
+      .map((candidate) => candidate.key);
+  }
+
+  private syncColumnVisibility(
+    columns: ColumnDef[],
+    config: ViewConfig,
+    state: DatabaseViewState,
+    actions: ColumnManagerActions,
+    selectedKeys: Set<string>
+  ): void {
+    const changes: Array<{ col: ColumnDef; visible: boolean }> = [];
+    for (const candidate of columns) {
+      if (this.getRequiredColumnReason(config, state, candidate) != null) continue;
+      const visible = selectedKeys.has(candidate.key);
+      if (visible === !state.hiddenColumns.has(candidate.key)) continue;
+      changes.push({ col: candidate, visible });
+    }
+    if (changes.length === 0) return;
+    if (actions.setColumnsVisible) actions.setColumnsVisible(changes);
+    else for (const change of changes) actions.setColumnVisible(change.col, change.visible);
   }
 }

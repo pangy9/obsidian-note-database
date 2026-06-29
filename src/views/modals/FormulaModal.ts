@@ -1,5 +1,6 @@
 import { App, Modal, Notice } from "obsidian";
 import { evaluateBaseExpression } from "../../data/BaseExpression";
+import { isImeComposing } from "../../data/KeyboardUtils";
 import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValuesForKey } from "../../data/ColumnTypes";
 import { ComputedFieldEngine } from "../../data/ComputedField";
 import { getComputedStorageKey } from "../../data/ColumnDisplay";
@@ -86,8 +87,9 @@ const FUNCTIONS: FormulaFunctionHelp[] = [
   { categoryKey: "formula.catDate", name: "DATE", signature: "DATE(year, month, day)", descriptionKey: "formula.fn.DATE.desc", example: "=DATE([year], [month], 1)" },
   { categoryKey: "formula.catDate", name: "EOMONTH", signature: "EOMONTH(date, months)", descriptionKey: "formula.fn.EOMONTH.desc", example: "=EOMONTH([date], 12)" },
   { categoryKey: "formula.catDate", name: "DATEADD", signature: 'DATEADD(date, amount, "days")', descriptionKey: "formula.fn.DATEADD.desc", example: '=DATEADD([date], 14, "days")' },
-  { categoryKey: "formula.catDate", name: "WEEKDAY", signature: "WEEKDAY(date)", descriptionKey: "formula.fn.WEEKDAY.desc", example: "=WEEKDAY([date])" },
+  { categoryKey: "formula.catDate", name: "WEEKDAY", signature: "WEEKDAY(date, [return_type])", descriptionKey: "formula.fn.WEEKDAY.desc", example: "=WEEKDAY([date], 2)" },
   { categoryKey: "formula.catDate", name: "WEEKNUM", signature: "WEEKNUM(date)", descriptionKey: "formula.fn.WEEKNUM.desc", example: "=WEEKNUM([date])" },
+  { categoryKey: "formula.catDate", name: "NETWORKDAYS", signature: "NETWORKDAYS(start, end, [holidays...])", descriptionKey: "formula.fn.NETWORKDAYS.desc", example: "=NETWORKDAYS([start], [due])" },
   { categoryKey: "formula.catDate", name: "HOUR", signature: "HOUR(datetime)", descriptionKey: "formula.fn.HOUR.desc", example: "=HOUR([datetime])" },
   { categoryKey: "formula.catDate", name: "MINUTE", signature: "MINUTE(datetime)", descriptionKey: "formula.fn.MINUTE.desc", example: "=MINUTE([datetime])" },
   { categoryKey: "formula.catDate", name: "SECOND", signature: "SECOND(datetime)", descriptionKey: "formula.fn.SECOND.desc", example: "=SECOND([datetime])" },
@@ -265,6 +267,7 @@ export class FormulaModal extends Modal {
       this.updateSuggestions();
     });
     this.textarea.addEventListener("keydown", (event) => {
+      if (isImeComposing(event)) return;
       const mod = event.metaKey || event.ctrlKey;
 
       // Autocomplete keyboard navigation
@@ -1224,7 +1227,8 @@ export class FormulaModal extends Modal {
       this.showSuggestionBox();
       for (const col of matches) {
         const item = this.propertySuggestEl.createEl("button", { cls: "db-formula-property-suggestion" });
-        item.createSpan({ text: col.label || col.key });
+        renderPropertyTypeIcon(item, col, "db-formula-property-suggestion-icon");
+        item.createSpan({ cls: "db-formula-property-suggestion-label", text: col.label || col.key });
         item.createSpan({ text: `[${col.key}]` });
         item.onclick = () => this.insertProperty(openIndex, cursor, col.key);
       }
@@ -1262,7 +1266,7 @@ export class FormulaModal extends Modal {
       return;
     }
     const pos = this.estimateCaretPosition();
-    this.propertySuggestEl.setCssProps({ left: `${pos.left}px`, top: `${pos.top}px` });
+    this.propertySuggestEl.setCssProps({ left: `${pos.left}px`, top: `${pos.top + 4}px` });
     this.suggestionIndex = -1;
     this.propertySuggestEl.addClass("is-visible");
   }

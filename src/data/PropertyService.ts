@@ -18,41 +18,10 @@ export interface FrontmatterBatchResult {
 }
 
 export class PropertyService {
-  /** Serialize writes to Obsidian property type metadata to prevent read-modify-write races */
-  private typesJsonWriteQueue: Promise<void> = Promise.resolve();
-
   constructor(
     private app: App,
     private mutateFrontmatter?: (file: TFile, mutator: FrontmatterMutator) => Promise<void>
   ) {}
-
-  async setObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
-    if (!key || isFileFieldKey(key) || type === "computed") return;
-    // Serialize writes to prevent read-modify-write races
-    const task = this.typesJsonWriteQueue.then(() => this.doSetObsidianPropertyType(key, type));
-    this.typesJsonWriteQueue = task.catch(() => {}); // keep queue alive on error
-    return task;
-  }
-
-  private async doSetObsidianPropertyType(key: string, type: ColumnDef["type"]): Promise<void> {
-    const adapter = this.app.vault.adapter;
-    const configPath = `${this.app.vault.configDir}/types.json`;
-    let data: { types?: Record<string, string> } = {};
-
-    try {
-      if (await adapter.exists(configPath)) {
-        const raw = await adapter.read(configPath);
-        data = raw.trim() ? JSON.parse(raw) as { types?: Record<string, string> } : {};
-      }
-    } catch (err) {
-      console.warn("Note Database: failed to read Obsidian property types", err);
-      data = {};
-    }
-
-    data.types = data.types || {};
-    data.types[key] = this.toObsidianPropertyType(type);
-    await adapter.write(configPath, `${JSON.stringify(data, null, 2)}\n`);
-  }
 
   async renameKey(
     files: TFile[],
@@ -258,26 +227,5 @@ export class PropertyService {
     if (Array.isArray(value)) return [...(value as unknown[])];
     if (value && typeof value === "object") return { ...(value as Record<string, unknown>) };
     return value;
-  }
-
-  private toObsidianPropertyType(type: ColumnDef["type"]): string {
-    switch (type) {
-      case "number":
-      case "currency":
-        return "number";
-      case "date":
-        return "date";
-      case "datetime":
-        return "datetime";
-      case "checkbox":
-        return "checkbox";
-      case "multi-select":
-        return "multitext";
-      case "status":
-      case "select":
-      case "text":
-      default:
-        return "text";
-    }
   }
 }

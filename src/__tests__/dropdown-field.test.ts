@@ -16,13 +16,21 @@ describe("shared dropdown field adoption", () => {
     expect(filterPanel).toContain("createDropdownField");
     expect(filterPanel).not.toContain("row.createEl(\"select\")");
     expect(filterPanel).toContain("db-filter-field-dropdown");
+    expect(filterPanel).toContain("toPropertyDropdownOption");
+    expect(filterPanel).toContain("renderDropdownPropertyTypeIcon");
     expect(filterPanel).toContain("db-filter-operator-dropdown");
     expect(filterPanel).toContain("db-filter-value-dropdown");
+    // checkbox filter offers only "is checked / is unchecked" (notempty/empty) and migrates legacy eq/neq.
+    expect(filterPanel).toContain('["notempty", t("filter.checkboxChecked")], ["empty", t("filter.checkboxUnchecked")]');
+    expect(filterPanel).toContain('currentCol?.type === "checkbox" && (rule.op === "eq" || rule.op === "neq")');
     expect(sortPanel).toContain("createDropdownField");
     expect(sortPanel).not.toContain("row.createEl(\"select\")");
     expect(sortPanel).toContain("db-sort-field-dropdown");
+    expect(sortPanel).toContain("toPropertyDropdownOption");
+    expect(sortPanel).toContain("renderDropdownPropertyTypeIcon");
     expect(sortPanel).toContain("db-sort-direction-dropdown");
     expect(styles).toContain(".note-database-container .db-panel-row .db-panel-dropdown");
+    expect(cssRule(styles, ".note-database-container .db-panel-row .db-filter-field-dropdown.has-current-icon,\n.note-database-container .db-panel-row .db-sort-field-dropdown.has-current-icon")).toContain("grid-template-columns: 16px minmax(0, 1fr) 14px");
   });
 
   it("uses shared dropdown popovers in low-risk modals", () => {
@@ -48,7 +56,17 @@ describe("shared dropdown field adoption", () => {
 
     expect(viewConfig).toContain("db-source-rule-dropdown");
     expect(viewConfig).toContain("getSourceRuleFieldOptions");
+    expect(viewConfig).toContain("getPropertyDropdownIcon(option.type)");
+    expect(viewConfig).toContain("renderIcon: renderDropdownPropertyTypeIcon");
+    // aliases is offered directly in the source-rule field dropdown (parallel to file.tags),
+    // typed as multi-select so its operator picker offers list ops.
+    expect(viewConfig).toContain('{ value: "aliases", label: "aliases", type: "multi-select" }');
+    expect(viewConfig).toContain('if (isObsidianAliasesKey(field)) return "multi-select"');
     expect(viewConfig).toContain("db-status-preset-setting-dropdown");
+    // View-level source rules (from .base conversion/embeds) must be visible+editable.
+    expect(viewConfig).toContain("renderViewSourceRulesSection");
+    expect(viewConfig).toContain('config.viewSourceRulesEnabled === true');
+    expect(viewConfig).toContain('renderSourceRules(panel, config as unknown as DatabaseConfig');
     expect(formula).toContain("db-formula-result-type-dropdown");
     expect(formula).toContain("db-formula-preview-dropdown");
     expect(formula).toContain("selectedResultType");
@@ -102,7 +120,7 @@ describe("shared dropdown field adoption", () => {
     expect(columnMenu).toContain("this.isPhoneLayout() && includeWidthActions");
     expect(columnMenu).toContain("createColumnMenuSubpopover");
     expect(columnMenu).toContain("db-column-menu-subpopover");
-    expect(columnMenu).toContain("db-column-number-style-popover");
+    expect(columnMenu).toContain("db-column-display-style-popover db-column-number-style-popover");
     expect(columnMenu).toContain("renderNumberStyleMenuIcon");
     expect(columnMenu).toContain("menu.numberDisplayIconStyle");
     expect(columnMenu).toContain("menu.numberDisplayIconEmoji");
@@ -155,6 +173,9 @@ describe("shared dropdown field adoption", () => {
     expect(dropdown).toContain("option.icon ? \" has-icon\" : \"\"");
     expect(dropdown).toContain("if (options.renderIcon) options.renderIcon(iconEl, option.icon)");
     expect(dropdown).toContain("else setIcon(iconEl, option.icon)");
+    expect(dropdown).toContain("getOptionIcon(options.options, value)");
+    expect(dropdown).toContain("renderButtonIcon(currentValue)");
+    expect(dropdown).toContain("button.toggleClass(\"has-current-icon\", Boolean(icon))");
     expect(dropdown).toContain("db-dropdown-option-icon");
     expect(numberRenderer).toContain("symbol === \"emoji\"");
     expect(numberRenderer).toContain("db-rating-emoji");
@@ -172,13 +193,15 @@ describe("shared dropdown field adoption", () => {
     expect(styles).toContain(".db-column-menu-subpopover");
     expect(styles).toContain(".db-column-menu-subpopover .db-number-style-menu-progress");
     expect(styles).toContain(".db-column-menu-subpopover .db-number-style-menu-ring-arc");
-    expect(cssRule(styles, ".db-column-number-style-popover.db-column-menu-subpopover")).toContain("width: 292px");
-    expect(cssRule(styles, ".db-numopt-dropdown-popover")).toContain("background: var(--background-primary)");
-    expect(cssRule(styles, ".db-column-number-style-popover .db-toggle-switch")).toContain("appearance: none");
-    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatch")).toContain("border-radius: 2px");
-    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatch.is-selected")).toContain("0 0 0 3px #000");
-    expect(cssRule(styles, ".db-column-number-style-popover .db-numopt-swatches")).toContain("justify-content: flex-start");
-    expect(styles).toContain(".db-column-number-style-popover .db-numopt-swatch.db-option-color-green");
+    expect(cssRule(styles, ".db-column-display-style-popover.db-column-menu-subpopover")).toContain("width: 292px");
+    expect(cssRule(styles, ".db-displayopt-dropdown-popover")).toContain("background: var(--background-primary)");
+    expect(cssRule(styles, ".db-column-display-style-popover .db-toggle-switch")).toContain("appearance: none");
+    expect(cssRule(styles, ".db-column-display-style-popover .db-displayopt-swatch")).toContain("border-radius: 2px");
+    expect(cssRule(styles, ".db-column-display-style-popover .db-displayopt-swatch.is-selected")).toContain("0 0 0 3px #000");
+    expect(cssRule(styles, ".db-column-display-style-popover .db-displayopt-swatches")).toContain("justify-content: flex-start");
+    expect(cssRule(styles, ".menu-item .db-menu-item-current")).toContain("color: var(--text-faint)");
+    expect(cssRule(styles, ".menu-item .db-menu-item-current")).toContain("font-size: 12px");
+    expect(styles).toContain(".db-column-display-style-popover .db-displayopt-swatch.db-option-color-green");
     expect(styles).toContain(".db-mobile-column-width-panel");
     expect(styles).toContain(".db-mobile-column-width-backdrop");
     expect(styles).toContain(".db-mobile-column-width-slider");
@@ -198,7 +221,7 @@ describe("shared dropdown field adoption", () => {
     expect(cssRule(styles, ".note-database-container .db-dropdown-option")).toContain("width: 100%");
     expect(cssRule(styles, ".note-database-container .db-dropdown-option")).toContain("min-width: 0");
     expect(cssRule(styles, ".note-database-container .db-dropdown-option-check,\n.note-database-container .db-dropdown-option-icon,\n.note-database-container .db-dropdown-option-swatches")).toContain("flex: 0 0 auto");
-    expect(cssRule(styles, ".note-database-container .db-dropdown-field-icon,\n.note-database-container .db-dropdown-field-chevron")).toContain("flex: 0 0 auto");
+    expect(cssRule(styles, ".note-database-container .db-dropdown-field.has-current-icon .db-dropdown-field-icon,\n.note-database-container .db-dropdown-field-chevron")).toContain("flex: 0 0 auto");
     expect(styles).toContain(".note-database-container .db-dropdown-search");
     expect(cssRule(styles, ".note-database-modal .db-dropdown-popover")).toContain("overflow-y: auto");
     expect(cssRule(styles, ".note-database-settings .db-dropdown-popover")).toContain("overflow-y: auto");
@@ -213,6 +236,29 @@ describe("shared dropdown field adoption", () => {
     expect(cssRule(styles, ".note-database-modal .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
     expect(cssRule(styles, ".note-database-settings .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
     expect(cssRule(styles, ".db-column-menu-subpopover .db-dropdown-option + .db-dropdown-section-title")).toContain("margin-top: 8px");
+  });
+
+  it("keeps property name lists icon-first without visible type text", () => {
+    const columnManager = readFileSync(new URL("../views/ColumnManagerRenderer.ts", import.meta.url), "utf8");
+    const viewConfig = readFileSync(new URL("../views/ViewConfigPanelRenderer.ts", import.meta.url), "utf8");
+    const calendar = readFileSync(new URL("../views/CalendarToolbarRenderer.ts", import.meta.url), "utf8");
+    const timeline = readFileSync(new URL("../views/CalendarTimelineToolbarRenderer.ts", import.meta.url), "utf8");
+    const summary = readFileSync(new URL("../views/SummaryRenderer.ts", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+
+    expect(columnManager).toContain("renderPropertyTypeIcon(typeEl, col, \"db-column-type-icon\")");
+    expect(columnManager).not.toContain("typeEl.createSpan({ text: COLUMN_TYPE_LABELS()[col.type] })");
+    expect(columnManager).not.toContain("db-column-number-style-toggle");
+    expect(viewConfig).toContain("this.toFieldDropdownOption(config, col)");
+    expect(viewConfig).toContain("db-view-config-field-dropdown");
+    expect(viewConfig).toContain("const hasPropertyIcons = options.some((option) => isPropertyDropdownIcon(option.icon))");
+    expect(viewConfig).not.toContain("const hasOptionIcons = options.some((option) => Boolean(option.icon))");
+    expect(calendar).toContain("getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields))");
+    expect(timeline).toContain("getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields))");
+    expect(summary).toContain("renderIcon: renderDropdownPropertyTypeIcon");
+    expect(cssRule(styles, ".note-database-container .db-column-manager-row")).toContain("grid-template-columns: 18px 20px 18px minmax(120px, 1fr)");
+    expect(cssRule(styles, ".note-database-container .db-source-rule-dropdown.db-source-rule-field.has-current-icon")).toContain("grid-template-columns: 16px minmax(0, 1fr) 18px");
+    expect(cssRule(styles, ".note-database-container .db-view-config-field-dropdown.has-current-icon")).toContain("grid-template-columns: 16px minmax(0, 1fr) 16px");
   });
 
   it("keeps parent header popovers open while interacting with shared dropdown popovers", () => {

@@ -6,7 +6,6 @@ vi.mock("obsidian", () => ({
 }));
 
 import { inferColumnType } from "../data/FrontmatterScanner";
-import { PropertyService } from "../data/PropertyService";
 
 describe("datetime column type", () => {
   it("infers datetime from frontmatter values that include time", () => {
@@ -17,22 +16,12 @@ describe("datetime column type", () => {
   it("keeps date-only values as date", () => {
     expect(inferColumnType("due", ["2026-06-04"])).toBe("date");
   });
+});
 
-  it("syncs datetime to Obsidian Date & Time property type", async () => {
-    let written = "";
-    const app = {
-      vault: {
-        configDir: ".obsidian",
-        adapter: {
-          exists: async () => false,
-          read: async () => "",
-          write: async (_path: string, data: string) => { written = data; },
-        },
-      },
-    };
-
-    await new PropertyService(app as never).setObsidianPropertyType("starts_at", "datetime");
-
-    expect(JSON.parse(written)).toEqual({ types: { starts_at: "datetime" } });
+describe("aliases column type", () => {
+  it("forces the built-in aliases list to multi-select (with or without samples)", () => {
+    expect(inferColumnType("aliases", ["alpha, beta"])).toBe("multi-select");
+    expect(inferColumnType("aliases", [["alpha", "beta"]])).toBe("multi-select");
+    expect(inferColumnType("aliases", [])).toBe("multi-select");
   });
 });

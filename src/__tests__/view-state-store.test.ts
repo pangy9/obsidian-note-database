@@ -15,7 +15,6 @@ type DatabaseViewType = "table" | "board" | "gallery" | "list";
 interface ViewModeStateDef {
   hiddenColumns?: string[];
   statusFilter?: string;
-  searchText?: string;
   groupByField?: string;
   filterLogic?: "and" | "or";
   filters?: FilterRule[];
@@ -30,7 +29,6 @@ interface ViewConfig {
   viewStates?: Partial<Record<DatabaseViewType, ViewModeStateDef>>;
   hiddenColumns?: string[];
   statusFilter?: string;
-  searchText?: string;
   groupByField?: string;
   filterLogic?: "and" | "or";
   filters?: FilterRule[];
@@ -99,7 +97,6 @@ class ViewStateStore {
     // Also write to top-level for legacy access
     viewConfig.hiddenColumns = persisted.hiddenColumns;
     viewConfig.statusFilter = persisted.statusFilter;
-    viewConfig.searchText = persisted.searchText;
     viewConfig.groupByField = persisted.groupByField;
     viewConfig.filterLogic = persisted.filterLogic;
     viewConfig.filters = persisted.filters;
@@ -126,7 +123,8 @@ class ViewStateStore {
       });
     }
     return {
-      searchText: persisted?.searchText ?? "",
+      // searchText is transient — never restored from persisted config.
+      searchText: "",
       statusFilter: persisted?.statusFilter ?? "",
       groupByField: persisted?.groupByField ?? "",
       filters: this.copyFilters(persisted?.filters),
@@ -143,7 +141,6 @@ class ViewStateStore {
     return {
       hiddenColumns: hiddenColumns.length > 0 ? hiddenColumns : undefined,
       statusFilter: state.statusFilter || undefined,
-      searchText: state.searchText || undefined,
       groupByField: state.groupByField || undefined,
       filterLogic: state.filterLogic === "or" ? "or" : undefined,
       filters: state.filters.length > 0 ? this.copyFilters(state.filters) : undefined,
@@ -223,37 +220,39 @@ describe("ViewStateStore", () => {
         viewType: "board",
         viewStates: {
           board: {
-            searchText: "board-search",
-            filters: [{ field: "col_a", op: "eq", value: "x" }],
+            filters: [{ field: "col_a", op: "eq", value: "board-x" }],
           },
           table: {
-            searchText: "table-search",
+            filters: [{ field: "col_a", op: "eq", value: "table-x" }],
           },
         },
-        searchText: "legacy-search", // top-level fallback
+        filters: [{ field: "col_a", op: "eq", value: "legacy-x" }], // top-level fallback
       });
       const state = store.get(0, 0, config);
-      expect(state.searchText).toBe("board-search");
+      expect(state.filters[0].value).toBe("board-x");
+      // searchText is transient: never restored from persisted config.
+      expect(state.searchText).toBe("");
     });
 
     it("falls back to top-level when viewType snapshot missing", () => {
       const config = makeViewConfig({
         viewType: "gallery",
         // No gallery snapshot
-        searchText: "legacy",
-        filters: [{ field: "col_a", op: "eq", value: "x" }],
+        filters: [{ field: "col_a", op: "eq", value: "legacy-x" }],
       });
       const state = store.get(0, 0, config);
-      expect(state.searchText).toBe("legacy");
+      expect(state.filters[0].value).toBe("legacy-x");
+      expect(state.searchText).toBe("");
     });
 
     it("falls back to top-level when viewStates undefined", () => {
       const config = makeViewConfig({
         viewType: "list",
-        searchText: "top-level",
+        filters: [{ field: "col_a", op: "eq", value: "top-level-x" }],
       });
       const state = store.get(0, 0, config);
-      expect(state.searchText).toBe("top-level");
+      expect(state.filters[0].value).toBe("top-level-x");
+      expect(state.searchText).toBe("");
     });
 
     it("correctly converts legacy sortColumn to sortRules", () => {
@@ -342,13 +341,11 @@ describe("ViewStateStore", () => {
     it("writes state to viewConfig under current viewType", () => {
       const config = makeViewConfig({ viewType: "table" });
       const state = store.get(0, 0, config);
-      state.searchText = "hello";
       state.filters = [{ field: "col_a", op: "eq", value: "v" }];
       state.hiddenColumns.add("col_b");
 
       store.persist(config, state);
 
-      expect(config.viewStates?.table?.searchText).toBe("hello");
       expect(config.viewStates?.table?.filters).toHaveLength(1);
       expect(config.viewStates?.table?.hiddenColumns).toContain("col_b");
     });
@@ -356,13 +353,22 @@ describe("ViewStateStore", () => {
     it("also writes to top-level legacy fields", () => {
       const config = makeViewConfig({ viewType: "table" });
       const state = store.get(0, 0, config);
-      state.searchText = "legacy-test";
       state.groupByField = "col_a";
 
       store.persist(config, state);
 
-      expect(config.searchText).toBe("legacy-test");
       expect(config.groupByField).toBe("col_a");
+    });
+
+    it("does not persist searchText (search is transient)", () => {
+      const config = makeViewConfig({ viewType: "table" });
+      const state = store.get(0, 0, config);
+      state.searchText = "should-not-persist";
+
+      store.persist(config, state);
+
+      expect("searchText" in (config.viewStates?.table ?? {})).toBe(false);
+      expect("searchText" in config).toBe(false);
     });
 
     it("does not persist empty arrays as non-undefined", () => {

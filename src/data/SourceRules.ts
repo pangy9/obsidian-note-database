@@ -82,6 +82,65 @@ export function sourceRuleTreesEqual(left: SourceRuleNode | undefined, right: So
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
+/**
+ * Merge database-level and view-level source rules into one tree. Each side is normalized
+ * via `getSourceRuleTree` first — which, by design, prefers an existing `sourceRuleTree`
+ * over legacy flat `sourceRules` on the SAME side — then the two sides are joined with
+ * `combineSourceRuleTrees`.
+ *
+ * This fixes a CROSS-side drop: without per-side normalization the effective config carried
+ * one side's flat `sourceRules` next to the other side's `sourceRuleTree`, and the later
+ * `getSourceRuleTree` at query time preferred the tree, silently dropping the flat side.
+ * Normalizing each side first means both sides contribute.
+ *
+ * Same-side tree + flat still follows `getSourceRuleTree`'s tree-preference (the tree wins;
+ * flat only applies when there is no tree). This is intentional and benign: the editor clears
+ * flat when writing a tree, and the `.base` importer keeps flat consistent with the tree.
+ * Pass `view` as `undefined` when view-level source rules are disabled (the switch is off).
+ */
+export function mergeDbAndViewSourceRuleTrees(
+  db: { sourceRuleTree?: SourceRuleNode; sourceRules?: SourceRule[]; sourceLogic?: "and" | "or" },
+  view?: { sourceRuleTree?: SourceRuleNode; sourceRules?: SourceRule[]; sourceLogic?: "and" | "or" }
+): SourceRuleNode | undefined {
+  const dbTree = getSourceRuleTree(db.sourceRuleTree, db.sourceRules, db.sourceLogic);
+  const viewTree = view ? getSourceRuleTree(view.sourceRuleTree, view.sourceRules, view.sourceLogic) : undefined;
+  return combineSourceRuleTrees(dbTree, viewTree);
+}
+
+/** Host shape carrying a legacy `typeFilter` next to the general source-rule tree. */
+export interface TypeFilterHost {
+  sourceRuleTree?: SourceRuleNode;
+  sourceRules?: SourceRule[];
+  sourceLogic?: "and" | "or";
+  typeFilter?: unknown;
+}
+
+/**
+ * Migrate a legacy `typeFilter` — a special-case filter on the frontmatter `type`
+ * field that predates general source rules — into the source-rule tree as a leaf
+ * `{ field: "type", op: "eq", value }`, folded into any existing tree via AND.
+ * Clears the legacy flat `sourceRules` / `sourceLogic` so the tree is the single
+ * source of truth, and removes `typeFilter`. Returns true when a migration
+ * happened; returns false (no-op) for an empty value, so repeated calls are
+ * idempotent.
+ *
+ * `typeFilter`'s old value semantics (`record.frontmatter["type"] === x`) is
+ * reproduced exactly by the `eq` leaf, and `getRequiredSourceRules` returns that
+ * leaf so newly created records keep getting `type` prefilled (see
+ * `getDefaultFrontmatterFromSourceRules` in DatabaseView / EmbeddedDatabaseRenderer).
+ */
+export function absorbTypeFilterIntoRules(host: TypeFilterHost, typeFilterValue: unknown): boolean {
+  const value = typeof typeFilterValue === "string" ? typeFilterValue.trim() : "";
+  if (!value) return false;
+  const existing = getSourceRuleTree(host.sourceRuleTree, host.sourceRules, host.sourceLogic);
+  const leaf: SourceRule = { field: "type", op: "eq", value };
+  host.sourceRuleTree = existing ? combineSourceRuleTrees(existing, leaf) : leaf;
+  host.sourceRules = undefined;
+  host.sourceLogic = undefined;
+  delete host.typeFilter;
+  return true;
+}
+
 export function matchesSourceRuleTree(
   tree: SourceRuleNode,
   matchesLeaf: (rule: SourceRule) => boolean,
@@ -217,11 +276,17 @@ export function sourceRuleValuesLooseEqual(value: unknown, rule: SourceRule): bo
 }
 
 export function sourceRuleContainsValue(value: unknown, rule: SourceRule): boolean {
+  // List-valued fields (multi-select, tags, aliases) match by list membership regardless of
+  // valueType. Stringifying the whole array would make `contains "alp"` falsely match
+  // ["alpha","beta"] via substring, so arrays are handled first.
+  if (Array.isArray(value)) {
+    const typedValue = getSourceRuleTypedValue(rule);
+    return value.some((item) => sourceRuleValuesEqual(item, typedValue));
+  }
   if (!rule.valueType) {
     return stringifyValue(value).toLowerCase().includes(stringifyValue(rule.value).toLowerCase());
   }
   const typedValue = getSourceRuleTypedValue(rule);
-  if (Array.isArray(value)) return value.some((item) => sourceRuleValuesEqual(item, typedValue));
   return stringifyValue(value).includes(stringifyValue(typedValue));
 }
 

@@ -26,6 +26,7 @@ export interface DropdownFieldOptions {
   placeholder?: string;
   hideLabel?: boolean;
   searchable?: boolean;
+  searchPlaceholder?: string;
   closeOnSelect?: boolean;
   renderIcon?(parent: HTMLElement, icon: string): void;
 }
@@ -44,6 +45,7 @@ export interface DropdownMenuOptions {
   onChange(value: string): void;
   popoverClassName?: string;
   searchable?: boolean;
+  searchPlaceholder?: string;
   closeOnSelect?: boolean;
   renderIcon?(parent: HTMLElement, icon: string): void;
 }
@@ -60,10 +62,15 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
     button.setAttr("aria-label", `${options.label}: ${options.disabledReason}`);
   }
   const iconWrap = button.createSpan({ cls: "db-dropdown-field-icon" });
-  if (options.icon) {
-    if (options.renderIcon) options.renderIcon(iconWrap, options.icon);
-    else setIcon(iconWrap, options.icon);
-  }
+  const renderButtonIcon = (value: string) => {
+    iconWrap.empty();
+    const icon = options.icon || getOptionIcon(options.options, value);
+    button.toggleClass("has-current-icon", Boolean(icon));
+    if (!icon) return;
+    if (options.renderIcon) options.renderIcon(iconWrap, icon);
+    else setIcon(iconWrap, icon);
+  };
+  renderButtonIcon(currentValue);
   const text = button.createDiv({ cls: "db-dropdown-field-text" });
   if (!options.hideLabel) text.createSpan({ cls: "db-dropdown-field-label", text: options.label });
   const valueEl = text.createSpan({ cls: "db-dropdown-field-value", text: getOptionText(options.options, currentValue) || options.placeholder || "" });
@@ -89,6 +96,7 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
       value: currentValue,
       onChange: (value) => {
         currentValue = value;
+        renderButtonIcon(currentValue);
         options.onChange(value);
       },
     }, valueEl, close);
@@ -113,6 +121,7 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
     onChange: (value) => options.onChange(value),
     popoverClassName: options.popoverClassName,
     searchable: options.searchable,
+    searchPlaceholder: options.searchPlaceholder,
     closeOnSelect: options.closeOnSelect,
     renderIcon: options.renderIcon ? (parent, icon) => options.renderIcon?.(parent, icon) : undefined,
   }, valueEl, close);
@@ -122,25 +131,28 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
 function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions, valueEl: HTMLElement, close: () => void): () => void {
   const contextClass = getDropdownPopoverContextClass(anchor);
   const host = getDropdownPopoverHost(anchor);
-  const panel = host.createDiv({ cls: `db-dropdown-popover ${contextClass}${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
-  panel.setAttr("role", "listbox");
   const searchable = options.searchable === true && options.options.length > 8;
+  const panel = host.createDiv({ cls: `db-dropdown-popover ${contextClass}${searchable ? " is-searchable" : ""}${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
+  panel.setAttr("role", "listbox");
   let searchInput: HTMLInputElement | undefined;
   if (searchable) {
     const searchWrap = panel.createDiv({ cls: "db-dropdown-search" });
     searchInput = searchWrap.createEl("input", {
-      attr: { type: "search", placeholder: options.label, "aria-label": options.label },
+      attr: { type: "search", placeholder: options.searchPlaceholder || options.label, "aria-label": options.label },
     });
   }
+  // When searchable, options live in their own scroll container so the search box stays
+  // fixed at the top (no sticky drift). Otherwise the panel itself scrolls.
+  const optionsHost = searchable ? panel.createDiv({ cls: "db-dropdown-options" }) : panel;
   let currentSection = "";
   let currentSectionEl: HTMLElement | undefined;
   const sectionRows: Array<{ section?: HTMLElement; row: HTMLButtonElement; value: string }> = [];
   for (const option of options.options) {
     if (option.section && option.section !== currentSection) {
       currentSection = option.section;
-      currentSectionEl = panel.createDiv({ cls: "db-dropdown-section-title", text: option.section });
+      currentSectionEl = optionsHost.createDiv({ cls: "db-dropdown-section-title", text: option.section });
     }
-    const row = panel.createEl("button", {
+    const row = optionsHost.createEl("button", {
       cls: `db-dropdown-option${option.icon ? " has-icon" : ""}${option.swatches?.length ? " has-swatches" : ""}${option.value === options.value ? " is-selected" : ""}${option.disabled ? " is-disabled" : ""}`,
       attr: { type: "button", role: "option", "aria-selected": option.value === options.value ? "true" : "false" },
     });
@@ -212,6 +224,10 @@ function getDropdownPopoverContextClass(anchor: HTMLElement): string {
 
 function getOptionText(options: DropdownOption[], value: string): string | undefined {
   return options.find((option) => option.value === value)?.text;
+}
+
+function getOptionIcon(options: DropdownOption[], value: string): string | undefined {
+  return options.find((option) => option.value === value)?.icon;
 }
 
 function syncDropdownSelection(rows: Array<{ row: HTMLButtonElement; value: string }>, value: string): void {

@@ -159,14 +159,82 @@ interface ConfigResult {
     viewType?: string;
     columnWidths: Record<string, number>;
     columnOrder?: string[];
+    hiddenColumns?: string[];
+    sourceRules?: unknown;
     sourceRuleTree?: unknown;
+    viewSourceRulesEnabled?: boolean;
     chartGroupField?: string;
     chartValueField?: string;
   }>;
+  sourceRules?: unknown;
   sourceRuleTree: unknown;
 }
 
 describe(".base import", () => {
+  it("does not copy global source rules into the auto-created view when the .base has no views", () => {
+    parseYamlMock.mockReturnValue({
+      sourceFolder: "Projects",
+      filters: { and: ['file.hasProperty("status")'] },
+    });
+    const plugin = createPlugin({ "Projects/task.md": { status: "todo" } });
+    const baseFile = file("Projects/source.base", "base");
+
+    const { config } = plugin.createConfigFromBase(baseFile, "ignored") as unknown as { config: ConfigResult };
+
+    // The db level still carries the global rule, so queries keep working.
+    expect(config.sourceRules).toBeDefined();
+    expect(config.sourceRuleTree).toBeDefined();
+    // The single auto-created view must NOT inherit a copy of the global rules — otherwise,
+    // after a save/reload cycle, parseViewConfig flags it as having view-level source rules.
+    const view = config.views[0];
+    expect(view.sourceRules).toBeUndefined();
+    expect(view.sourceRuleTree).toBeUndefined();
+    expect(view.viewSourceRulesEnabled).not.toBe(true);
+  });
+
+  it("does not copy global source rules into explicitly-defined views either", () => {
+    parseYamlMock.mockReturnValue({
+      sourceFolder: "Projects",
+      filters: { and: ['file.hasProperty("status")'] },
+      views: [{ type: "table", name: "All", order: ["file.name", "status"] }],
+    });
+    const plugin = createPlugin({ "Projects/task.md": { status: "todo" } });
+    const baseFile = file("Projects/source.base", "base");
+
+    const { config } = plugin.createConfigFromBase(baseFile, "ignored") as unknown as { config: ConfigResult };
+
+    for (const view of config.views) {
+      expect(view.sourceRules).toBeUndefined();
+      expect(view.sourceRuleTree).toBeUndefined();
+      expect(view.viewSourceRulesEnabled).not.toBe(true);
+    }
+  });
+
+  it("imports every column a .base view lists in order, including file.* fields (e.g. file.basename)", () => {
+    parseYamlMock.mockReturnValue({
+      sourceFolder: "Demo/任务管理",
+      filters: { and: ['file.inFolder("Demo/任务管理")'] },
+      views: [
+        { type: "table", name: "表格", order: ["file.name", "aliases"] },
+        { type: "table", name: "视图", order: ["file.basename"] },
+      ],
+    });
+    const plugin = createPlugin({ "Demo/任务管理/t1.md": { aliases: ["a"] } });
+
+    const { config } = plugin.createConfigFromBase(file("Demo/任务管理/x.base", "base"), "ignored") as unknown as { config: ConfigResult };
+
+    const schemaKeys = new Set(config.schema.columns.map((col) => col.key));
+    // An explicitly-ordered file.* field is imported into the schema, not dropped as "unsupported".
+    expect(schemaKeys.has("file.basename")).toBe(true);
+    // Bases shows exactly the columns each view lists in `order`; conversion mirrors that per view.
+    expect(config.views[0].columnOrder).toEqual(["file.name", "aliases"]);
+    expect(config.views[1].columnOrder).toEqual(["file.basename"]);
+    // Each view's ordered columns stay visible (not hidden); only the unlisted columns are hidden.
+    expect(config.views[0].hiddenColumns ?? []).not.toContain("file.name");
+    expect(config.views[0].hiddenColumns ?? []).not.toContain("aliases");
+    expect(config.views[1].hiddenColumns ?? []).not.toContain("file.basename");
+  });
+
   it("preserves this context, computed checkbox type, view widths, and multi-argument source rules", () => {
     parseYamlMock.mockReturnValue({
       sourceFolder: "Projects",

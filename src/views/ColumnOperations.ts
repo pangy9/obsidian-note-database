@@ -207,11 +207,6 @@ export class ColumnOperations {
       this.deps.setPendingUndoLabel(t("undo.columnRenameConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveCurrentViewConfig();
-      // Keep the database config durable even if Obsidian property type sync fails.
-      const obsidianPropertyType = isComputed
-        ? config.schema.computedFields.find((field) => field.key === newComputedKey)?.type || "text"
-        : targetCol.type;
-      if (!newIsFileField) await this.deps.propertyService.setObsidianPropertyType(isComputed ? newComputedKey : newKey, obsidianPropertyType);
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
       new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
@@ -617,7 +612,6 @@ export class ColumnOperations {
       if (type === "computed" && cleanupExistingProperty) {
         changed = (await this.propertySync.delete(config, target)).changed;
       } else if (type !== "computed" && target.key !== "file.name") {
-        await this.deps.propertyService.setObsidianPropertyType(target.key, type);
         changed = (await this.propertySync.convert(config, target, type)).changed;
       }
       await this.deps.refreshAfterSave();
@@ -691,7 +685,6 @@ export class ColumnOperations {
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged({ preserveViewport: true });
-      await this.deps.propertyService.setObsidianPropertyType(col.key, col.type);
       const result = await this.propertySync.ensure(config, col);
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();

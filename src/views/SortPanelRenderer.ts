@@ -5,6 +5,7 @@ import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { createDropdownField } from "./DropdownField";
 import { isHTMLElement } from "./DomGuards";
+import { renderDropdownPropertyTypeIcon, toPropertyDropdownOption } from "./PropertyTypeIcon";
 
 export interface SortPanelActions {
   save(): void;
@@ -121,10 +122,11 @@ export class SortPanelRenderer {
     createDropdownField({
       parent: row,
       label: t("panel.field"),
-      options: columns.map((col) => ({ value: col.key, text: col.label })),
+      options: columns.map((col) => toPropertyDropdownOption(col)),
       value: rule.field,
       className: "db-panel-dropdown db-sort-field-dropdown",
       hideLabel: true,
+      renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (value) => {
         state.sortColumn = undefined;
         state.sortDirection = "asc";

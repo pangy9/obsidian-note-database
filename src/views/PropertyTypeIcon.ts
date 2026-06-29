@@ -1,6 +1,8 @@
 import { ColumnDef } from "../data/types";
+import type { DropdownOption } from "./DropdownField";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const PROPERTY_DROPDOWN_ICON_PREFIX = "property:";
 
 export const PROPERTY_TYPE_ICON_NAMES: Record<ColumnDef["type"], string> = {
   text: "letter-case",
@@ -112,6 +114,29 @@ export function getPropertyTypeIconName(col: ColumnDef): string {
 
 export function getPropertyTypeIconDef(col: ColumnDef): PropertyTypeIconDef {
   return PROPERTY_TYPE_ICON_DEFS[getPropertyTypeIconName(col)] || PROPERTY_TYPE_ICON_DEFS["letter-case"];
+}
+
+export function getPropertyDropdownIcon(type: ColumnDef["type"]): string {
+  return `${PROPERTY_DROPDOWN_ICON_PREFIX}${type}`;
+}
+
+export function isPropertyDropdownIcon(icon: string | undefined): boolean {
+  return Boolean(icon?.startsWith(PROPERTY_DROPDOWN_ICON_PREFIX));
+}
+
+export function toPropertyDropdownOption(col: ColumnDef, text = col.label || col.key): DropdownOption {
+  return {
+    value: col.key,
+    text,
+    icon: getPropertyDropdownIcon(col.type),
+  };
+}
+
+export function renderDropdownPropertyTypeIcon(parent: HTMLElement, icon: string): boolean {
+  if (!icon.startsWith(PROPERTY_DROPDOWN_ICON_PREFIX)) return false;
+  const type = icon.slice(PROPERTY_DROPDOWN_ICON_PREFIX.length) as ColumnDef["type"];
+  renderPropertyTypeIcon(parent, { key: "", label: "", type }, "db-dropdown-option-type-icon");
+  return true;
 }
 
 export function renderPropertyTypeIcon(parent: HTMLElement, col: ColumnDef, cls = "db-property-icon"): HTMLElement {

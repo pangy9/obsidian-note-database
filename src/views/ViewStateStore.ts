@@ -75,7 +75,6 @@ export class ViewStateStore {
     // Also write to top-level for legacy access
     viewConfig.hiddenColumns = persisted.hiddenColumns;
     viewConfig.statusFilter = persisted.statusFilter;
-    viewConfig.searchText = persisted.searchText;
     viewConfig.groupByField = persisted.groupByField;
     viewConfig.filterLogic = persisted.filterLogic;
     viewConfig.filters = persisted.filters;
@@ -97,7 +96,11 @@ export class ViewStateStore {
       });
     }
     return {
-      searchText: persisted?.searchText ?? "",
+      // searchText is intentionally transient: never read back from persisted
+      // config. Search is a quick in-session filter, not part of the view
+      // definition (filters/sort/group/hidden-columns are). See
+      // search-transient.test.ts and VIEW_REGRESSION_MATRIX.md.
+      searchText: "",
       statusFilter: persisted?.statusFilter ?? "",
       groupByField: persisted?.groupByField ?? "",
       filters: this.copyFilters(persisted?.filters),
@@ -114,7 +117,6 @@ export class ViewStateStore {
     return {
       hiddenColumns: hiddenColumns.length > 0 ? hiddenColumns : undefined,
       statusFilter: state.statusFilter || undefined,
-      searchText: state.searchText || undefined,
       groupByField: state.groupByField || undefined,
       filterLogic: state.filterLogic === "or" ? "or" : undefined,
       filters: state.filters.length > 0 ? this.copyFilters(state.filters) : undefined,

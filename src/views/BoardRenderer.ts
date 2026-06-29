@@ -5,6 +5,8 @@ import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDispl
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { isExternalUrl, parseTextLink } from "../data/TextLink";
+import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
@@ -14,6 +16,7 @@ import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay"
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderInlineMarkdown, valueToTooltip } from "./InlineMarkdownRenderer";
 import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
@@ -64,6 +67,7 @@ export interface BoardRendererActions {
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
   readonly isReadOnly?: boolean;
+  readonly hideCreateEntry?: boolean;
   readonly canReorderGroups?: boolean;
 }
 
@@ -121,7 +125,7 @@ export class BoardRenderer {
     for (const group of groups) {
       this.renderColumn(board, config, groups, group, groupField);
     }
-    if (!this.actions.isReadOnly) {
+    if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
       const addColumn = board.createDiv({ cls: "db-board-add-column" });
       addColumn.createEl("button", { text: `+ ${t("toolbar.new")}` }).onclick = () => this.actions.createEntry();
     }
@@ -241,7 +245,7 @@ export class BoardRenderer {
       this.renderCard(cards, config, groups, group, row, groupField, undefined, undefined, group.rows);
     }
     renderGroupExpandControls(cards, config, groupField, group.key, group.rows.length, this.actions);
-    if (!this.actions.isReadOnly) {
+    if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
         () => this.createEntryNearEnd({ [groupField]: group.key || "" }, group.rows);
     }
@@ -287,7 +291,7 @@ export class BoardRenderer {
       this.renderCard(cards, config, groups, group, row, groupField, subgroupField, subgroup.key, subgroup.rows);
     }
     renderGroupExpandControls(cards, config, subgroupField, subgroup.key, subgroup.rows.length, this.actions);
-    if (!this.actions.isReadOnly) {
+    if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
       cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
         () => this.createEntryNearEnd({ [groupField]: group.key || "", [subgroupField]: subgroup.key || "" }, subgroup.rows);
     }
@@ -862,12 +866,36 @@ export class BoardRenderer {
       return;
     }
 
-    const links = values
-      .map((entry) => this.parseLink(entry))
-      .filter((entry): entry is ParsedLink => entry !== null);
-    if (links.length > 0) {
-      for (const link of links) this.renderLink(valueEl, row, link);
-      return;
+    if (col.textRenderMode === "markdown" && !isFileFieldKey(col.key)) {
+      const mdValues = Array.isArray(value) ? value : [value];
+      const parsed = mdValues.map((entry) => parseInlineMarkdown(entry));
+      if (parsed.some((nodes) => nodes !== null)) {
+        valueEl.empty();
+        const onOpenLink = (target: string, external: boolean): void => {
+          void this.openTarget(row, target, external);
+        };
+        parsed.forEach((nodes, idx) => {
+          if (idx > 0) valueEl.appendText(", ");
+          if (nodes) {
+            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink });
+            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink });
+          } else {
+            valueEl.appendText(String(mdValues[idx]));
+          }
+        });
+        setFieldTooltip(valueEl, valueToTooltip(value));
+        return;
+      }
+    }
+
+    if (col.textRenderMode === "link") {
+      const links = values
+        .map((entry) => parseTextLink(entry))
+        .filter((entry): entry is ParsedLink => entry !== null);
+      if (links.length > 0) {
+        for (const link of links) this.renderLink(valueEl, row, link);
+        return;
+      }
     }
 
     if (displayType === "number") {
@@ -991,55 +1019,24 @@ export class BoardRenderer {
 
   private parseImage(value: unknown, row: RowData): ParsedImage | null {
     if (typeof value !== "string") return null;
-    const link = this.parseLink(value);
-    const target = link?.target || value.trim();
-    if (!this.isImageTarget(target)) return null;
-    const src = link?.external ? target : this.resolveImageSrc(target, row);
-    if (!src) return null;
-    return {
-      alt: link?.label || target,
-      label: link?.label || target,
-      target,
-      src,
-      external: link?.external || this.isExternalUrl(target),
-    };
-  }
-
-  private parseLink(value: unknown): ParsedLink | null {
-    if (typeof value !== "string") return null;
     const text = value.trim();
-    if (!text) return null;
-
-    const markdownImage = text.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-    if (markdownImage) return this.toParsedLink(markdownImage[2], markdownImage[1] || markdownImage[2]);
-
-    const markdownLink = text.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (markdownLink) return this.toParsedLink(markdownLink[2], markdownLink[1]);
-
-    const wikiImage = text.match(/^!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
-    if (wikiImage) return this.toParsedLink(wikiImage[1], wikiImage[2] || wikiImage[1]);
-
-    const wikiLink = text.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
-    if (wikiLink) return this.toParsedLink(wikiLink[1], wikiLink[2] || wikiLink[1]);
-
-    if (this.isExternalUrl(text)) return this.toParsedLink(text, text);
-    if (this.isLikelyLocalTarget(text)) return this.toParsedLink(text, text);
-    return null;
-  }
-
-  private toParsedLink(target: string, label: string): ParsedLink {
-    const cleanTarget = target.trim();
-    return {
-      label: label.trim() || cleanTarget,
-      target: cleanTarget,
-      external: this.isExternalUrl(cleanTarget),
-    };
+    let target = text;
+    let alt = text;
+    const mdImg = text.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    const wikiImg = text.match(/^!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+    if (mdImg) { target = mdImg[2]; alt = mdImg[1] || mdImg[2]; }
+    else if (wikiImg) { target = wikiImg[1]; alt = wikiImg[2] || wikiImg[1]; }
+    if (!this.isImageTarget(target)) return null;
+    const external = isExternalUrl(target);
+    const src = external ? target : this.resolveImageSrc(target, row);
+    if (!src) return null;
+    return { alt, label: alt, target, src, external };
   }
 
   private resolveImageSrc(target: string, row: RowData): string | null {
     const file = this.app.metadataCache.getFirstLinkpathDest(target, row.file.path);
     if (file instanceof TFile) return this.app.vault.getResourcePath(file);
-    return this.isExternalUrl(target) ? target : null;
+    return isExternalUrl(target) ? target : null;
   }
 
   private async openTarget(row: RowData, target: string, external: boolean): Promise<void> {
@@ -1052,14 +1049,6 @@ export class BoardRenderer {
 
   private isImageTarget(target: string): boolean {
     return /\.(png|jpe?g|gif|webp|svg|avif|bmp)(?:[?#].*)?$/i.test(target);
-  }
-
-  private isExternalUrl(target: string): boolean {
-    return /^https?:\/\//i.test(target);
-  }
-
-  private isLikelyLocalTarget(target: string): boolean {
-    return target.endsWith(".md") || target.includes("/") || this.isImageTarget(target);
   }
 
   // 实时收集看板列/子分组候选 rect 与 zone 映射，供容器兜底 drop 与拖拽列命中（方案 B）共用。

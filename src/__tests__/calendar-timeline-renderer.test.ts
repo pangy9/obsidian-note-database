@@ -725,9 +725,7 @@ describe("calendar and timeline render integration", () => {
     expect(cssRule(styles, ".note-database-container .db-heading")).toContain("font-size: var(--db-heading-font-size)");
     expect(cssRule(styles, ".note-database-container .db-heading")).toContain("line-height: var(--db-heading-line-height)");
     expect(cssRule(styles, ".note-database-container .db-heading-text")).toContain("font-family: var(--db-title-font-family)");
-    expect(cssRule(styles, ".note-database-container .db-heading-edit")).toContain("font-family: var(--db-title-font-family)");
-    expect(cssRule(styles, ".note-database-container .db-heading-edit")).toContain("font-size: var(--db-heading-font-size)");
-    expect(cssRule(styles, ".note-database-container .db-heading-edit")).toContain("line-height: var(--db-heading-line-height)");
+    expect(cssRule(styles, ".note-database-container .db-heading-edit")).toContain("font: inherit");
     expect(cssRule(styles, ".note-database-container .db-heading-edit-description")).toContain("width: 100%");
     expect(cssRule(styles, ".note-database-container .db-heading-edit-description")).toContain("max-width: none");
     expect(cssRule(styles, ".note-database-container .db-heading-edit-description")).toContain("display: block");
@@ -878,7 +876,7 @@ describe("calendar and timeline render integration", () => {
     expect(cssRule(styles, ".theme-dark .note-database-container")).toContain("--db-current-time-lightness: clamp(58%, calc(var(--accent-l, 56%) + 10%), 70%)");
     expect(cssRule(styles, ".note-database-container .db-toolbar .db-new-button:hover")).toContain("var(--interactive-accent)");
     expect(cssRule(styles, ".note-database-container .db-toolbar .db-new-button:hover")).not.toContain("var(--background-modifier-hover)");
-    expect(cssRule(styles, ".note-database-container .db-calendar-range-row .db-view-config-range")).toContain("grid-template-columns: minmax(0, 1fr) 64px");
+    expect(cssRule(styles, ".note-database-container .db-calendar-range-row .db-view-config-range")).toContain("flex: 1");
     expect(styles).not.toContain(".db-calendar-timeline-range-row input[type=\"range\"]");
     expect(styles).toContain("grid-row: var(--db-timeline-row, 1)");
     expect(styles).toContain(".note-database-container .db-timeline-group");

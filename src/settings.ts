@@ -1,12 +1,12 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, setIcon, setTooltip } from "obsidian";
 import NoteDatabasePlugin from "./main";
-import { DatabaseConfig, PluginSettings, ViewConfig, generateId, TrashedDatabase } from "./data/types";
+import { DatabaseConfig, PluginSettings, TrashedDatabase } from "./data/types";
 import { LocaleCode, setLocale, t } from "./i18n";
 import { DeleteDatabaseModal } from "./views/modals/DeleteDatabaseModal";
 import { DEFAULT_STATUS_PRESET_ID, getBuiltinStatusPresets, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
 import { StatusPresetManagerModal } from "./views/modals/StatusPresetManagerModal";
 import { AddDatabaseModal } from "./views/modals/AddDatabaseModal";
-import { AddDatabaseModalResult, applyAddDatabaseResult } from "./data/AddDatabaseResult";
+import { buildDatabaseWithInferredColumns } from "./views/modals/AddDatabaseFlow";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { confirmWithModal } from "./views/modals/ConfirmModal";
 import { createDropdownField, DropdownOption } from "./views/DropdownField";
@@ -200,8 +200,9 @@ export class SettingsTab extends PluginSettingTab {
       ).openAndWait();
       if (!result) return;
       const name = this.getUniqueDatabaseName(result.name || t("defaults.newDatabase"));
-      const db = this.createEmptyDatabase(result);
-      db.name = name;
+      const db = await buildDatabaseWithInferredColumns(this.app, result, name);
+      if (!db) return;
+      if (!await this.plugin.confirmNewDatabasePropertyTypeConflicts(db)) return;
       const file = await this.plugin.dataSource.createViewDefFile(
         this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
         name,
@@ -284,32 +285,6 @@ export class SettingsTab extends PluginSettingTab {
     return `${baseName} ${i}`;
   }
 
-  private createEmptyDatabase(result: AddDatabaseModalResult): DatabaseConfig {
-    const view: ViewConfig = {
-      id: generateId(),
-      name: t("common.tableView"),
-      viewType: "table",
-      sourceFolder: result.sourceFolder,
-      schema: {
-        columns: [
-          { key: "file.name", label: t("defaults.nameColumn"), type: "text" },
-        ],
-        computedFields: [],
-      },
-      sortColumn: "",
-      sortDirection: "asc",
-    };
-    const db: DatabaseConfig = {
-      id: generateId(),
-      name: result.name || t("defaults.newDatabase"),
-      sourceFolder: result.sourceFolder,
-      schema: view.schema,
-      views: [view],
-    };
-    applyAddDatabaseResult(db, result);
-    return db;
-  }
-
   /** 渲染文件型数据库卡片（含拖拽、路径、元信息、hover 操作按钮） */
   private renderFileDatabaseCard(parent: HTMLElement, files: DatabaseFileEntry[], index: number): void {
     const entry = files[index];
@@ -344,9 +319,10 @@ export class SettingsTab extends PluginSettingTab {
     // 打开按钮（hover 时显示）
     const openBtn = heading.createEl("button", {
       cls: "db-settings-open-button",
-      attr: { type: "button", title: t("common.open"), "aria-label": t("common.open") },
+      attr: { type: "button" },
     });
     setIcon(openBtn, "arrow-up-right");
+    setTooltip(openBtn, t("common.open"), { delay: 100 });
     openBtn.onclick = () => {
       this.closeSettings();
       void this.plugin.openDashboardReference(entry.file.path);
@@ -355,9 +331,10 @@ export class SettingsTab extends PluginSettingTab {
     // 删除按钮（hover 时显示）— 逻辑与配置型数据库一致
     const deleteButton = heading.createEl("button", {
       cls: "db-settings-delete-button",
-      attr: { type: "button", title: t("settings.deleteDatabase"), "aria-label": t("settings.deleteDatabase") },
+      attr: { type: "button" },
     });
     setIcon(deleteButton, "trash");
+    setTooltip(deleteButton, t("settings.deleteDatabase"), { delay: 100 });
     deleteButton.onclick = async () => {
       // 文件型数据库也能查询到关联的笔记记录
       const records = this.plugin.dataSource?.getRecordsForConfig(config) || [];
@@ -455,15 +432,17 @@ export class SettingsTab extends PluginSettingTab {
   private renderMobileReorder(heading: HTMLElement, index: number, total: number, onMove: (from: number, to: number) => Promise<void>): void {
     const controls = heading.createSpan({ cls: "db-mobile-reorder-controls" });
     const upBtn = controls.createEl("button", {
-      attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      attr: { type: "button" },
     });
     setIcon(upBtn, "arrow-up");
+    setTooltip(upBtn, t("menu.moveUp"), { delay: 100 });
     upBtn.disabled = index === 0;
     upBtn.onclick = (event) => { event.preventDefault(); void onMove(index, index - 1); };
     const downBtn = controls.createEl("button", {
-      attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      attr: { type: "button" },
     });
     setIcon(downBtn, "arrow-down");
+    setTooltip(downBtn, t("menu.moveDown"), { delay: 100 });
     downBtn.disabled = index >= total - 1;
     downBtn.onclick = (event) => { event.preventDefault(); void onMove(index, index + 1); };
   }
@@ -537,9 +516,10 @@ class TrashManagerModal extends Modal {
       // 恢复按钮
       const restoreBtn = actions.createEl("button", {
         cls: "db-settings-trash-icon-btn",
-        attr: { type: "button", title: t("common.restore"), "aria-label": t("common.restore") },
+        attr: { type: "button" },
       });
       setIcon(restoreBtn, "rotate-ccw");
+      setTooltip(restoreBtn, t("common.restore"), { delay: 100 });
       restoreBtn.onclick = () => {
         this.openRestoreConfirmModal(item, i, trash);
       };
@@ -547,9 +527,10 @@ class TrashManagerModal extends Modal {
       // 永久删除按钮
       const permDeleteBtn = actions.createEl("button", {
         cls: "db-settings-trash-icon-btn db-settings-trash-danger",
-        attr: { type: "button", title: t("common.permanentlyDelete"), "aria-label": t("common.permanentlyDelete") },
+        attr: { type: "button" },
       });
       setIcon(permDeleteBtn, "trash-2");
+      setTooltip(permDeleteBtn, t("common.permanentlyDelete"), { delay: 100 });
       permDeleteBtn.onclick = async () => {
         const confirmed = await confirmWithModal(this.app, {
           title: t("common.permanentlyDelete"),

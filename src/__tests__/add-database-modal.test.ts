@@ -112,10 +112,10 @@ describe("AddDatabaseModal wiring", () => {
 });
 
 describe("addDatabase column inference respects source rules", () => {
-  const viewSrc = readFileSync(new URL("../views/DatabaseView.ts", import.meta.url), "utf8");
+  const flowSrc = readFileSync(new URL("../views/modals/AddDatabaseFlow.ts", import.meta.url), "utf8");
 
   it("passes the modal's source rule tree (and flat rules + logic) to collectFileFrontmatterKeys", () => {
-    expect(viewSrc).toContain("collectFileFrontmatterKeys(this.app, sourceFolder, result.sourceRules");
-    expect(viewSrc).toContain("result.sourceLogic, result.sourceRuleTree");
+    expect(flowSrc).toContain("collectFileFrontmatterKeys(app, sourceFolder, result.sourceRules");
+    expect(flowSrc).toContain("result.sourceLogic, result.sourceRuleTree");
   });
 });

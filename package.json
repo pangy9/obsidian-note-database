@@ -1,6 +1,6 @@
 {
   "name": "obsidian-note-database",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Database views for notes with table, board, gallery, list, chart, calendar, timeline, inline markdown, formulas, and source rules.",
   "main": "main.js",
   "scripts": {

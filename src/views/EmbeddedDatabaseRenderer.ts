@@ -1,4 +1,4 @@
-import { App, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, setIcon, TFile } from "obsidian";
+import { App, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, setIcon, setTooltip, TFile } from "obsidian";
 import { t } from "../i18n";
 import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { ensureColumnOrder, getColumnsInOrder, getVisibleColumns } from "../data/ColumnConfig";
@@ -39,8 +39,15 @@ import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ChartToolbarRenderer } from "./ChartToolbarRenderer";
 import { getDefaultChartDateBucket, getDefaultChartField, getDefaultChartNumberBucket } from "../data/ChartAggregation";
 import { getDefaultEventDateField, getTimelineDayNonDateTimeColumns } from "../data/CalendarTimelineModel";
+import {
+  buildCalendarTimelineSearchResults,
+  CalendarTimelineSearchResultItem,
+  CalendarTimelineSearchResults,
+  formatCalendarTimelineSearchResultDate,
+} from "../data/CalendarTimelineSearchResults";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
 import { CalendarRenderer } from "./CalendarRenderer";
+import { closeRecordDetailPanel, openRecordDetailPanel } from "./RecordDetailPanel";
 import { CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
@@ -53,7 +60,7 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
-import { highlightSearchMatches } from "./SearchHighlight";
+import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedStorageKey, isNumberDisplayColumn } from "../data/ColumnDisplay";
 import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, mergeDbAndViewSourceRuleTrees } from "../data/SourceRules";
@@ -83,6 +90,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private rows: RowData[] = [];
   private timelineInvalidRowsVersion = 0;
   private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
+  private calendarTimelineSearchResultsEl: HTMLElement | null = null;
+  private pendingSearchResultRevealPath?: string;
   private stateStore = new ViewStateStore();
   private state?: DatabaseViewState;
   private pendingShowColumns = new Set<string>();
@@ -98,6 +107,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private chartToolbarRenderer = new ChartToolbarRenderer();
   private calendarRenderer = new CalendarRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
+    openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     isReadOnly: true,
     updateCalendarScale: (scale, anchorDateKey) => this.updateCalendarScale(scale, anchorDateKey),
     onConfigChange: () => {
@@ -112,6 +122,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   });
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
+    openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     isReadOnly: true,
     isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
     toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
@@ -127,6 +138,25 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     getTimelineInvalidEventCount: () => this.getEmbeddedInvalidEventCount(),
     openTimelineInvalidEvents: () => this.openEmbeddedInvalidEvents(),
   });
+  /** 嵌入式展开：只读预览（嵌入式 record mutation 只读，字段不可编辑，仅展示 + 打开笔记）。 */
+  private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
+    const config = this.config;
+    if (!config || !this.containerEl) return;
+    const columns = getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns);
+    openRecordDetailPanel({
+      anchorEl,
+      host: this.containerEl,
+      row,
+      columns,
+      config,
+      app: this.app,
+      actions: {
+        editCell: () => {},
+        openRow: (r) => this.dataSource.openNote(r.file),
+        isReadOnly: true,
+      },
+    });
+  }
   private toolbarRenderer = new ToolbarRenderer();
   private filterPanelRenderer = new FilterPanelRenderer();
   private columnManagerRenderer = new ColumnManagerRenderer();
@@ -320,6 +350,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   onunload(): void {
     this.chartRenderer.destroy();
+    this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免卸载后泄漏
     this.calendarTimelineRenderer.destroy();
     this.chartToolbarRenderer.closePopover();
@@ -595,6 +626,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private renderResults(config: ViewConfig, options: { viewport?: DatabaseViewportRequest } = {}): void {
+    this.closeCalendarTimelineSearchResultsPanel();
+    closeRecordDetailPanel();
     const hostViewport = captureEmbeddedHostViewport(this.containerEl);
     // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
     setDateDisplayMode(config.yearDisplayMode || "always");
@@ -703,6 +736,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         },
       });
     }
+    this.renderCalendarTimelineSearchResultsPanel(config);
+    this.revealPendingSearchResult();
     if (options.viewport === "reset-top") {
       this.restoreScroll({ top: 0, left: 0 });
     } else if (options.viewport !== "none") {
@@ -711,6 +746,143 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.restoreEmbeddedHostViewport(hostViewport);
     const searchQuery = this.vs(config).searchText;
     if (searchQuery) highlightSearchMatches(this.containerEl, searchQuery);
+  }
+
+  private renderCalendarTimelineSearchResultsPanel(config: ViewConfig): void {
+    this.closeCalendarTimelineSearchResultsPanel();
+    if (config.viewType !== "calendar" && config.viewType !== "timeline") return;
+    const query = this.vs(config).searchText.trim();
+    if (!query) return;
+    const searchControl = this.containerEl.querySelector<HTMLElement>(".db-search-control");
+    const searchInput = searchControl?.querySelector<HTMLInputElement>(".db-search-input");
+    if (!searchControl || !searchInput) return;
+    if (window.activeDocument.activeElement !== searchInput) return;
+    const visibleRange = config.viewType === "timeline"
+      ? this.calendarTimelineRenderer.getCurrentVisibleRange()
+      : this.calendarRenderer.getCurrentVisibleRange();
+    const results = buildCalendarTimelineSearchResults(this.rows, config, visibleRange);
+    const panel = window.activeDocument.body.createDiv({ cls: "db-calendar-search-results-popover" });
+    this.calendarTimelineSearchResultsEl = panel;
+    this.positionCalendarTimelineSearchResultsPanel(panel, searchControl);
+    this.renderCalendarTimelineSearchResultsContent(panel, results, config, query);
+    panel.onmousedown = (event) => {
+      event.preventDefault();
+    };
+    searchInput.onblur = () => {
+      this.closeCalendarTimelineSearchResultsPanel();
+    };
+    searchInput.onkeydown = (event) => {
+      if (event.key !== "Escape") return;
+      if (this.calendarTimelineSearchResultsEl?.isConnected) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeCalendarTimelineSearchResultsPanel();
+        searchInput.blur();
+      }
+    };
+  }
+
+  private renderCalendarTimelineSearchResultsContent(panel: HTMLElement, results: CalendarTimelineSearchResults, config: ViewConfig, query: string): void {
+    panel.createDiv({
+      cls: "db-calendar-search-results-summary",
+      text: t("search.calendarTimelineSummary", { total: results.totalCount, visible: results.visibleCount }),
+    });
+    if (results.totalCount === 0) {
+      panel.createDiv({ cls: "db-calendar-search-results-empty", text: t("search.noMatches") });
+      return;
+    }
+    const list = panel.createDiv({ cls: "db-calendar-search-results-list" });
+    const currentRangeItems = results.items.filter((item) => item.inCurrentRange);
+    const outsideRangeItems = results.items.filter((item) => !item.inCurrentRange);
+    const visibleItems = [...currentRangeItems, ...outsideRangeItems].slice(0, 50);
+    const currentVisibleItems = visibleItems.filter((item) => item.inCurrentRange);
+    const outsideVisibleItems = visibleItems.filter((item) => !item.inCurrentRange);
+    const renderSection = (label: string, items: CalendarTimelineSearchResultItem[]) => {
+      if (items.length === 0) return;
+      const section = list.createDiv({ cls: "db-calendar-search-results-section" });
+      section.createDiv({ cls: "db-calendar-search-results-section-title", text: label });
+      for (const item of items) this.renderCalendarTimelineSearchResultButton(section, config, item, query);
+    };
+    renderSection(t("search.inCurrentRange"), currentVisibleItems);
+    renderSection(t("search.outsideCurrentRange"), outsideVisibleItems);
+    if (results.totalCount > visibleItems.length) {
+      panel.createDiv({
+        cls: "db-calendar-search-results-more",
+        text: t("search.moreResults", { count: results.totalCount - visibleItems.length }),
+      });
+    }
+  }
+
+  private renderCalendarTimelineSearchResultButton(list: HTMLElement, config: ViewConfig, item: CalendarTimelineSearchResultItem, query: string): void {
+    const button = list.createEl("button", {
+      cls: `db-calendar-search-result${item.inCurrentRange ? " is-current-range" : ""}`,
+      attr: { type: "button" },
+    });
+    renderSearchHighlightedText(button.createSpan({ cls: "db-calendar-search-result-title" }), item.title || t("common.untitled"), query);
+    renderSearchHighlightedText(button.createSpan({ cls: "db-calendar-search-result-date" }), formatCalendarTimelineSearchResultDate(item), query);
+    button.onclick = (event) => {
+      event.preventDefault();
+      this.closeCalendarTimelineSearchResultsPanel();
+      const activeEl = window.activeDocument.activeElement;
+      if (activeEl instanceof HTMLElement) activeEl.blur();
+      this.jumpToCalendarTimelineSearchResult(config, item);
+    };
+  }
+
+  private positionCalendarTimelineSearchResultsPanel(panel: HTMLElement, anchor: HTMLElement): void {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.max(320, Math.min(480, window.innerWidth - 16));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 80);
+    panel.setCssProps({
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+    });
+  }
+
+  private closeCalendarTimelineSearchResultsPanel(): void {
+    this.calendarTimelineSearchResultsEl?.remove();
+    this.calendarTimelineSearchResultsEl = null;
+  }
+
+  private jumpToCalendarTimelineSearchResult(config: ViewConfig, item: CalendarTimelineSearchResultItem): void {
+    this.pendingSearchResultRevealPath = item.filePath;
+    if (config.viewType === "timeline") {
+      const timeMinutes = (config.timelineScale || "week") === "day" ? item.startMinutes : undefined;
+      this.updateTimelineAnchor(item.startDateKey, timeMinutes);
+      return;
+    }
+    if (config.viewType !== "calendar") return;
+    config.calendarMonth = item.startDateKey.slice(0, 7);
+    config.calendarWeekStart = item.startDateKey;
+    config.calendarDay = item.startDateKey;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private revealPendingSearchResult(): void {
+    const path = this.pendingSearchResultRevealPath;
+    if (!path) return;
+    const target = this.findRenderedRowElement(path);
+    if (!target) return;
+    this.pendingSearchResultRevealPath = undefined;
+    window.requestAnimationFrame(() => {
+      if (!target.isConnected) return;
+      target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      target.addClass("is-new-record-highlight");
+      window.setTimeout(() => {
+        if (target.isConnected) target.removeClass("is-new-record-highlight");
+      }, 2200);
+    });
+  }
+
+  private findRenderedRowElement(path: string): HTMLElement | null {
+    const candidates = Array.from(
+      this.containerEl.querySelectorAll<HTMLElement>("[data-note-database-row-path]")
+    );
+    return candidates.find((candidate) => candidate.dataset.noteDatabaseRowPath === path) || null;
   }
 
   private applyViewTypeClass(viewType: NonNullable<ViewConfig["viewType"]>): void {
@@ -803,6 +975,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.updateToolbarIndicators(config);
         this.renderResults(config, { viewport: "reset-top" });
       },
+      onSearchFocus: () => this.renderCalendarTimelineSearchResultsPanel(config),
       setGroupByField: (value) => {
         if (config.viewType === "board") {
           if (!value) return;
@@ -937,6 +1110,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private rerenderToolbar(config: ViewConfig): void {
+    this.closeCalendarTimelineSearchResultsPanel();
     this.containerEl.querySelector(":scope > .db-header")?.remove();
     this.renderToolbar(config);
     this.renderHeaderChromeToggle(config);
@@ -1950,9 +2124,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         row.createSpan({ cls: "db-group-order-name", text: formatGroupKeyDisplay(config, field, key) });
         const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
         const upBtn = moveControls.createEl("button", {
-          attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+          attr: { type: "button" },
         });
         setIcon(upBtn, "arrow-up");
+        setTooltip(upBtn, t("menu.moveUp"), { delay: 100 });
         upBtn.disabled = index === 0;
         upBtn.onclick = () => {
           if (index === 0) return;
@@ -1961,9 +2136,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           commitOrder();
         };
         const downBtn = moveControls.createEl("button", {
-          attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+          attr: { type: "button" },
         });
         setIcon(downBtn, "arrow-down");
+        setTooltip(downBtn, t("menu.moveDown"), { delay: 100 });
         downBtn.disabled = index >= order.length - 1;
         downBtn.onclick = () => {
           if (index >= order.length - 1) return;

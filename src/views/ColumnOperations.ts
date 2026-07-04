@@ -59,6 +59,8 @@ export interface ColumnOperationsDeps {
 
 export class ColumnOperations {
   private propertySync: ColumnPropertySync;
+  /** Set by deleteColumn when user chooses "column only" (keep frontmatter). */
+  private deleteColumnOnly = false;
 
   constructor(private deps: ColumnOperationsDeps) {
     this.propertySync = new ColumnPropertySync(
@@ -127,7 +129,7 @@ export class ColumnOperations {
     const useFrontmatterMigration = !oldIsFileField && !newIsFileField;
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
-      ? await confirmWithModal(this.deps.app, {
+      ? !!await confirmWithModal(this.deps.app, {
         title: t("menu.editProperty", { name: newLabel }),
         message: t("column.confirmRenameComputedSavedProperty", { oldKey: oldComputedKey, newKey: newComputedKey }),
         confirmText: t("common.save"),
@@ -269,6 +271,7 @@ export class ColumnOperations {
     const targetCol = this.resolveColumn(config, col, col.key);
     const isComputed = targetCol.type === "computed";
     const isFileField = isFileFieldKey(targetCol.key);
+    const isVirtualField = isFileField || targetCol.key === "aliases";
     const propertyKey = getComputedStorageKey(targetCol);
     const displayOnly = this.isDisplayOnlyComputedSync();
     if (isComputed) {
@@ -278,13 +281,24 @@ export class ColumnOperations {
         confirmText: t("common.delete"),
         danger: true,
       })) return;
-    } else if (!await confirmWithModal(this.deps.app, {
-      title: t("common.delete"),
-      message: t("column.confirmDelete", { label: targetCol.label, key: targetCol.key }),
-      confirmText: t("common.delete"),
-      danger: true,
-    })) {
-      return;
+    } else if (isVirtualField) {
+      if (!await confirmWithModal(this.deps.app, {
+        title: t("common.delete"),
+        message: t("column.confirmDeleteVirtual", { label: targetCol.label, key: targetCol.key }),
+        confirmText: t("common.delete"),
+        danger: true,
+      })) return;
+      this.deleteColumnOnly = true;
+    } else {
+      const deleteResult = await confirmWithModal(this.deps.app, {
+        title: t("common.delete"),
+        message: t("column.confirmDelete", { label: targetCol.label, key: targetCol.key }),
+        confirmText: t("column.deleteWithData"),
+        danger: true,
+        secondaryButton: { text: t("column.deleteColumnOnly"), value: "column-only" },
+      });
+      if (!deleteResult) return;
+      this.deleteColumnOnly = deleteResult === "column-only";
     }
     ensureColumnOrder(config);
     const files = this.deps.getFilesForConfig(config);
@@ -296,7 +310,7 @@ export class ColumnOperations {
         danger: true,
       })
       : false;
-    const shouldDeleteFrontmatter = !isFileField && (!isComputed || cleanupSavedComputedProperty);
+    const shouldDeleteFrontmatter = !isFileField && !this.deleteColumnOnly && (!isComputed || cleanupSavedComputedProperty);
     const frontmatterChanges = shouldDeleteFrontmatter
       ? this.getDeleteKeyChanges(config, isComputed ? propertyKey : targetCol.key)
       : [];
@@ -501,6 +515,29 @@ export class ColumnOperations {
     }
   }
 
+  /** Quick-add a built-in file property (e.g. file.ctime) or obsidian field (e.g. aliases) as a column. */
+  async addFileFieldColumn(key: string): Promise<void> {
+    const config = this.deps.getConfig();
+    if (!config) return;
+    const existing = config.schema.columns.some((col) => col.key === key);
+    if (existing) return;
+    const colType: ColumnDef["type"] = key === "aliases" ? "multi-select" : getFileFieldFixedType(key);
+    const newCol: ColumnDef = {
+      key,
+      label: key,
+      type: colType,
+    };
+    ensureColumnOrder(config);
+    config.schema.columns.push(newCol);
+    config.columnOrder!.push(key);
+    this.deps.markPendingColumn(key);
+    this.deps.setPendingUndoLabel(t("undo.addColumnConfig"));
+    await this.deps.saveConfigImmediately();
+    this.deps.refreshSchemaChanged();
+    await this.deps.refreshAfterSave();
+    this.deps.refreshColumnManager();
+  }
+
   private resolveColumn(config: ViewConfig, col: ColumnDef, key: string): ColumnDef {
     return config.schema.columns.find((candidate) => candidate === col) ||
       config.schema.columns.find((candidate) => candidate.key === key) ||
@@ -542,7 +579,7 @@ export class ColumnOperations {
     let cleanupExistingProperty = false;
     if (changingToComputed) {
       if (displayOnly) {
-        cleanupExistingProperty = await confirmWithModal(this.deps.app, {
+        cleanupExistingProperty = !!await confirmWithModal(this.deps.app, {
           title: t("menu.changeType"),
           message: t("column.confirmConvertComputedCleanup", { key: target.key }),
           confirmText: t("common.delete"),

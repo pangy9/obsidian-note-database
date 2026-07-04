@@ -28,6 +28,7 @@ import {
 	snapMinutes,
 } from "../data/CalendarDateTime";
 import { CalendarEventCreateOptions, CalendarEventDateChange, resolveAllDayResizeChange, resolveDayMoveChange, resolveDayRangeResize, resolveTimedDragRange } from "../data/CalendarInteractionModel";
+import { CalendarTimelineSearchVisibleRange } from "../data/CalendarTimelineSearchResults";
 import { formatDateTimeRangeDisplay, formatDateValueDisplay, parseDateTimeParts } from "../data/DateTimeFormat";
 import { ColumnDef, RowData, ViewConfig } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
@@ -39,6 +40,7 @@ const TIMED_EVENT_TIME_VISIBILITY_HEIGHT = 42;
 
 export interface CalendarRendererActions {
 	openRow(row: RowData): void;
+	openRecordDetail?(anchorEl: HTMLElement, row: RowData): void;
 	showRowMenu?(event: MouseEvent, row: RowData): void;
 	createEntryForDate?(config: ViewConfig, dateKey: string, timeRange?: CalendarCreateTimeRange): void;
 	updateEventDates?(row: RowData, changes: CalendarEventDateChange): void | Promise<void>;
@@ -76,6 +78,7 @@ export class CalendarRenderer {
 	private calendarScaleMenuCleanup: (() => void) | null = null;
 	private pendingFlashDateKey: string | null = null;
 	private calendarRoot: HTMLElement | null = null;
+	private currentVisibleRange: CalendarTimelineSearchVisibleRange | null = null;
 
 	constructor(private actions: CalendarRendererActions) {}
 
@@ -84,6 +87,7 @@ export class CalendarRenderer {
 		this.closeMiniCalendar();
 		this.closeCalendarScaleMenu();
 		this.calendarRoot = null;
+		this.currentVisibleRange = null;
 		this.currentRows = rows;
 		this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
 		const scale = config.calendarScale || "month";
@@ -102,6 +106,10 @@ export class CalendarRenderer {
 		}
 	}
 
+	getCurrentVisibleRange(): CalendarTimelineSearchVisibleRange | null {
+		return this.currentVisibleRange;
+	}
+
 	private renderMonth(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
 		const startField = config.calendarStartDateField || getDefaultEventDateField(config);
 		if (!startField) {
@@ -117,6 +125,7 @@ export class CalendarRenderer {
 			anchor,
 			{ weekStartsOn },
 		);
+		this.currentVisibleRange = this.getDaysVisibleRange(model.days);
 		const hasEvents = model.days.some((day) => day.events.length > 0);
 		if (!hasEvents && !config.calendarMonth) {
 			this.renderEmpty(container, "calendar.noEvents");
@@ -145,14 +154,15 @@ export class CalendarRenderer {
 		const rowHeight = this.getRowHeight(config, layout.weekIndex);
 		const laneLimit = this.getMonthVisibleLaneLimit(config);
 		const hasOverflow = layout.segments.some((s) => s.lane >= laneLimit);
-		// Reserve one lane for the "more events" button when overflowing
-		const reservedLanes = hasOverflow ? laneLimit - 1 : laneLimit;
-		const visibleRowCount = Math.max(1, Math.min(layout.rowCount, reservedLanes));
-		// Total lane rows: visible event lanes + (overflow button row if needed)
+		const visibleRowCount = Math.max(1, Math.min(layout.rowCount, laneLimit));
+		weekEl.dataset.calendarVisibleLanes = String(visibleRowCount);
+		// The visible-lanes setting counts event rows only; the "+N" affordance is
+		// appended as an extra row so it never hides one of the configured events.
 		const totalLaneRows = visibleRowCount + (hasOverflow ? 1 : 0);
 
-		// Single grid: heading row (28px) + lane rows (22px each)
-		weekEl.style.gridTemplateRows = `28px repeat(${totalLaneRows}, minmax(22px, 1fr))`;
+			// Single grid: heading row + fixed-height event lanes + row-gap budget + a filler row.
+		// The filler absorbs spare height so sparse weeks do not stretch event spacing.
+		weekEl.style.gridTemplateRows = `28px repeat(${totalLaneRows}, 22px) minmax(0, 1fr)`;
 
 		const neededHeight = 30 + totalLaneRows * 24 + 10;
 		weekEl.style.setProperty("--db-calendar-month-week-min-height", `${Math.max(rowHeight || 0, neededHeight, this.getCellMinHeight(config))}px`);
@@ -179,6 +189,12 @@ export class CalendarRenderer {
 
 		// Overflow buttons sit in the last lane row, inside the day cell area
 		this.renderMonthOverflowButtons(weekEl, config, layout, visibleRowCount, dayCells, totalLaneRows + 1);
+	}
+
+	private getDaysVisibleRange(days: Array<{ dateKey: string }>): CalendarTimelineSearchVisibleRange | null {
+		const dateKeys = days.map((day) => day.dateKey).filter(Boolean).sort();
+		if (dateKeys.length === 0) return null;
+		return { startDateKey: dateKeys[0], endDateKey: dateKeys[dateKeys.length - 1] };
 	}
 
 	private renderMonthSegments(weekEl: HTMLElement, config: ViewConfig, layout: CalendarMonthWeekLayout, laneLimit: number): void {
@@ -209,7 +225,7 @@ export class CalendarRenderer {
 					eventEl.createSpan({ cls: "db-calendar-month-time", text: formatCalendarTime(segment.startMinutes) });
 				}
 			}
-			eventEl.createSpan({ cls: "db-calendar-month-title", text: segment.event.title });
+			eventEl.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
 			// Show the start–end date range on multi-day all-day segments so a spanning
 			// event reads as a date range rather than just a title bar.
 			if (!segment.isTimed && segment.event.endDateKey > segment.event.startDateKey) {
@@ -334,7 +350,7 @@ export class CalendarRenderer {
 					eventEl.createSpan({ cls: "db-calendar-month-time", text: formatCalendarTime(timing.startMinutes) });
 				}
 			}
-			eventEl.createSpan({ cls: "db-calendar-month-title", text: event.title });
+			eventEl.createSpan({ cls: `db-calendar-month-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
 			eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(event.startDateKey, event.endDateKey, event.startMinutes, event.endMinutes) });
 			this.attachEventOpenHandlers(eventEl, event);
 		}
@@ -404,6 +420,7 @@ export class CalendarRenderer {
 		);
 		const weekIndex = this.resolveWeekIndex(config, model);
 		const weekDays = model.weeks[weekIndex];
+		this.currentVisibleRange = this.getDaysVisibleRange(weekDays || []);
 		if (!weekDays || weekDays.length === 0) {
 			this.renderEmpty(container, "calendar.noEvents");
 			return;
@@ -436,6 +453,7 @@ export class CalendarRenderer {
 			{ weekStartsOn: this.getLocaleWeekStartsOn(config) },
 		);
 		const day = model.days.find((item) => item.dateKey === dayKey) || { dateKey: dayKey, inCurrentMonth: true, events: [] };
+		this.currentVisibleRange = { startDateKey: day.dateKey, endDateKey: day.dateKey };
 		const wrap = container.createDiv({ cls: "db-calendar db-calendar-week db-calendar-day-view" });
 		this.calendarRoot = wrap;
 		this.applyTimeGridSizingVars(wrap, config, 1);
@@ -486,6 +504,7 @@ export class CalendarRenderer {
 		// Mirrors the month view: day cells span all rows as background, segments are
 		// direct children placed by explicit grid-column / grid-row.
 		const stage = section.createDiv({ cls: "db-calendar-week-allday-cols" });
+		stage.dataset.calendarVisibleLanes = String(visibleLanes);
 		stage.style.setProperty("--db-calendar-time-day-count", String(days.length));
 		stage.style.gridTemplateRows = `28px repeat(${visibleLanes + (hasOverflow ? 1 : 0)}, 22px)`;
 		const todayKey = this.getTodayDateKey();
@@ -551,7 +570,7 @@ export class CalendarRenderer {
 			// Row 1 is reserved for the detached day number, so event lanes start at row 2.
 			eventEl.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
 			this.applyEventColor(eventEl, segment.event.color);
-			eventEl.createSpan({ cls: "db-calendar-month-title", text: segment.event.title });
+			eventEl.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
 			if (segment.event.endDateKey > segment.event.startDateKey) {
 				eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(segment.event.startDateKey, segment.event.endDateKey, segment.event.startMinutes, segment.event.endMinutes) });
 			}
@@ -614,7 +633,7 @@ export class CalendarRenderer {
 				attr: { type: "button", title: event.title, "data-note-database-row-path": event.row.file.path },
 			});
 			this.applyEventColor(eventEl, event.color);
-			eventEl.createSpan({ cls: "db-calendar-month-title", text: event.title });
+			eventEl.createSpan({ cls: `db-calendar-month-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
 			eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(event.startDateKey, event.endDateKey, event.startMinutes, event.endMinutes) });
 			this.attachEventOpenHandlers(eventEl, event);
 		}
@@ -715,7 +734,7 @@ export class CalendarRenderer {
 		const content = eventEl.createDiv({ cls: "db-calendar-week-event-content" });
 		// Title first (top) so a short card still shows what the event is; the
 		// time range renders below only when there's room.
-		content.createDiv({ cls: "db-calendar-week-event-title", text: layout.event.title });
+		content.createDiv({ cls: `db-calendar-week-event-title${layout.event.titleIsEmpty ? " is-empty-title" : ""}`, text: layout.event.title });
 		if (!isCompact) {
 			content.createDiv({
 				cls: "db-calendar-week-event-time",
@@ -835,76 +854,31 @@ export class CalendarRenderer {
 			for (const ghost of ghostByGrid.values()) ghost.remove();
 			ghostByGrid.clear();
 		};
-		const ensureGhost = (targetGrid: HTMLElement): HTMLElement => {
-			const existing = ghostByGrid.get(targetGrid);
-			if (existing) return existing;
-			const ghost = targetGrid.createDiv({ cls: "db-calendar-month-segment db-calendar-month-ghost is-all-day" });
-			ghost.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
-			this.applyEventColor(ghost, segment.event.color);
-			ghost.createSpan({ cls: "db-calendar-month-title", text: segment.event.title });
-			ghostByGrid.set(targetGrid, ghost);
-			return ghost;
-		};
-		const placeGhost = (ghost: HTMLElement, startDay: number, endDay: number): void => {
-			ghost.style.setProperty("--db-calendar-segment-start", String(startDay + 1));
-			ghost.style.setProperty("--db-calendar-segment-span", String(endDay - startDay + 1));
+		const clearPreview = (): void => {
+			clearGhosts();
+			this.setCalendarEventPreviewHidden(container, segment.event.row.file.path, false);
 		};
 
-		// Reposition the segment's grid start/span to follow the pointer. Within the
-		// current grid it tracks the cursor; across grids it clamps to this grid's
-		// edge and ghosts carry the rest through every grid in between.
+		// Re-render the whole event range as preview segments. A range can wrap into
+		// another week row even when the pointer is still in the origin grid, so the
+		// active DOM segment alone is not a sufficient preview surface.
 		const previewSpan = (target: { grid: HTMLElement; dateKey: string; dayIndex: number } | null): void => {
 			if (!target) {
-				clearGhosts();
+				clearPreview();
 				return;
 			}
-			const isCrossGrid = target.grid !== originGrid;
-			let dayIndex = isCrossGrid ? -1 : days.findIndex((day) => day.dateKey === target.dateKey);
-			if (dayIndex < 0) {
-				// Crossed into another grid row: clamp the preview to this grid's edge.
-				dayIndex = mode === "resize-end" ? days.length - 1 : 0;
-			}
-			let newStartDay = fixedStartDay;
-			let newEndDay = fixedEndDay;
-			if (mode === "resize-start") {
-				newStartDay = Math.min(dayIndex, fixedEndDay);
-			} else {
-				newEndDay = Math.max(dayIndex, fixedStartDay);
-			}
-			segmentEl.style.setProperty("--db-calendar-segment-start", String(newStartDay + 1));
-			segmentEl.style.setProperty("--db-calendar-segment-span", String(newEndDay - newStartDay + 1));
-
-			if (!isCrossGrid) {
-				clearGhosts();
-				return;
-			}
-			const originIdx = allGrids.indexOf(originGrid);
-			const targetIdx = allGrids.indexOf(target.grid);
-			if (originIdx < 0 || targetIdx < 0 || originIdx === targetIdx) {
-				clearGhosts();
-				return;
-			}
-			// Walk from the origin grid toward the target grid (exclusive of origin,
-			// inclusive of target), placing ghosts. Intermediate grids span fully.
-			const neededGrids = new Set<HTMLElement>();
-			const direction = targetIdx > originIdx ? 1 : -1;
-			for (let i = originIdx + direction; ; i += direction) {
-				const grid = allGrids[i];
-				if (!grid) break;
-				neededGrids.add(grid);
-				const isTargetWeek = i === targetIdx;
-				const ghostStartDay = mode === "resize-end" ? 0 : (isTargetWeek ? target.dayIndex : 0);
-				const ghostEndDay = mode === "resize-end" ? (isTargetWeek ? target.dayIndex : colCount - 1) : colCount - 1;
-				placeGhost(ensureGhost(grid), ghostStartDay, ghostEndDay);
-				if (isTargetWeek) break;
-			}
-			// Drop ghosts for grids the pointer has moved back out of.
-			for (const [grid, ghost] of ghostByGrid) {
-				if (!neededGrids.has(grid)) {
-					ghost.remove();
-					ghostByGrid.delete(grid);
-				}
-			}
+			const { startDateKey, endDateKey } = resolveDayRangeResize(originalStartKey, originalEndKey, target.dateKey, mode);
+			this.setCalendarEventPreviewHidden(container, segment.event.row.file.path, true);
+			this.renderMonthRangePreview({
+				allGrids,
+				cellSelector,
+				colCount,
+				ghostByGrid,
+				segment,
+				startDateKey,
+				endDateKey,
+				label: this.formatMonthDateRange(startDateKey, endDateKey, segment.event.startMinutes, segment.event.endMinutes),
+			});
 		};
 
 		const highlightTarget = (targetKey: string | null): void => {
@@ -938,7 +912,7 @@ export class CalendarRenderer {
 				window.setTimeout(() => window.activeDocument.removeEventListener("click", swallowClick, true), 0);
 			}
 			segmentEl.removeClass("is-resizing");
-			clearGhosts();
+			clearPreview();
 			highlightTarget(null);
 			if (!targetKey) {
 				resetSegmentGrid();
@@ -1013,65 +987,37 @@ export class CalendarRenderer {
 			clickEvent.preventDefault();
 		};
 
-		// 跨 grid（月视图跨周）ghost：周视图 all-day 区单 grid，allGrids 仅一个，不会跨 grid。
+		// 跨 grid（月视图跨周）ghost：同一目标 week 内也可能因 span 溢出而跨到下一行。
 		const allGrids = Array.from(container.querySelectorAll<HTMLElement>(gridSelector));
 		const ghostByGrid = new Map<HTMLElement, HTMLElement>();
 		const clearGhosts = (): void => {
 			for (const ghost of ghostByGrid.values()) ghost.remove();
 			ghostByGrid.clear();
 		};
-		const ensureGhost = (grid: HTMLElement, label: string): HTMLElement => {
-			const existing = ghostByGrid.get(grid);
-			if (existing) {
-				existing.querySelector<HTMLElement>(":scope > .db-calendar-month-dates")?.setText(label);
-				return existing;
-			}
-			const ghost = grid.createDiv({ cls: "db-calendar-month-segment db-calendar-month-ghost" });
-			ghost.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
-			this.applyEventColor(ghost, segment.event.color);
-			ghost.createSpan({ cls: "db-calendar-month-title", text: segment.event.title });
-			ghost.createSpan({ cls: "db-calendar-month-dates", text: label });
-			ghostByGrid.set(grid, ghost);
-			return ghost;
-		};
-		const placeGhost = (ghost: HTMLElement, startDay: number, endDay: number): void => {
-			ghost.style.setProperty("--db-calendar-segment-start", String(startDay + 1));
-			ghost.style.setProperty("--db-calendar-segment-span", String(endDay - startDay + 1));
+		const clearPreview = (): void => {
+			clearGhosts();
+			this.setCalendarEventPreviewHidden(container, segment.event.row.file.path, false);
 		};
 
-		// move：span 守恒。同 grid 本体滑动到 target 列；跨 grid（月视图跨周）本体还原原位 + target 放 ghost。
+		// move：span 守恒。预览按目标完整日期范围重新切分，避免本体单行 span 溢出到
+		// 隐式 grid column，也避免原事件在其它 week row 的分段停在旧位置。
 		const previewMove = (target: { grid: HTMLElement; dateKey: string; dayIndex: number } | null): void => {
 			if (!target) {
-				clearGhosts();
+				clearPreview();
 				return;
 			}
-			if (target.grid === originGrid) {
-				segmentEl.style.setProperty("--db-calendar-segment-start", String(target.dayIndex + 1));
-				segmentEl.style.setProperty("--db-calendar-segment-span", String(spanDays));
-				if (segmentDatesEl) segmentDatesEl.setText(formatTargetRange(target.dateKey));
-				clearGhosts();
-				return;
-			}
-			resetSegmentGrid();
-			// 从 target week 起，逐周放 ghost 直到 span 用完（大 span 事件跨多周也完整预览）。
-			const targetIdx = allGrids.indexOf(target.grid);
-			if (targetIdx < 0) { clearGhosts(); return; }
-			const targetLabel = formatTargetRange(target.dateKey);
-			const neededGrids = new Set<HTMLElement>();
-			let remaining = spanDays;
-			let day = target.dayIndex;
-			for (let i = targetIdx; i < allGrids.length && remaining > 0; i++) {
-				const grid = allGrids[i];
-				neededGrids.add(grid);
-				const startDay = Math.max(0, Math.min(day, colCount - 1));
-				const endDay = Math.min(startDay + remaining - 1, colCount - 1);
-				placeGhost(ensureGhost(grid, targetLabel), startDay, endDay);
-				remaining -= (endDay - startDay + 1);
-				day = 0;
-			}
-			for (const [grid, ghost] of ghostByGrid) {
-				if (!neededGrids.has(grid)) { ghost.remove(); ghostByGrid.delete(grid); }
-			}
+			const endDateKey = endField ? addDateKeyDays(target.dateKey, durationDays - 1) : target.dateKey;
+			this.setCalendarEventPreviewHidden(container, segment.event.row.file.path, true);
+			this.renderMonthRangePreview({
+				allGrids,
+				cellSelector,
+				colCount,
+				ghostByGrid,
+				segment,
+				startDateKey: target.dateKey,
+				endDateKey,
+				label: formatTargetRange(target.dateKey),
+			});
 		};
 
 		const highlightTarget = (targetKey: string | null): void => {
@@ -1088,6 +1034,8 @@ export class CalendarRenderer {
 				if (Math.abs(moveEvent.clientX - startClientX) > 3 || Math.abs(moveEvent.clientY - startClientY) > 3) {
 					didMove = true;
 					window.activeDocument.addEventListener("click", swallowClick, true);
+				} else {
+					return;
 				}
 			}
 			const target = this.resolveMonthMoveTarget(moveEvent.clientX, moveEvent.clientY, gridSelector, cellSelector, colCount);
@@ -1104,7 +1052,7 @@ export class CalendarRenderer {
 				window.setTimeout(() => window.activeDocument.removeEventListener("click", swallowClick, true), 0);
 			}
 			segmentEl.removeClass("is-moving");
-			clearGhosts();
+			clearPreview();
 			highlightTarget(null);
 			if (!didMove || !targetKey || targetKey === originalStartKey) {
 				resetSegmentGrid();
@@ -1125,6 +1073,93 @@ export class CalendarRenderer {
 
 		window.activeDocument.addEventListener("mousemove", onMove);
 		window.activeDocument.addEventListener("mouseup", onUp);
+	}
+
+	private setCalendarEventPreviewHidden(container: HTMLElement, rowPath: string, hidden: boolean): void {
+		for (const candidate of container.querySelectorAll<HTMLElement>(".db-calendar-month-segment[data-note-database-row-path]")) {
+			if (candidate.getAttribute("data-note-database-row-path") !== rowPath) continue;
+			candidate.toggleClass("is-preview-hidden", hidden);
+		}
+	}
+
+	private renderMonthRangePreview(options: {
+		allGrids: HTMLElement[];
+		cellSelector: string;
+		colCount: number;
+		ghostByGrid: Map<HTMLElement, HTMLElement>;
+		segment: CalendarMonthSegment;
+		startDateKey: string;
+		endDateKey: string;
+		label: string;
+	}): void {
+		const neededGrids = new Set<HTMLElement>();
+		for (const grid of options.allGrids) {
+			const cells = Array.from(grid.querySelectorAll<HTMLElement>(options.cellSelector)).slice(0, options.colCount);
+			const dateKeys = cells.map((cell) => cell.getAttribute("data-date-key") || "");
+			const firstKey = dateKeys[0];
+			const lastKey = dateKeys[dateKeys.length - 1];
+			if (!firstKey || !lastKey || options.endDateKey < firstKey || options.startDateKey > lastKey) continue;
+			const startDay = dateKeys.findIndex((dateKey) => dateKey >= options.startDateKey && dateKey <= options.endDateKey);
+			let endDay = -1;
+			for (let index = dateKeys.length - 1; index >= 0; index--) {
+				if (dateKeys[index] >= options.startDateKey && dateKeys[index] <= options.endDateKey) {
+					endDay = index;
+					break;
+				}
+			}
+			if (startDay < 0 || endDay < startDay) continue;
+			neededGrids.add(grid);
+			const ghost = this.ensureMonthRangePreviewGhost(grid, options.ghostByGrid, options.segment, options.label);
+			ghost.style.setProperty("--db-calendar-segment-start", String(startDay + 1));
+			ghost.style.setProperty("--db-calendar-segment-span", String(endDay - startDay + 1));
+			ghost.style.setProperty("--db-calendar-segment-lane", String(this.getPreviewLaneForGrid(grid, options.segment.lane) + 2));
+			ghost.toggleClass("is-start", options.startDateKey >= firstKey);
+			ghost.toggleClass("is-continuation", options.startDateKey < firstKey);
+			ghost.toggleClass("is-end", options.endDateKey <= lastKey);
+			ghost.toggleClass("continues-after", options.endDateKey > lastKey);
+		}
+		for (const [grid, ghost] of options.ghostByGrid) {
+			if (!neededGrids.has(grid)) {
+				ghost.remove();
+				options.ghostByGrid.delete(grid);
+			}
+		}
+	}
+
+	private getPreviewLaneForGrid(grid: HTMLElement, sourceLane: number): number {
+		const visibleLanes = Number(grid.dataset.calendarVisibleLanes);
+		if (Number.isFinite(visibleLanes) && visibleLanes > 0) {
+			return Math.max(0, Math.min(sourceLane, visibleLanes - 1));
+		}
+		return Math.max(0, sourceLane);
+	}
+
+	private ensureMonthRangePreviewGhost(
+		grid: HTMLElement,
+		ghostByGrid: Map<HTMLElement, HTMLElement>,
+		segment: CalendarMonthSegment,
+		label: string,
+	): HTMLElement {
+		const existing = ghostByGrid.get(grid);
+		if (existing) {
+			existing.querySelector<HTMLElement>(":scope > .db-calendar-month-dates")?.setText(label);
+			return existing;
+		}
+		const ghost = grid.createDiv({
+			cls: [
+				"db-calendar-month-segment",
+				"db-calendar-month-ghost",
+				segment.isTimed ? "is-timed" : "is-all-day",
+			].join(" "),
+		});
+		this.applyEventColor(ghost, segment.event.color);
+		if (segment.isTimed && segment.startMinutes != null) {
+			ghost.createSpan({ cls: "db-calendar-month-time", text: formatCalendarTime(segment.startMinutes) });
+		}
+		ghost.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
+		ghost.createSpan({ cls: "db-calendar-month-dates", text: label });
+		ghostByGrid.set(grid, ghost);
+		return ghost;
 	}
 
 	/** 参数化指针落点解析：支持月视图 week 行和周/日视图 all-day stage。 */
@@ -1297,17 +1332,16 @@ export class CalendarRenderer {
 			const onUp = (upEvent: MouseEvent) => {
 				window.activeDocument.removeEventListener("mousemove", onMove, true);
 				window.activeDocument.removeEventListener("mouseup", onUp, true);
-				if (didDrag) {
-					// Remove after the current task so the mouseup->click is swallowed.
-					window.setTimeout(() => window.activeDocument.removeEventListener("click", swallowClick, true), 0);
-				}
+				eventEl.removeClass("is-dragging", "is-moving");
+				eventEl.querySelector(".db-calendar-timed-drag-preview")?.remove();
+				if (mode === "move") this.clearAllDropTargets();
+				if (!didDrag) return; // 纯点击（无拖动）：仅清理拖拽视觉态，不写日期，避免误弹「日期未变更」
+				// Remove after the current task so the mouseup->click is swallowed.
+				window.setTimeout(() => window.activeDocument.removeEventListener("click", swallowClick, true), 0);
 				const next = computeNext(upEvent.clientY, upEvent.clientX);
 				nextStart = next.start;
 				nextEnd = next.end;
 				targetDateKey = next.dateKey;
-				eventEl.removeClass("is-dragging", "is-moving");
-				eventEl.querySelector(".db-calendar-timed-drag-preview")?.remove();
-				if (mode === "move") this.clearAllDropTargets();
 				void this.actions.updateEventDates?.(layout.event.row, {
 					startField: config.calendarStartDateField || getDefaultEventDateField(config) || "",
 					startDateKey: targetDateKey,
@@ -1343,7 +1377,11 @@ export class CalendarRenderer {
 		eventEl.addEventListener("click", (mouseEvent) => {
 			if ((mouseEvent.target as HTMLElement | null)?.closest(".db-calendar-time-resize-handle")) return;
 			mouseEvent.stopPropagation();
-			this.actions.openRow(event.row);
+			if (this.actions.openRecordDetail) {
+				this.actions.openRecordDetail(eventEl, event.row);
+			} else {
+				this.actions.openRow(event.row);
+			}
 		});
 		eventEl.addEventListener("contextmenu", (mouseEvent) => {
 			mouseEvent.preventDefault();
@@ -2100,7 +2138,7 @@ export class CalendarRenderer {
 	}
 
 	private getTitleField(config: ViewConfig): string | undefined {
-		return config.calendarTitleField || config.titleField;
+		return config.calendarTitleField;
 	}
 
 	private applyEventColor(element: HTMLElement, color: string | undefined): void {

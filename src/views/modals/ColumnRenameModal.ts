@@ -19,7 +19,7 @@ export class ColumnRenameModal extends Modal {
     app: App,
     private col: ColumnDef,
     private allColumns: ColumnDef[],
-    private onSave: (result: ColumnRenameResult) => Promise<void>,
+    private onSave: (result: ColumnRenameResult) => Promise<void | boolean>,
     private computedFields: ComputedFieldDef[] = []
   ) {
     super(app);
@@ -132,8 +132,8 @@ export class ColumnRenameModal extends Modal {
         wrap: wrapCheckbox.checked,
       };
       if (numberDisplayStyle !== undefined) result.numberDisplayStyle = numberDisplayStyle;
-      await this.onSave(result);
-      this.close();
+      const saved = await this.onSave(result);
+      if (saved !== false) this.close();
     };
   }
 

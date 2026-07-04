@@ -1,4 +1,4 @@
-import { setIcon } from "obsidian";
+import { setIcon, setTooltip } from "obsidian";
 import { ColumnDef, DatabaseConfig, DatabaseViewType, DateGroupMode, GroupOrderMode, TimelineScale, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
@@ -48,6 +48,7 @@ export interface ToolbarActions {
   setViewType(value: DatabaseViewType, viewIndex?: number): void;
   setDisplayWidth(value: "default" | "wide"): void;
   setSearchText(value: string): void;
+  onSearchFocus?(): void;
   setGroupByField(value: string): void;
   setGroupOrderMode(mode: GroupOrderMode): void;
   setShowEmptyGroups(field: string, value: boolean): void;
@@ -131,7 +132,7 @@ export class ToolbarRenderer {
     const isCalendarTimelineView = viewType === "calendar" || viewType === "timeline";
     const showSortButton = viewType !== "chart";
     const showGroupButton = viewType !== "chart" && viewType !== "calendar";
-    const showColumnButton = viewType !== "chart" && viewType !== "timeline" && viewType !== "calendar";
+    const showColumnButton = viewType !== "chart";
 
     if (actions.hideHeaderChrome) return;
 
@@ -177,9 +178,10 @@ export class ToolbarRenderer {
       if (!actions.hideDatabaseActions) {
         const moreBtn = headingRow.createEl("button", {
           cls: "db-heading-more-button",
-          attr: { type: "button", title: t("common.more"), "aria-label": t("common.more") },
+          attr: { type: "button" },
         });
         setIcon(moreBtn, "more-horizontal");
+        setTooltip(moreBtn, t("common.more"), { delay: 100 });
         moreBtn.onclick = (event) => this.showTitleActionsMenu(event, moreBtn, actions, currentDb?.name || "", heading);
       }
       if (currentDb?.description || actions.updateDatabaseDescription) {
@@ -386,9 +388,10 @@ export class ToolbarRenderer {
         .map(({ candidateIndex }) => candidateIndex);
       const sourcePosition = sameSourceIndexes.indexOf(index);
       const upBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+        attr: { type: "button" },
       });
       setIcon(upBtn, "arrow-up");
+      setTooltip(upBtn, t("menu.moveUp"), { delay: 100 });
       upBtn.disabled = sourcePosition <= 0;
       upBtn.onclick = (event) => {
         event.preventDefault();
@@ -396,9 +399,10 @@ export class ToolbarRenderer {
         this.moveDatabasePopoverEntry(panel, anchorEl, viewEntries, currentDbIndex, actions, updateState, index, sameSourceIndexes[sourcePosition - 1]);
       };
       const downBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+        attr: { type: "button" },
       });
       setIcon(downBtn, "arrow-down");
+      setTooltip(downBtn, t("menu.moveDown"), { delay: 100 });
       downBtn.disabled = sourcePosition < 0 || sourcePosition >= sameSourceIndexes.length - 1;
       downBtn.onclick = (event) => {
         event.preventDefault();
@@ -587,9 +591,10 @@ export class ToolbarRenderer {
     if (!readOnly && db.views.length < 15) {
       const addBtn = tabs.createEl("button", {
         cls: "db-view-tab db-view-tab-add",
-        attr: { title: t("toolbar.addView"), "aria-label": t("toolbar.addView") },
+        attr: {},
       });
       setIcon(addBtn, "plus");
+      setTooltip(addBtn, t("toolbar.addView"), { delay: 100 });
       addBtn.onclick = (event) => this.showAddViewMenu(event, actions, addBtn);
     }
 
@@ -701,9 +706,10 @@ export class ToolbarRenderer {
     // Create "⋯" overflow dropdown
     const moreBtn = tabs.createEl("button", {
       cls: "db-view-tab db-view-tab-more",
-      attr: { title: t("toolbar.moreViews"), "aria-label": t("toolbar.moreViews") },
+      attr: {},
     });
     moreBtn.createSpan({ text: "⋯" });
+    setTooltip(moreBtn, t("toolbar.moreViews"), { delay: 100 });
     moreBtn.onclick = (e: MouseEvent) => {
       openDropdownMenu({
         anchor: moreBtn,
@@ -1008,9 +1014,10 @@ export class ToolbarRenderer {
     const wrap = toolbar.createDiv({ cls: `db-search-control${state.searchText ? " is-active" : ""}` });
     const button = wrap.createEl("button", {
       cls: "db-search-button",
-      attr: { title: t("common.search"), "aria-label": t("common.search"), type: "button" },
+      attr: { type: "button" },
     });
     setIcon(button, "search");
+    setTooltip(button, t("common.search"), { delay: 100 });
     const searchInput = wrap.createEl("input", {
       cls: "db-search-input",
       attr: { type: "text", placeholder: t("common.search"), "aria-label": t("common.search") },
@@ -1028,7 +1035,10 @@ export class ToolbarRenderer {
     button.onmousedown = (event) => {
       event.preventDefault();
     };
-    searchInput.addEventListener("focus", () => wrap.addClass("is-active"));
+    searchInput.addEventListener("focus", () => {
+      wrap.addClass("is-active");
+      actions.onSearchFocus?.();
+    });
     searchInput.addEventListener("input", () => {
       wrap.toggleClass("is-active", searchInput.value.length > 0 || window.activeDocument.activeElement === searchInput);
       actions.setSearchText(searchInput.value);
@@ -1612,12 +1622,10 @@ export class ToolbarRenderer {
     if (!actions.openFullView) return;
     const fullBtn = toolbar.createEl("button", {
       cls: "db-toolbar-icon-button db-full-view-btn",
-      attr: {
-        "aria-label": t("toolbar.openFullView"),
-        title: t("toolbar.openFullView"),
-      },
+      attr: {},
     });
     setIcon(fullBtn, "maximize-2");
+    setTooltip(fullBtn, t("toolbar.openFullView"), { delay: 100 });
     fullBtn.onclick = () => actions.openFullView?.();
   }
 
@@ -1630,18 +1638,20 @@ export class ToolbarRenderer {
   private renderDatabaseFileButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     const btn = toolbar.createEl("button", {
       cls: "db-toolbar-icon-button",
-      attr: { title: t("toolbar.openDatabaseFile"), "aria-label": t("toolbar.openDatabaseFile") },
+      attr: {},
     });
     setIcon(btn, "file-output");
+    setTooltip(btn, t("toolbar.openDatabaseFile"), { delay: 100 });
     btn.onclick = () => actions.openDatabaseFile?.();
   }
 
   private createIconButton(toolbar: HTMLElement, icon: string, label: string, extraClass = ""): HTMLButtonElement {
     const btn = toolbar.createEl("button", {
       cls: `db-toolbar-icon-button ${extraClass}`.trim(),
-      attr: { title: label, "aria-label": label },
+      attr: {},
     });
     if (icon) setIcon(btn, icon);
+    setTooltip(btn, label, { delay: 100 });
     return btn;
   }
 

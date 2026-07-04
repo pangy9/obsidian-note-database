@@ -18,7 +18,7 @@
  * escaped by the browser and cannot execute (XSS-safe by construction).
  */
 
-import { getLinkLabel, normalizeExplicitLinkTarget } from "./TextLink";
+import { getLinkLabel, isExternalUrl, normalizeExplicitLinkTarget } from "./TextLink";
 
 export type InlineMarkdownNode =
   | { type: "text"; text: string }
@@ -30,6 +30,7 @@ export type InlineMarkdownNode =
   | { type: "math"; text: string }
   | { type: "link"; label: InlineMarkdownNode[]; target: string; external: boolean }
   | { type: "wikilink"; label: string; target: string }
+  | { type: "image"; alt: string; target: string; external: boolean }
   | { type: "br" };
 
 /** Characters that may begin a marker. Absence of all of them ⇒ plain text. */
@@ -128,6 +129,51 @@ class InlineParser {
           nodes.push({ type: "math", text: s.slice(pos + 1, mathClose) });
           pos = mathClose + 1;
           continue;
+        }
+      }
+
+      // Image ![alt](target) / ![[target|alt]] — must precede link/wikilink (leading !).
+      if (c === "!" && s[pos + 1] === "[") {
+        if (s[pos + 2] === "[") {
+          // Wiki image ![[target|alt]]
+          const imgClose = indexOfWithin(s, "]]", pos + 3, end);
+          if (imgClose !== -1) {
+            const inner = s.slice(pos + 3, imgClose);
+            const pipe = inner.indexOf("|");
+            const imgTarget = (pipe === -1 ? inner : inner.slice(0, pipe)).trim();
+            if (imgTarget) {
+              const altRaw = pipe === -1 ? "" : inner.slice(pipe + 1).trim();
+              flush();
+              nodes.push({ type: "image", alt: altRaw || imgTarget, target: imgTarget, external: isExternalUrl(imgTarget) });
+              pos = imgClose + 2;
+              continue;
+            }
+          }
+        } else {
+          // Markdown image ![alt](target) — keep target raw (it's a file path, not a
+          // normalized link; normalizeExplicitLinkTarget would turn "cover.png" into
+          // "https://cover.png"). Balance nested parens in the target like matchLink.
+          const labelEnd = indexOfWithin(s, "]", pos + 2, end);
+          if (labelEnd !== -1 && s[labelEnd + 1] === "(") {
+            let depth = 1;
+            let j = labelEnd + 2;
+            while (j < end) {
+              const ch = s[j];
+              if (ch === "(") depth += 1;
+              else if (ch === ")") { depth -= 1; if (depth === 0) break; }
+              j += 1;
+            }
+            if (depth === 0) {
+              const imgTarget = s.slice(labelEnd + 2, j).trim();
+              if (imgTarget) {
+                const altRaw = s.slice(pos + 2, labelEnd).trim();
+                flush();
+                nodes.push({ type: "image", alt: altRaw || imgTarget, target: imgTarget, external: isExternalUrl(imgTarget) });
+                pos = j + 1;
+                continue;
+              }
+            }
+          }
         }
       }
 

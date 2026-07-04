@@ -101,6 +101,17 @@ describe("shared dropdown field adoption", () => {
     expect(styles).toContain(".note-database-settings .db-dropdown-field");
   });
 
+  it("keeps all card/event title field pickers searchable", () => {
+    const viewConfig = readFileSync(new URL("../views/ViewConfigPanelRenderer.ts", import.meta.url), "utf8");
+    const calendarToolbar = readFileSync(new URL("../views/CalendarToolbarRenderer.ts", import.meta.url), "utf8");
+    const timelineToolbar = readFileSync(new URL("../views/CalendarTimelineToolbarRenderer.ts", import.meta.url), "utf8");
+
+    expect(viewConfig).toContain("private renderTitleField");
+    expect(viewConfig).toContain("actions.onChange(t(\"undo.titleFieldConfig\"));\n      },\n      true");
+    expect(calendarToolbar).toContain("actions.onChange(t(\"undo.calendarTitleFieldConfig\"));\n\t\t}, \"text-cursor-input\", true)");
+    expect(timelineToolbar).toContain("actions.onChange(t(\"undo.timelineTitleFieldConfig\"));\n    }, \"text-cursor-input\", true)");
+  });
+
   it("uses custom grouped popover for column type changes and icons for prominent type pickers", () => {
     const columnMenu = readFileSync(new URL("../views/ColumnMenu.ts", import.meta.url), "utf8");
     const viewConfig = readFileSync(new URL("../views/ViewConfigPanelRenderer.ts", import.meta.url), "utf8");

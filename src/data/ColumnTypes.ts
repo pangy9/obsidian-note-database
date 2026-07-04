@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import { stringifyValue } from "./Stringify";
-import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "./types";
+import { ColumnDef, ComputedFieldDef, StatusColor, StatusOptionDef, StatusPresetDef } from "./types";
 
 export const STATUS_OPTION_PRESETS: Array<{ key: string; label: string; options: StatusOptionDef[] }> = [
   {
@@ -118,6 +118,23 @@ export function COLUMN_TYPE_LABELS(): Record<ColumnDef["type"], string> {
     checkbox: t("columnType.checkbox"),
     computed: t("columnType.computed"),
   };
+}
+
+export function isColumnType(value: unknown): value is ColumnDef["type"] {
+  return value === "text" ||
+    value === "number" ||
+    value === "date" ||
+    value === "datetime" ||
+    value === "currency" ||
+    value === "select" ||
+    value === "multi-select" ||
+    value === "status" ||
+    value === "checkbox" ||
+    value === "computed";
+}
+
+export function isComputedFieldType(value: unknown): value is ComputedFieldDef["type"] {
+  return value === "number" || value === "text" || value === "date" || value === "datetime" || value === "checkbox";
 }
 
 export const OPTION_COLORS: StatusColor[] = [

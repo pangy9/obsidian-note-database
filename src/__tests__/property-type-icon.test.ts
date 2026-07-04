@@ -123,7 +123,7 @@ describe("base import property type icons", () => {
   it("keeps type changes on the local SVG renderer instead of Obsidian setIcon", () => {
     const source = readFileSync(new URL("../views/modals/BaseImportConfirmModal.ts", import.meta.url), "utf8");
 
-    expect(source).toContain("renderPropertyTypeIcon");
+    expect(source).toContain("renderDropdownPropertyTypeIcon");
     expect(source).not.toContain("setIcon");
   });
 

@@ -91,3 +91,49 @@ describe("migrateBackfillDatabaseId", () => {
     expect(processFrontMatter).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("database id deduplication", () => {
+  it("keeps the oldest copied database file on the original id and rewrites newer duplicates", async () => {
+    type MockFile = { path: string; stat: { ctime: number; mtime: number; size: number } };
+    const files: MockFile[] = [
+      { path: "database/Copy 2.md", stat: { ctime: 300, mtime: 300, size: 1 } },
+      { path: "database/Original.md", stat: { ctime: 100, mtime: 100, size: 1 } },
+      { path: "database/Copy 1.md", stat: { ctime: 200, mtime: 200, size: 1 } },
+      { path: "database/Other.md", stat: { ctime: 50, mtime: 50, size: 1 } },
+    ];
+    const store: Record<string, Record<string, unknown>> = {
+      "database/Copy 2.md": { db_view: true, database: { id: "copied-id", name: "Copy 2", views: [] } },
+      "database/Original.md": { db_view: true, database: { id: "copied-id", name: "Original", views: [] } },
+      "database/Copy 1.md": { db_view: true, database: { id: "copied-id", name: "Copy 1", views: [] } },
+      "database/Other.md": { db_view: true, database: { id: "other-id", name: "Other", views: [] } },
+    };
+    const processFrontMatter = vi.fn(async (file: MockFile, fn: (fm: Record<string, unknown>) => void) => {
+      fn(store[file.path]);
+    });
+    const app = {
+      vault: { getMarkdownFiles: () => files },
+      metadataCache: { getFileCache: (file: MockFile) => ({ frontmatter: store[file.path] }) },
+      fileManager: { processFrontMatter },
+    };
+
+    const results = new DataSource(app as never).getViewDefFiles();
+    const ids = new Map(results.map((entry) => [entry.file.path, entry.config.id]));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ids.get("database/Original.md")).toBe("copied-id");
+    expect(ids.get("database/Other.md")).toBe("other-id");
+    expect(ids.get("database/Copy 1.md")).toBeTruthy();
+    expect(ids.get("database/Copy 2.md")).toBeTruthy();
+    expect(ids.get("database/Copy 1.md")).not.toBe("copied-id");
+    expect(ids.get("database/Copy 2.md")).not.toBe("copied-id");
+    expect(ids.get("database/Copy 1.md")).not.toBe(ids.get("database/Copy 2.md"));
+    expect((store["database/Original.md"].database as Record<string, unknown>).id).toBe("copied-id");
+    expect((store["database/Copy 1.md"].database as Record<string, unknown>).id).toBe(ids.get("database/Copy 1.md"));
+    expect((store["database/Copy 2.md"].database as Record<string, unknown>).id).toBe(ids.get("database/Copy 2.md"));
+    expect(processFrontMatter.mock.calls.map(([file]) => file.path).sort()).toEqual([
+      "database/Copy 1.md",
+      "database/Copy 2.md",
+    ]);
+  });
+});

@@ -73,6 +73,30 @@ describe("parseInlineMarkdown — single markers", () => {
       { type: "wikilink", label: "My Label", target: "folder/note" },
     ]);
   });
+  it("image — markdown & wiki, internal & external, alt fallback", () => {
+    expect(parseInlineMarkdown("![alt](cover.png)")).toEqual([
+      { type: "image", alt: "alt", target: "cover.png", external: false },
+    ]);
+    // Empty alt falls back to target (mirrors BoardRenderer.parseImage).
+    expect(parseInlineMarkdown("![](cover.png)")).toEqual([
+      { type: "image", alt: "cover.png", target: "cover.png", external: false },
+    ]);
+    expect(parseInlineMarkdown("![alt](https://x.io/a.png)")).toEqual([
+      { type: "image", alt: "alt", target: "https://x.io/a.png", external: true },
+    ]);
+    expect(parseInlineMarkdown("![[photo.jpg]]")).toEqual([
+      { type: "image", alt: "photo.jpg", target: "photo.jpg", external: false },
+    ]);
+    expect(parseInlineMarkdown("![[photo.jpg|封面]]")).toEqual([
+      { type: "image", alt: "封面", target: "photo.jpg", external: false },
+    ]);
+    expect(parseInlineMarkdown("![[https://x.io/a.png]]")).toEqual([
+      { type: "image", alt: "https://x.io/a.png", target: "https://x.io/a.png", external: true },
+    ]);
+    expect(parseInlineMarkdown("see ![alt](x.png) here")).toEqual([
+      text("see "), { type: "image", alt: "alt", target: "x.png", external: false }, text(" here"),
+    ]);
+  });
 });
 
 describe("parseInlineMarkdown — nesting", () => {

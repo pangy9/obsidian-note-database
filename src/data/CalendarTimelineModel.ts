@@ -4,6 +4,7 @@ import { getDefaultGroupOrder, getEffectiveGroupOrder } from "./GroupOrder";
 import { formatGroupKeyDisplay, getDateGroupMode } from "./GroupDisplay";
 import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "./GroupVisibility";
 import { stringifyValue } from "./Stringify";
+import { resolveTitleFieldDisplay } from "./TitleFieldDisplay";
 import type { LocaleCode } from "../i18n";
 import { ColumnDef, RowData, TimelineScale, ViewConfig } from "./types";
 import {
@@ -23,6 +24,7 @@ export const UNCATEGORIZED_TIMELINE_LANE = "__uncategorized__";
 export interface CalendarTimelineEvent {
   id: string;
   title: string;
+  titleIsEmpty?: boolean;
   filePath: string;
   row: RowData;
   startDateKey: string;
@@ -53,6 +55,13 @@ export interface CalendarTimelineEvent {
   order: number;
   /** True when start datetime >= end datetime (negative or zero interval); hidden from timeline, surfaced for repair. */
   isInvalid?: boolean;
+}
+
+export interface BuildCalendarTimelineEventsOptions {
+  startField: string | undefined;
+  endField?: string;
+  titleField?: string;
+  colorField?: string;
 }
 
 /**
@@ -245,7 +254,12 @@ export function getCalendarAnchorMonth(
 ): { year: number; monthIndex: number } {
   const configured = parseCalendarMonth(config.calendarMonth);
   if (configured) return configured;
-  const firstEvent = buildEvents(rows, config, startField, config.calendarEndDateField, config.calendarTitleField, config.calendarColorField)[0];
+  const firstEvent = buildCalendarTimelineEvents(rows, config, {
+    startField,
+    endField: config.calendarEndDateField,
+    titleField: config.calendarTitleField,
+    colorField: config.calendarColorField,
+  })[0];
   if (firstEvent) return { year: Number(firstEvent.startDateKey.slice(0, 4)), monthIndex: Number(firstEvent.startDateKey.slice(5, 7)) - 1 };
   return { year: fallbackDate.getFullYear(), monthIndex: fallbackDate.getMonth() };
 }
@@ -477,7 +491,12 @@ export function buildCalendarMonthModel(
   options: CalendarMonthModelOptions = {},
 ): CalendarMonthModel {
   const startField = config.calendarStartDateField || getDefaultEventDateField(config);
-  const events = buildEvents(rows, config, startField, config.calendarEndDateField, config.calendarTitleField, config.calendarColorField);
+  const events = buildCalendarTimelineEvents(rows, config, {
+    startField,
+    endField: config.calendarEndDateField,
+    titleField: config.calendarTitleField,
+    colorField: config.calendarColorField,
+  });
   // 兑现 durationDays 契约（daysBetween(start,end)+1）：buildEvents 默认为 1，月视图模型必须
   // 按真实跨度重算（与 buildTimelineModel:550 一致），否则 move 拖拽算 endDateKey 会塌缩成单天。
   for (const event of events) {
@@ -534,14 +553,12 @@ function parseCalendarMonth(value: string | undefined): { year: number; monthInd
 export function buildTimelineModel(rows: RowData[], config: ViewConfig, options: TimelineModelOptions = {}): TimelineModel {
   const startField = config.timelineStartDateField || config.calendarStartDateField || getDefaultEventDateField(config);
   const endField = config.timelineEndDateField || config.calendarEndDateField;
-  const events = buildEvents(
-    rows,
-    config,
+  const events = buildCalendarTimelineEvents(rows, config, {
     startField,
     endField,
-    config.timelineTitleField || config.calendarTitleField,
-    config.timelineColorField || config.calendarColorField
-  );
+    titleField: config.timelineTitleField,
+    colorField: config.timelineColorField || config.calendarColorField,
+  });
   const scale = config.timelineScale || "week";
   const anchor = getTimelineAnchor(config);
   const window = options.visibleUnitCount != null
@@ -733,14 +750,12 @@ export function buildTimelineTicks(window: TimelineWindow, scale: TimelineScale,
   return ticks;
 }
 
-function buildEvents(
+export function buildCalendarTimelineEvents(
   rows: RowData[],
   config: ViewConfig,
-  startField: string | undefined,
-  endField: string | undefined,
-  titleField: string | undefined,
-  colorField: string | undefined,
+  options: BuildCalendarTimelineEventsOptions,
 ): CalendarTimelineEvent[] {
+  const { startField, endField, titleField, colorField } = options;
   if (!startField) return [];
   const events: CalendarTimelineEvent[] = [];
   const startIncludesTime = getFieldDisplayType(config, startField) === "datetime";
@@ -754,9 +769,11 @@ function buildEvents(
     const endValue = endField ? getRowFieldValue(row, endField, config) : undefined;
     const parsedEndDateKey = endField ? normalizeDateKey(endValue) : null;
     const endDateKey = parsedEndDateKey && parsedEndDateKey >= startDateKey ? parsedEndDateKey : startDateKey;
+    const title = resolveTitleFieldDisplay(row, config, titleField);
     events.push({
       id: row.file.path,
-      title: getEventTitle(row, config, titleField),
+      title: title.text,
+      titleIsEmpty: title.isEmpty || undefined,
       color: getEventColor(row, config, colorField),
       filePath: row.file.path,
       row,
@@ -925,15 +942,6 @@ function getDaysUntilWeekEnd(dayOfWeek: number, weekStartsOn: number): number {
 
 function assertNever(value: never): never {
   throw new Error(`Unsupported timeline scale: ${String(value)}`);
-}
-
-function getEventTitle(row: RowData, config: ViewConfig, explicitTitleField: string | undefined): string {
-  const titleField = explicitTitleField || config.titleField;
-  if (titleField) {
-    const value = stringifyValue(getRowFieldValue(row, titleField, config)).trim();
-    if (value) return value;
-  }
-  return row.file.basename || row.file.name.replace(/\.md$/i, "");
 }
 
 function getTimelineGroupKeys(row: RowData, config: ViewConfig, uncategorizedLabel: string): { key: string; label: string }[] {

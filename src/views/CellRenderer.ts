@@ -1,4 +1,4 @@
-import { App, Notice, Platform, normalizePath, setIcon } from "obsidian";
+import { App, Notice, Platform, normalizePath, setIcon, setTooltip } from "obsidian";
 import {
   getColumnOptions,
   getInvalidObsidianTagValues,
@@ -16,7 +16,7 @@ import { normalizeExternalUrlTarget, parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
-import { t } from "../i18n";
+import { getEffectiveLocale, t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, setPosition } from "./PopoverPosition";
 import { setFieldTooltip } from "./FieldTooltip";
 import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./FileTitleDisplay";
@@ -25,7 +25,18 @@ import { safeString } from "../data/SafeString";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
-import { renderInlineMarkdown } from "./InlineMarkdownRenderer";
+import { renderInlineMarkdown, resolveInlineImageSrc } from "./InlineMarkdownRenderer";
+import {
+  addUtcDays,
+  dateKeyFromUtc,
+  getLocaleWeekStartsOn,
+  getLocalDateKey,
+  getWeekdayLabels,
+  makeUtcDate,
+  parseDateKeyToUtc,
+} from "../data/CalendarDateTime";
+import { CalendarDayModel } from "../data/CalendarTimelineModel";
+import { MiniCalendarEventIndex, MiniCalendarMode, renderMiniCalendar } from "./CalendarMiniCalendarRenderer";
 
 const OPTION_COLORS: StatusOptionDef["color"][] = [
   "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink",
@@ -66,7 +77,8 @@ export class CellRenderer {
     private saveCellValue?: (row: RowData, col: ColumnDef, value: unknown) => Promise<void>,
     private getFileTitleInfo: (row: RowData) => FileTitleDisplay = (row) => getFileTitleDisplay(row, [row]),
     private getComputedFields: () => ComputedFieldDef[] = () => [],
-    private app?: App
+    private app?: App,
+    private restoreTableCellFocus?: (row: RowData, col: ColumnDef) => void
   ) {}
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
@@ -179,6 +191,8 @@ export class CellRenderer {
                 if (external) window.open(target);
                 else void this.app?.workspace.openLinkText(target, row.file.path);
               },
+              onResolveImage: (target, external) =>
+                this.app ? resolveInlineImageSrc(this.app, row, target, external) : null,
             });
           } else {
             td.textContent = String(value);
@@ -470,12 +484,16 @@ export class CellRenderer {
     const popover = host.createDiv({ cls: "db-cell-option-popover" });
     let activeOptionIndex = 0;
 
-    const close = () => {
+    const close = (options: { restoreFocus?: boolean } = {}) => {
       popover.remove();
       // Clean up any leaked color picker popups on window.activeDocument.body
       window.activeDocument.body.querySelectorAll(".db-color-picker-popup").forEach(el => el.remove());
       window.activeDocument.removeEventListener("mousedown", onOutside, true);
       window.activeDocument.removeEventListener("keydown", onKeydown, true);
+      if (options.restoreFocus) {
+        if (td.isConnected) td.focus();
+        else this.restoreTableCellFocus?.(row, col);
+      }
     };
     const onOutside = (event: MouseEvent) => {
       const target = event.target as Node | null;
@@ -487,7 +505,9 @@ export class CellRenderer {
       if (isImeComposing(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        close();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        close({ restoreFocus: true });
         return;
       }
       if (isHTMLElement(event.target) && event.target.closest("input, textarea, select")) return;
@@ -495,6 +515,8 @@ export class CellRenderer {
       const items = Array.from(popover.querySelectorAll<HTMLButtonElement>(".db-cell-option-item"));
       if (!items.length) return;
       event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       if (event.key === "ArrowDown") activeOptionIndex = Math.min(items.length - 1, activeOptionIndex + 1);
       if (event.key === "ArrowUp") activeOptionIndex = Math.max(0, activeOptionIndex - 1);
       const item = items[activeOptionIndex];
@@ -743,6 +765,11 @@ export class CellRenderer {
         };
 
         item.onmousedown = (event) => event.preventDefault();
+        item.onkeydown = (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.stopPropagation();
+          event.preventDefault();
+        };
         item.onclick = () => {
           if (!multiple) {
             selected.clear();
@@ -1057,6 +1084,10 @@ export class CellRenderer {
     const initTime = dateParts?.time || "";
     const initHour = initTime.slice(0, 2);
     const initMinute = initTime.slice(3, 5);
+    const rawInitialDateKey = dateParts?.dateKey || safeString(currentValue).substring(0, 10);
+    const initialDateKey = parseDateKeyToUtc(rawInitialDateKey) ? rawInitialDateKey : getLocalDateKey();
+    let pickerMonthKey = initialDateKey.slice(0, 7);
+    let pickerMode: MiniCalendarMode = "day";
 
     let popover: HTMLElement;
     let closeBtn: HTMLButtonElement | undefined;
@@ -1177,8 +1208,10 @@ export class CellRenderer {
       cancel();
     };
 
-    const isMovingToSegment = (e: FocusEvent) =>
-      inputs.includes(e.relatedTarget as HTMLInputElement);
+    const isMovingWithinDatePopover = (e: FocusEvent) => {
+      const next = e.relatedTarget as Node | null;
+      return Boolean(next && (inputs.includes(next as HTMLInputElement) || popover.contains(next)));
+    };
 
     const handleSegmentKey = (
       event: KeyboardEvent,
@@ -1208,13 +1241,104 @@ export class CellRenderer {
       return `${pad2(String(clampedHour))}:${pad2(String(clampedMinute))}`;
     };
 
+    const setDateInputs = (dateKey: string) => {
+      const [year, month, day] = dateKey.split("-");
+      yearInp.value = year || "";
+      monthInp.value = month || "";
+      dayInp.value = day || "";
+    };
+
+    const setCurrentTimeInputs = () => {
+      if (!hourInp || !minuteInp) return;
+      const now = new Date();
+      hourInp.value = pad2(String(now.getHours()));
+      minuteInp.value = pad2(String(now.getMinutes()));
+    };
+
+    const getDraftDateKey = (): string => {
+      const year = yearInp.value;
+      const month = monthInp.value;
+      const day = dayInp.value;
+      return /^\d{4}$/.test(year) && /^\d{2}$/.test(month) && /^\d{2}$/.test(day)
+        ? `${year}-${month}-${day}`
+        : initialDateKey;
+    };
+
+    const pickerEventIndex: MiniCalendarEventIndex = {
+      dateKeys: new Set(),
+      monthKeys: new Set(),
+      yearKeys: new Set(),
+    };
+
+    const datePicker = popover.createDiv({ cls: "db-calendar-mini-popover db-cell-date-picker" });
+    datePicker.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    const renderDatePicker = () => {
+      const [ys, ms] = pickerMonthKey.split("-");
+      const year = Number(ys);
+      const monthIndex = Number(ms) - 1;
+      const weekStartsOn = getLocaleWeekStartsOn();
+      renderMiniCalendar({
+        popover: datePicker,
+        mode: pickerMode,
+        monthKey: pickerMonthKey,
+        monthTitle: this.formatDatePickerMonthTitle(year, monthIndex),
+        visibleYear: year,
+        yearRangeStart: this.getDatePickerYearRangeStart(year),
+        weeks: this.buildDatePickerWeeks(year, monthIndex, weekStartsOn),
+        weekdays: getWeekdayLabels(getEffectiveLocale(), weekStartsOn),
+        todayKey: getLocalDateKey(),
+        selectedKeys: new Set([getDraftDateKey()]),
+        eventIndex: pickerEventIndex,
+        onPrevious: () => {
+          pickerMonthKey = this.shiftDatePickerMonth(pickerMonthKey, pickerMode === "day" ? -1 : pickerMode === "month" ? -12 : -144);
+          renderDatePicker();
+        },
+        onNext: () => {
+          pickerMonthKey = this.shiftDatePickerMonth(pickerMonthKey, pickerMode === "day" ? 1 : pickerMode === "month" ? 12 : 144);
+          renderDatePicker();
+        },
+        onTitleClick: () => {
+          if (pickerMode === "day") pickerMode = "month";
+          else if (pickerMode === "month") pickerMode = "year";
+          renderDatePicker();
+        },
+        onSelectDate: (dateKey) => {
+          setDateInputs(dateKey);
+          pickerMonthKey = dateKey.slice(0, 7);
+          pickerMode = "day";
+          renderDatePicker();
+          (hourInp || dayInp).focus();
+        },
+        onSelectMonth: (monthKey) => {
+          pickerMonthKey = monthKey;
+          pickerMode = "day";
+          renderDatePicker();
+        },
+        onSelectYear: (selectedYear) => {
+          pickerMonthKey = `${String(selectedYear).padStart(4, "0")}-01`;
+          pickerMode = "month";
+          renderDatePicker();
+        },
+        onSelectToday: (dateKey) => {
+          pickerMonthKey = dateKey.slice(0, 7);
+          pickerMode = "day";
+          setDateInputs(dateKey);
+          setCurrentTimeInputs();
+          renderDatePicker();
+          (hourInp || dayInp).focus();
+        },
+      });
+    };
+
     yearInp.value = initYear;
     yearInp.onkeydown = (e) => handleSegmentKey(e, yearInp, undefined);
     yearInp.oninput = () => {
       yearInp.value = yearInp.value.replace(/\D/g, "");
       if (yearInp.value.length === 4) { monthInp.focus(); monthInp.select(); }
     };
-    yearInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+    yearInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
 
     monthInp.value = initMonth;
     monthInp.onkeydown = (e) => handleSegmentKey(e, monthInp, yearInp);
@@ -1230,7 +1354,7 @@ export class CellRenderer {
         dayInp.select();
       }
     };
-    monthInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+    monthInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
 
     dayInp.value = initDay;
     dayInp.onkeydown = (e) => handleSegmentKey(e, dayInp, monthInp);
@@ -1254,7 +1378,7 @@ export class CellRenderer {
         }
       }
     };
-    dayInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+    dayInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
 
     if (hourInp && minuteInp) {
       hourInp.value = initHour;
@@ -1271,7 +1395,7 @@ export class CellRenderer {
           minuteInp.select();
         }
       };
-      hourInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+      hourInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
 
       minuteInp.value = initMinute;
       minuteInp.onkeydown = (e) => handleSegmentKey(e, minuteInp, hourInp);
@@ -1285,8 +1409,10 @@ export class CellRenderer {
           void commit();
         }
       };
-      minuteInp.onblur = (e) => { if (!committed && !isMovingToSegment(e)) void commit(); };
+      minuteInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
     }
+
+    renderDatePicker();
 
     if (closeBtn) {
       closeBtn.onmousedown = (event) => event.preventDefault();
@@ -1310,6 +1436,54 @@ export class CellRenderer {
       window.activeDocument.addEventListener("mousedown", onOutside, true);
       window.activeDocument.addEventListener("keydown", onDocumentKeydown, true);
     }, 0);
+  }
+
+  private buildDatePickerWeeks(year: number, monthIndex: number, weekStartsOn: number): CalendarDayModel[][] {
+    const msPerWeek = 7 * 86400000;
+    const firstOfMonth = makeUtcDate(year, monthIndex, 1);
+    const lastOfMonth = makeUtcDate(year, monthIndex + 1, 0);
+    const offset = (firstOfMonth.getUTCDay() - weekStartsOn + 7) % 7;
+    const firstVisible = addUtcDays(firstOfMonth, -offset);
+    const endOffset = (weekStartsOn + 6 - lastOfMonth.getUTCDay() + 7) % 7;
+    const lastVisible = addUtcDays(lastOfMonth, endOffset);
+    const weekCount = Math.max(1, Math.ceil((lastVisible.getTime() - firstVisible.getTime() + 1) / msPerWeek));
+    const weeks: CalendarDayModel[][] = [];
+    for (let week = 0; week < weekCount; week++) {
+      const days: CalendarDayModel[] = [];
+      for (let day = 0; day < 7; day++) {
+        const date = addUtcDays(firstVisible, week * 7 + day);
+        days.push({
+          dateKey: dateKeyFromUtc(date),
+          inCurrentMonth: date.getUTCFullYear() === year && date.getUTCMonth() === monthIndex,
+          events: [],
+        });
+      }
+      weeks.push(days);
+    }
+    return weeks;
+  }
+
+  private shiftDatePickerMonth(monthKey: string, deltaMonths: number): string {
+    const [ys, ms] = monthKey.split("-");
+    const year = Number(ys);
+    const monthIndex = Number(ms) - 1;
+    const shifted = makeUtcDate(
+      Number.isFinite(year) ? year : new Date().getFullYear(),
+      Number.isFinite(monthIndex) ? monthIndex + deltaMonths : deltaMonths,
+      1,
+    );
+    return dateKeyFromUtc(shifted).slice(0, 7);
+  }
+
+  private getDatePickerYearRangeStart(year: number): number {
+    const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
+    return Math.floor(safeYear / 12) * 12;
+  }
+
+  private formatDatePickerMonthTitle(year: number, monthIndex: number): string {
+    const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
+    const safeMonth = Number.isFinite(monthIndex) ? monthIndex : new Date().getMonth();
+    return new Intl.DateTimeFormat(getEffectiveLocale(), { month: "long", year: "numeric" }).format(new Date(safeYear, safeMonth, 1));
   }
 
   private positionDateEditPopover(popover: HTMLElement, td: HTMLElement, container: HTMLElement | null): void {
@@ -1597,8 +1771,9 @@ export class CellRenderer {
     ];
 
     for (const def of buttons) {
-      const btn = bar.createEl("button", { cls: "db-md-toolbar-btn", attr: { type: "button", title: def.title, "aria-label": def.title } });
+      const btn = bar.createEl("button", { cls: "db-md-toolbar-btn", attr: { type: "button" } });
       setIcon(btn, def.icon);
+      setTooltip(btn, def.title, { delay: 100 });
       // mousedown would blur the textarea and lose the selection; prevent it.
       btn.addEventListener("mousedown", (event) => event.preventDefault());
       btn.addEventListener("click", (event) => { event.preventDefault(); def.run(); });
@@ -1868,9 +2043,13 @@ export class CellRenderer {
     return persisted;
   }
 
-  private editFileName(td: HTMLElement, row: RowData, currentName: string): void {
+  editFileName(td: HTMLElement, row: RowData, currentName: string, restoreContent?: () => void): void {
     const restore = () => {
       this.clearTransientClass(td, "db-cell-editing");
+      if (restoreContent) {
+        restoreContent();
+        return;
+      }
       td.textContent = "";
       const displayInfo = this.getFileTitleInfo(row);
       const link = td.createEl("a", {
@@ -1884,9 +2063,22 @@ export class CellRenderer {
       });
     };
 
-    this.editSingleLinePopover(td, currentName, "text", async (value) => {
-      const newName = value.trim();
-      if (!newName || newName === currentName) {
+    // 原地编辑框（复用数据库标题重命名样式 db-heading-edit），不走 popover。
+    const input = window.activeDocument.createElement("input");
+    input.className = "db-heading-edit";
+    input.type = "text";
+    input.value = currentName;
+    td.empty();
+    td.addClass("db-cell-editing");
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (commit: boolean): Promise<void> => {
+      if (done) return;
+      done = true;
+      const newName = input.value.trim();
+      if (!commit || !newName || newName === currentName) {
         restore();
         return;
       }
@@ -1904,7 +2096,18 @@ export class CellRenderer {
         new Notice(t("errors.renameFailed", { error: String(err) }));
         restore();
       }
-    }, restore);
+    };
+    input.onblur = () => { void finish(true); };
+    input.onkeydown = (event) => {
+      if (isImeComposing(event)) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void finish(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        void finish(true);
+      }
+    };
   }
 
   private formatNumber(value: number): string {

@@ -18,11 +18,11 @@ export interface AddDatabaseModalResult {
   defaultStatusPresetId?: string;
 }
 
-/** Apply the modal's collected globals onto a freshly built DatabaseConfig. Shared by
- *  the file-database creation flow (DatabaseView.addDatabase, which also scans for
- *  inferred columns) and the settings-panel creation flow (settings.createEmptyDatabase,
- *  which builds a bare config). Does NOT set `name` — uniqueness is the caller's job
- *  (getUniqueDatabaseName), so the caller sets `db.name` itself. */
+/** Apply the modal's collected globals onto a freshly built DatabaseConfig. Called by
+ *  `buildDatabaseWithInferredColumns` (the shared scan→infer→confirm orchestrator used by
+ *  both creation entry points: DatabaseView.addDatabase and the settings panel). Does NOT
+ *  set `name` — uniqueness is the caller's job (getUniqueDatabaseName), so the caller
+ *  passes the unique name into `buildDatabaseWithInferredColumns`. */
 export function applyAddDatabaseResult(db: DatabaseConfig, result: AddDatabaseModalResult): void {
   db.description = result.description || undefined;
   db.sourceFolder = result.sourceFolder;

@@ -1,4 +1,4 @@
-import { App, Modal, Notice, setIcon } from "obsidian";
+import { App, Modal, Notice, setIcon, setTooltip } from "obsidian";
 import {
   cloneStatusPreset,
   getBuiltinStatusPresets,
@@ -108,15 +108,16 @@ export class StatusPresetManagerModal extends Modal {
         this.renderList(); // 刷新所有行的星标状态
         this.onOpen();
       };
-      const editButton = controls.createEl("button", { cls: "edit-btn", attr: { title: t("common.edit"), "aria-label": t("common.edit") } });
+      const editButton = controls.createEl("button", { cls: "edit-btn" });
       setIcon(editButton, "edit");
+      setTooltip(editButton, t("common.edit"), { delay: 100 });
       editButton.onclick = () => this.openOptionEditor(preset);
       this.contentEl.addClass("note-database-modal");
       const deleteBtn = controls.createEl("button", {
         cls: "delete-btn",
-        attr: { title: t("common.delete"), "aria-label": t("common.delete") },
       });
       setIcon(deleteBtn, "trash");
+      setTooltip(deleteBtn, t("common.delete"), { delay: 100 });
       deleteBtn.onclick = () => {
         if (this.presets.length <= 1) {
           new Notice(t("statusPresets.keepOne"));

@@ -1,4 +1,4 @@
-import { App, Menu, setIcon } from "obsidian";
+import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
@@ -12,15 +12,15 @@ import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { isHTMLElement } from "./DomGuards";
-import { safeString } from "../data/SafeString";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
-import { renderInlineMarkdown, valueToTooltip } from "./InlineMarkdownRenderer";
+import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
+import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -77,7 +77,7 @@ export class ListRenderer {
     this.clear(container);
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
     this.renderTotalHeader(container, rows);
-    const list = container.createDiv({ cls: "db-list" });
+    const list = this.createList(container, config);
     for (const row of rows) this.renderRow(list, config, row, undefined, undefined, undefined, rows);
     this.renderNewRow(list, undefined, rows);
   }
@@ -107,7 +107,7 @@ export class ListRenderer {
       label.createSpan({ cls: "db-list-group-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
       label.createSpan({ cls: "db-list-group-count", text: String(group.count) });
       if (collapsed) continue;
-      const list = section.createDiv({ cls: "db-list" });
+      const list = this.createList(section, config);
       this.setupGroupDropTarget(list, groupField, group.key);
       const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
       for (const row of group.rows.slice(0, visibleCount)) this.renderRow(list, config, row, groupField, group.key, groups, group.rows);
@@ -133,6 +133,12 @@ export class ListRenderer {
     checkbox.onchange = () => this.actions.toggleRowsSelected(rows, checkbox.checked);
   }
 
+  private createList(parent: HTMLElement, config: ViewConfig): HTMLElement {
+    const list = parent.createDiv({ cls: "db-list" });
+    if (config.listCompactFields === true) list.addClass("is-compact-fields");
+    return list;
+  }
+
   private renderRow(list: HTMLElement, config: ViewConfig, row: RowData, groupField?: string, groupKey?: string, groups?: ListGroup[], allRows?: RowData[]): void {
     const item = list.createDiv({
       cls: "db-list-row",
@@ -154,9 +160,9 @@ export class ListRenderer {
     }
     const openBtn = controls.createEl("button", {
       cls: "db-list-row-open",
-      attr: { title: t("menu.openNote"), "aria-label": t("menu.openNote") },
     });
     setIcon(openBtn, "maximize-2");
+    setTooltip(openBtn, t("menu.openNote"), { delay: 100 });
     openBtn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -168,24 +174,27 @@ export class ListRenderer {
 
     const columns = this.actions.getColumns(config);
     const main = item.createDiv({ cls: "db-list-row-main" });
-    const titleField = this.getTitleField(config, columns);
+    const titleField = this.getTitleField(config);
     const titleCol = titleField ? config.schema.columns.find((col) => col.key === titleField) : undefined;
-    const titleText = titleField ? this.getTitleText(config, row, titleField) : "";
-    if (titleCol && titleText) {
+    const titleDisplay = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
+    if (titleDisplay && !titleDisplay.isHidden) {
       const title = main.createDiv({
         cls: "db-list-row-title",
-        attr: { title: titleCol.key === "file.name" ? row.file.path : titleText },
+        attr: { title: titleDisplay.isFileTitle ? row.file.path : titleDisplay.isEmpty ? "" : titleDisplay.text },
       });
-      if (titleCol.key === "file.name") {
+      if (titleDisplay.isFileTitle) {
         renderStackedFileTitle(title, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
       } else {
-        title.textContent = titleText;
+        title.textContent = titleDisplay.text;
+        if (titleDisplay.isEmpty) title.addClass("is-empty-title");
       }
-      title.onclick = (event) => {
-        if (this.actions.isReadOnly) return;
-        event.stopPropagation();
-        this.actions.editCell(title, row, titleCol, event);
-      };
+      if (titleCol) {
+        title.onclick = (event) => {
+          if (this.actions.isReadOnly) return;
+          event.stopPropagation();
+          this.actions.editCell(title, row, titleCol, event);
+        };
+      }
     }
 
     const meta = main.createDiv({ cls: "db-list-row-meta" });
@@ -416,18 +425,9 @@ export class ListRenderer {
     return row.frontmatter[col.key];
   }
 
-  private getTitleField(config: ViewConfig, visibleColumns: ColumnDef[]): string | undefined {
+  private getTitleField(config: ViewConfig): string | undefined {
     if (config.titleField === NO_TITLE_FIELD) return undefined;
-    if (config.titleField) return config.titleField;
-    return visibleColumns.some((col) => col.key === "file.name") ? "file.name" : undefined;
-  }
-
-  private getTitleText(config: ViewConfig, row: RowData, field: string): string {
-    const col = config.schema.columns.find((candidate) => candidate.key === field);
-    if (!col) return "";
-    const value = this.getCellValue(row, col);
-    if (value == null) return "";
-    return Array.isArray(value) ? value.join(", ") : safeString(value);
+    return config.titleField || "file.name";
   }
 
   private renderValue(field: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
@@ -497,11 +497,13 @@ export class ListRenderer {
         const onOpenLink = (target: string, external: boolean): void => {
           void this.openTarget(row, target, external);
         };
+        const onResolveImage = (target: string, external: boolean): string | null =>
+          resolveInlineImageSrc(this.app, row, target, external);
         parsed.forEach((nodes, idx) => {
           if (idx > 0) valueEl.appendText(", ");
           if (nodes) {
-            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink });
-            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink });
+            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink, onResolveImage });
+            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink, onResolveImage });
           } else {
             valueEl.appendText(String(mdValues[idx]));
           }

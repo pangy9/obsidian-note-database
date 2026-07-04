@@ -1,4 +1,4 @@
-import { Menu, setIcon } from "obsidian";
+import { Menu, setIcon, setTooltip } from "obsidian";
 import { formatCalendarTime, getCalendarSlotDuration } from "../data/CalendarLayoutModel";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { CalendarTitleParts, buildTimelineAxisBands, formatCalendarTitleParts } from "../data/CalendarTitleFormatter";
@@ -17,6 +17,7 @@ import {
   snapMinutes,
 } from "../data/CalendarDateTime";
 import { CalendarEventCreateOptions, CalendarEventDateChange, resolveAllDayResizeChange, resolveDayMoveChange, resolveDayRangeResize, resolveTimedDragRange } from "../data/CalendarInteractionModel";
+import { CalendarTimelineSearchVisibleRange, timelineHourRange } from "../data/CalendarTimelineSearchResults";
 import { formatDateRangeDisplay, formatDateValueDisplay, parseDateTimeParts } from "../data/DateTimeFormat";
 import { RowData, TimelineScale, ViewConfig } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
@@ -111,6 +112,7 @@ export function getTimelineTodayPositionStyle(
 
 export interface CalendarTimelineRendererActions {
   openRow(row: RowData): void;
+  openRecordDetail?(anchorEl: HTMLElement, row: RowData): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
   createEntryForDate?(config: ViewConfig, dateKey: string, options?: CalendarTimelineCreateOptions): void;
   updateEventDates?(
@@ -172,6 +174,7 @@ export class CalendarTimelineRenderer {
   private timelineResizeObserver: ResizeObserver | null = null;
   private timelineObservedUnitCount: number | undefined;
   private timelineObservedUnitSpan: number | undefined;
+  private currentVisibleRange: CalendarTimelineSearchVisibleRange | null = null;
   private flashRafHandle: number | null = null;
   private flashTimeoutHandle: number | null = null;
   /** 进行中拖拽的清理函数：移除 capture 监听并复位 resize 标志；视图卸载时调用以避免泄漏/锁死。 */
@@ -180,6 +183,10 @@ export class CalendarTimelineRenderer {
   private timelineInvalidWarningCount: number | null = null;
 
   constructor(private actions: CalendarTimelineRendererActions) {}
+
+  getCurrentVisibleRange(): CalendarTimelineSearchVisibleRange | null {
+    return this.currentVisibleRange;
+  }
 
   /** 视图卸载/重渲染前的完整清理：断开 ResizeObserver、关闭 mini-calendar/scale menu、
    * 取消挂起的 flash RAF/定时器、中断进行中的拖拽并移除其 capture 监听器。
@@ -213,6 +220,7 @@ export class CalendarTimelineRenderer {
     if (this.timelineRoot?.isConnected && this.timelineRoot.parentElement === container) this.timelineRoot.remove();
     this.timelineRoot = null;
     this.timelineFlashWindow = null;
+    this.currentVisibleRange = null;
     this.currentRows = rows;
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
     const startField = config.timelineStartDateField || config.calendarStartDateField || getDefaultEventDateField(config);
@@ -230,6 +238,7 @@ export class CalendarTimelineRenderer {
       visibleUnitCount,
       visibleUnitSpan,
     });
+    this.currentVisibleRange = this.getModelVisibleRange(model);
     if ((model.eventCount === 0 && model.lanes.length === 0) || !model.startDateKey || !model.endDateKey) {
       this.renderEmpty(container, "timeline.noEvents");
       return;
@@ -401,9 +410,16 @@ export class CalendarTimelineRenderer {
     this.applyTimelineAbsolutePosition(button, range.renderStart, range.renderEnd, range.visible.startMinutes, model.unit);
     this.applyCalendarEventColor(button, event.color);
     const content = button.createSpan({ cls: "db-timeline-event-content" });
-    content.createSpan({ cls: "db-timeline-event-title", text: event.title });
+    content.createSpan({ cls: `db-timeline-event-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
     content.createSpan({ cls: "db-timeline-event-meta", text: dateText });
-    button.onclick = () => this.actions.openRow(event.row);
+    button.onclick = (mouseEvent: MouseEvent) => {
+      if ((mouseEvent.target as HTMLElement | null)?.closest(".db-timeline-resize-handle")) return;
+      if (this.actions.openRecordDetail) {
+        this.actions.openRecordDetail(button, event.row);
+      } else {
+        this.actions.openRow(event.row);
+      }
+    };
     button.oncontextmenu = (mouseEvent) => this.actions.showRowMenu?.(mouseEvent, event.row);
     // 拖拽入口按列类型分流（全 scale 通用）：datetime 列在日视图走 timed move（改时间），
     // date 列（任意 scale）走 date move（按天整体平移）。date 列不再进 timed 路径，避免无 time
@@ -454,13 +470,12 @@ export class CalendarTimelineRenderer {
       cls: `db-timeline-window-jump is-${direction}${isOverEvent ? " is-over-event" : ""}`,
       attr: {
         type: "button",
-        title: t("timeline.jumpToEvent", { title: event.title, date: dateKey }),
-        "aria-label": t("timeline.jumpToEvent", { title: event.title, date: dateKey }),
         "data-note-database-row-path": event.row.file.path,
       },
     });
     button.style.setProperty("--db-timeline-row", String(rowIndex));
     setIcon(button, direction === "before" ? "arrow-left" : "arrow-right");
+    setTooltip(button, t("timeline.jumpToEvent", { title: event.title, date: dateKey }), { delay: 100 });
     button.onclick = (mouseEvent) => {
       mouseEvent.preventDefault();
       mouseEvent.stopPropagation();
@@ -635,6 +650,14 @@ export class CalendarTimelineRenderer {
     this.renderTimelineInvalidWarning(controls, config);
   }
 
+  private getModelVisibleRange(model: { startDateKey?: string; endDateKey?: string; unit: TimelineUnit; totalUnits: number; startMinutes?: number }): CalendarTimelineSearchVisibleRange | null {
+    if (!model.startDateKey || !model.endDateKey) return null;
+    if (model.unit === "hour") {
+      return timelineHourRange(model.startDateKey, model.startMinutes ?? 0, model.totalUnits);
+    }
+    return { startDateKey: model.startDateKey, endDateKey: model.endDateKey };
+  }
+
   private renderTimelineScaleControl(parent: HTMLElement, config: ViewConfig, currentScale: TimelineScale): void {
     const options: Array<{ value: TimelineScale; text: string }> = [
       { value: "day", text: t("timeline.scaleDay") },
@@ -712,13 +735,14 @@ export class CalendarTimelineRenderer {
   private renderTimelineNavButton(parent: HTMLElement, labelKey: string, onClick: () => void, icon?: string): void {
     const button = parent.createEl("button", {
       cls: `db-timeline-nav-button${icon ? " is-icon" : " is-text"}`,
-      attr: { type: "button", title: t(labelKey), "aria-label": t(labelKey) },
+      attr: { type: "button" },
     });
     if (icon) {
       setIcon(button.createSpan({ cls: "db-timeline-nav-icon" }), icon);
     } else {
       button.setText(t(labelKey));
     }
+    setTooltip(button, t(labelKey), { delay: 100 });
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -729,9 +753,10 @@ export class CalendarTimelineRenderer {
   private renderTimelineMiniCalendarButton(controls: HTMLElement, header: HTMLElement, config: ViewConfig): void {
     const button = controls.createEl("button", {
       cls: "db-timeline-nav-button is-icon",
-      attr: { type: "button", title: t("calendar.datePicker"), "aria-label": t("calendar.datePicker") },
+      attr: { type: "button" },
     });
     setIcon(button.createSpan({ cls: "db-timeline-nav-icon" }), "calendar-days");
+    setTooltip(button, t("calendar.datePicker"), { delay: 100 });
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -833,7 +858,7 @@ export class CalendarTimelineRenderer {
         ...config,
         calendarStartDateField: startField,
         calendarEndDateField: config.timelineEndDateField || config.calendarEndDateField,
-        calendarTitleField: config.timelineTitleField || config.calendarTitleField,
+        calendarTitleField: config.timelineTitleField,
         calendarColorField: config.timelineColorField || config.calendarColorField,
       },
       { year, monthIndex },
@@ -1019,8 +1044,8 @@ export class CalendarTimelineRenderer {
   private renderTimelineTitle(parent: HTMLElement, parts: CalendarTitleParts): void {
     const title = parent.createDiv({
       cls: "db-timeline-title",
-      attr: { title: parts.ariaLabel, "aria-label": parts.ariaLabel },
     });
+    setTooltip(title, parts.ariaLabel, { delay: 100 });
     title.createSpan({ cls: "db-timeline-title-main", text: parts.main });
     if (parts.year) title.createSpan({ cls: "db-timeline-title-year", text: parts.year });
   }
@@ -1688,8 +1713,9 @@ export class CalendarTimelineRenderer {
     const menuButton = button.createEl("button", {
       cls: "db-timeline-mobile-menu-button",
       text: "...",
-      attr: { type: "button", title: t("mobile.moveCard"), "aria-label": t("mobile.moveCard") },
+      attr: { type: "button" },
     });
+    setTooltip(menuButton, t("mobile.moveCard"), { delay: 100 });
     menuButton.onclick = (mouseEvent) => {
       mouseEvent.preventDefault();
       mouseEvent.stopPropagation();

@@ -12,14 +12,18 @@
  *    the click and opens immediately (card strategy).
  */
 
-import { finishRenderMath, renderMath } from "obsidian";
+import { App, finishRenderMath, renderMath, TFile } from "obsidian";
 import type { InlineMarkdownNode } from "../data/InlineMarkdown";
+import type { RowData } from "../data/types";
 
 export type LinkClickStrategy = "table" | "card";
 
 export interface RenderInlineMarkdownOptions {
   /** Open a parsed link target. external=true → URL; otherwise internal note. */
   onOpenLink: (target: string, external: boolean) => void;
+  /** Resolve an internal image target to a displayable src (e.g. vault resource path).
+   *  External targets are used as-is; if omitted, the raw target is used as src. */
+  onResolveImage?: (target: string, external: boolean) => string | null;
   /** CSS class prefix for markup elements. Default "db-text". */
   baseClass?: string;
   /** How anchor clicks coexist with the host interaction. Default "card". */
@@ -103,6 +107,17 @@ function appendNode(
       for (const child of node.children) appendNode(el, child, options, baseClass, strategy);
       break;
     }
+    case "image": {
+      const src = node.external
+        ? node.target
+        : (options.onResolveImage?.(node.target, node.external) ?? node.target);
+      const img = parent.createEl("img", {
+        cls: `${baseClass}-md-image`,
+        attr: { src, alt: node.alt, title: node.alt },
+      });
+      attachAnchorClick(img, () => options.onOpenLink(node.target, node.external), strategy);
+      break;
+    }
     case "link": {
       const anchor = parent.createEl("a", {
         cls: `${baseClass}-md-link ${node.external ? "external-link" : "internal-link"}`,
@@ -146,6 +161,15 @@ function attachAnchorClick(anchor: HTMLElement, open: () => void, strategy: Link
       open();
     }
   });
+}
+
+/** Resolve an inline image target to a displayable src.
+ *  External targets are returned as-is; internal targets resolve via the vault
+ *  (metadataCache.getFirstLinkpathDest + getResourcePath). Returns null if unresolved. */
+export function resolveInlineImageSrc(app: App, row: RowData, target: string, external: boolean): string | null {
+  if (external) return target;
+  const file = app.metadataCache.getFirstLinkpathDest(target, row.file.path);
+  return file instanceof TFile ? app.vault.getResourcePath(file) : null;
 }
 
 /** Render a raw cell value (string or string[]) as a tooltip string, preserving

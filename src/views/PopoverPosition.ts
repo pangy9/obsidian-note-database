@@ -6,6 +6,7 @@ export interface ToolbarPopoverPositionOptions {
   maxWidth?: number;
   margin?: number;
   gap?: number;
+  align?: "left" | "center" | "right";
 }
 
 export function positionToolbarPopover(
@@ -56,6 +57,12 @@ export function positionToolbarPopover(
 
     const panelRect = panel.getBoundingClientRect();
     const measuredWidth = Math.min(panelRect.width || width, maxWidth);
+    const alignEdge = options.align ?? "right";
+    const anchorLeft = alignEdge === "left"
+      ? anchorRect.left
+      : alignEdge === "center"
+        ? anchorRect.left + anchorRect.width / 2 - measuredWidth / 2
+        : anchorRect.right - measuredWidth;
     const naturalHeight = Math.max(panel.scrollHeight, panelRect.height || 0);
     const belowSpace = Math.max(0, bounds.bottom - anchorRect.bottom - gap - margin);
     const aboveSpace = Math.max(0, anchorRect.top - bounds.top - gap - margin);
@@ -66,7 +73,7 @@ export function positionToolbarPopover(
       const fallbackHeight = Math.max(0, bounds.height - margin * 2);
       setPosition(
         panel,
-        clamp(anchorRect.right - measuredWidth, bounds.left + margin, bounds.right - measuredWidth - margin),
+        clamp(anchorLeft, bounds.left + margin, bounds.right - measuredWidth - margin),
         bounds.top + margin,
         containerRect,
         scrollLeft,
@@ -82,7 +89,7 @@ export function positionToolbarPopover(
       : anchorRect.bottom + gap;
     setPosition(
       panel,
-      clamp(anchorRect.right - measuredWidth, bounds.left + margin, bounds.right - measuredWidth - margin),
+      clamp(anchorLeft, bounds.left + margin, bounds.right - measuredWidth - margin),
       clamp(top, bounds.top + margin, bounds.bottom - renderedHeight - margin),
       containerRect,
       scrollLeft,

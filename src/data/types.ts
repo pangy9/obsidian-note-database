@@ -327,6 +327,8 @@ export interface ViewConfig {
   galleryImageFit?: "cover" | "contain";
   /** Render currently visible properties on cards/lists even when the value is empty. */
   showEmptyFields?: boolean;
+  /** List view only: shrink non-wrapped fields to content width while capping them at their configured column width. */
+  listCompactFields?: boolean;
   /** Persisted advanced filter logic. */
   filterLogic?: "and" | "or";
   /** Persisted advanced filters. */
@@ -409,7 +411,7 @@ export interface ViewConfig {
   calendarMonth?: string;
   /** Optional end date field used to span multi-day calendar events. */
   calendarEndDateField?: string;
-  /** Optional title field used for calendar events. Falls back to titleField or file name. */
+  /** Optional title field used for calendar events. Undefined means file name. */
   calendarTitleField?: string;
   /** Optional status/select/multi-select field used to color calendar event cards. */
   calendarColorField?: string;
@@ -453,7 +455,7 @@ export interface ViewConfig {
   timelineEndDateField?: string;
   /** Optional grouping field used to split timeline lanes. */
   timelineGroupField?: string;
-  /** Optional title field used for timeline events. Falls back to titleField or file name. */
+  /** Optional title field used for timeline events. Undefined means file name. */
   timelineTitleField?: string;
   /** Optional status/select/multi-select field used to color timeline event bars. */
   timelineColorField?: string;

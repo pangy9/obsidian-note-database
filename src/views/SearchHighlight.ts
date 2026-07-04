@@ -90,6 +90,32 @@ export function highlightSearchMatches(root: HTMLElement, query: string): void {
   }
 }
 
+export function renderSearchHighlightedText(parent: HTMLElement, text: string, query: string): void {
+  const terms = getSearchHighlightTerms(query).map((term) => term.toLowerCase());
+  if (terms.length === 0) {
+    parent.textContent = text;
+    return;
+  }
+  const lower = text.toLowerCase();
+  let lastEnd = 0;
+  let match = findNextSearchHighlightMatch(lower, terms, lastEnd);
+  if (!match) {
+    parent.textContent = text;
+    return;
+  }
+  const doc = parent.ownerDocument || window.activeDocument;
+  while (match) {
+    if (match.index > lastEnd) parent.appendChild(doc.createTextNode(text.slice(lastEnd, match.index)));
+    const mark = doc.createElement("mark");
+    mark.className = "db-search-highlight";
+    mark.textContent = text.slice(match.index, match.index + match.length);
+    parent.appendChild(mark);
+    lastEnd = match.index + match.length;
+    match = findNextSearchHighlightMatch(lower, terms, lastEnd);
+  }
+  if (lastEnd < text.length) parent.appendChild(doc.createTextNode(text.slice(lastEnd)));
+}
+
 function findNextSearchHighlightMatch(
   lowerText: string,
   lowerTerms: string[],

@@ -3,6 +3,19 @@ import { toValidObsidianTagValues } from "./ColumnTypes";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef, RowData } from "./types";
 
+/** File properties presented as quick-add options in the column manager. */
+export const QUICK_ADD_FILE_FIELDS: Array<{ key: string }> = [
+  { key: "file.name" },
+  { key: "file.ctime" },
+  { key: "file.mtime" },
+  { key: "file.tags" },
+  { key: "file.size" },
+  { key: "file.folder" },
+  { key: "file.ext" },
+  { key: "file.basename" },
+  { key: "aliases" },
+];
+
 export const BASE_FILE_FIELD_KEYS = new Set([
   "file.file",
   "file.name",

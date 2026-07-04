@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildCalendarMonthWeekLayouts, buildCalendarTimedEventLayouts, buildCalendarWeekAllDayLayout } from "../data/CalendarLayoutModel";
-import { buildCalendarMonthModel, buildTimelineModel, buildTimelineTicks, extractTimelineEndpointMinutes, getCalendarAnchorMonth, getDefaultEventDateField, getTimelineAnchor, getTimelineColumnWidthSpec, getTimelineDayNonDateTimeColumns, getTimelineNavigationShiftUnits, getTimelineShortNavigationShiftUnits, getTimelineTitleWindow, getTimelineViewportContentWidth, getTimelineViewportStartAnchor, getTimelineViewportWindow, getTimelineWindow, normalizeTimelineDayScale, resolveTimelineUnitWidth, resolveTimelineJumpAnchor, resolveTimelineViewportUnitCount, resolveTimelineViewportUnitSpan, shiftCalendarMonth, shiftTimelineAnchor } from "../data/CalendarTimelineModel";
+import { buildCalendarMonthModel, buildCalendarTimelineEvents, buildTimelineModel, buildTimelineTicks, extractTimelineEndpointMinutes, getCalendarAnchorMonth, getDefaultEventDateField, getTimelineAnchor, getTimelineColumnWidthSpec, getTimelineDayNonDateTimeColumns, getTimelineNavigationShiftUnits, getTimelineShortNavigationShiftUnits, getTimelineTitleWindow, getTimelineViewportContentWidth, getTimelineViewportStartAnchor, getTimelineViewportWindow, getTimelineWindow, normalizeTimelineDayScale, resolveTimelineUnitWidth, resolveTimelineJumpAnchor, resolveTimelineViewportUnitCount, resolveTimelineViewportUnitSpan, shiftCalendarMonth, shiftTimelineAnchor } from "../data/CalendarTimelineModel";
+import { EMPTY_TITLE_PLACEHOLDER } from "../data/TitleFieldDisplay";
 import { ColumnDef, RowData, ViewConfig } from "../data/types";
 
 function col(key: string, label: string, type: ColumnDef["type"], statusOptions?: ColumnDef["statusOptions"]): ColumnDef {
@@ -13,6 +14,7 @@ function config(overrides: Partial<ViewConfig> = {}): ViewConfig {
     col("file.name", "Name", "text"),
     col("start", "Start", "date"),
     col("end", "End", "date"),
+    col("title", "Title", "text"),
     col("status", "Status", "status", [
       { value: "Active", color: "green" },
       { value: "Done", color: "blue" },
@@ -67,6 +69,48 @@ describe("CalendarTimelineModel", () => {
         computedFields: [{ key: "followup", label: "Follow-up", expression: "", type: "date" }],
       },
     }))).toBe("formula.followup");
+  });
+
+  it("builds shared calendar/timeline events with invalid range metadata", () => {
+    const events = buildCalendarTimelineEvents([
+      row("Projects/backwards.md", { start: "2026-06-20", end: "2026-06-18" }),
+      row("Projects/valid.md", { start: "2026-07-01", end: "2026-07-02" }),
+    ], config(), {
+      startField: "start",
+      endField: "end",
+      titleField: undefined,
+      colorField: undefined,
+    });
+
+    expect(events.map((event) => [event.filePath, event.startDateKey, event.endDateKey, event.isInvalid])).toEqual([
+      ["Projects/backwards.md", "2026-06-20", "2026-06-20", true],
+      ["Projects/valid.md", "2026-07-01", "2026-07-02", undefined],
+    ]);
+  });
+
+  it("keeps explicit empty event titles distinct from file-name titles", () => {
+    const [emptyTitle] = buildCalendarTimelineEvents([
+      row("Projects/empty-title.md", { start: "2026-06-20", title: "" }),
+    ], config(), {
+      startField: "start",
+      endField: undefined,
+      titleField: "title",
+      colorField: undefined,
+    });
+
+    expect(emptyTitle.title).toBe(EMPTY_TITLE_PLACEHOLDER);
+    expect(emptyTitle.titleIsEmpty).toBe(true);
+
+    const [fileTitle] = buildCalendarTimelineEvents([
+      row("Projects/file-title.md", { start: "2026-06-21", title: "" }),
+    ], config(), {
+      startField: "start",
+      endField: undefined,
+      titleField: undefined,
+      colorField: undefined,
+    });
+    expect(fileTitle.title).toBe("file-title");
+    expect(fileTitle.titleIsEmpty).toBeUndefined();
   });
 
   it("identifies non-datetime start/end fields that block timeline day scale", () => {

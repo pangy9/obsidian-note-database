@@ -51,8 +51,8 @@ describe("drag preview targets", () => {
     const tableHandle = cssRule(styles, ".note-database-container .db-table .db-table-row-drag-handle");
 
     expect(tableHandle).toContain("appearance: none");
-    expect(tableHandle).toContain("width: 18px");
-    expect(tableHandle).toContain("min-width: 18px");
+    expect(tableHandle).toContain("width: 16px");
+    expect(tableHandle).toContain("min-width: 16px");
     expect(tableHandle).toContain("min-height: 0");
     expect(tableHandle).toContain("border: 0");
     expect(tableHandle).toContain("border-radius: 0");
@@ -84,7 +84,7 @@ describe("drag preview targets", () => {
     expect(mobileMoveButton).toContain("flex: 0 0 24px");
     expect(mobileMoveButton).toContain("margin: 0");
     expect(headerReserve).toContain('content: ""');
-    expect(headerReserve).toContain("flex: 0 0 20px");
+    expect(headerReserve).toContain("flex: 0 0 17px");
   });
 
   it("uses shared targeted drop feedback for table, list, and gallery item reordering", () => {

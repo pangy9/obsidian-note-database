@@ -1,26 +1,26 @@
-import { App, Menu, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
-import { isExternalUrl, parseTextLink } from "../data/TextLink";
+import { parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
-import { safeString } from "../data/SafeString";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
-import { renderInlineMarkdown, valueToTooltip } from "./InlineMarkdownRenderer";
+import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { resolveBoardCardDropIntent, resolveBoardColumnByPoint, resolveBoardContainerDropOrder, type BoardDropCandidate } from "../data/BoardContainerDrop";
+import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
 
 const CARD_MIME = "application/x-note-database-card";
 const CARD_FROM_GROUP_MIME = "application/x-note-database-card-from-group";
@@ -74,14 +74,6 @@ export interface BoardRendererActions {
 interface ParsedLink {
   label: string;
   target: string;
-  external: boolean;
-}
-
-interface ParsedImage {
-  alt: string;
-  label: string;
-  target: string;
-  src: string;
   external: boolean;
 }
 
@@ -454,9 +446,9 @@ export class BoardRenderer {
     }
     const openBtn = controls.createEl("button", {
       cls: "db-board-card-open",
-      attr: { "aria-label": t("menu.openNote"), title: t("menu.openNote") },
     });
     setIcon(openBtn, "maximize-2");
+    setTooltip(openBtn, t("menu.openNote"), { delay: 100 });
     openBtn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -466,18 +458,18 @@ export class BoardRenderer {
       this.renderMobileMoveButton(controls, config, groups, group, row, groupField, subgroupField, subgroupKey);
     }
     const columns = this.actions.getColumns(config);
-    const titleField = this.getTitleField(config, columns);
-    const titleCol = titleField ? columns.find((col) => col.key === titleField) : undefined;
-    const title = titleField ? this.getTitleText(config, row, titleField) : "";
-    if (title && titleCol) {
+    const titleField = this.getTitleField(config);
+    const title = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
+    if (title && !title.isHidden) {
       const titleEl = card.createDiv({
         cls: "db-board-card-title",
-        attr: { title: titleCol.key === "file.name" ? row.file.path : title },
+        attr: { title: title.isFileTitle ? row.file.path : title.isEmpty ? "" : title.text },
       });
-      if (titleCol.key === "file.name") {
+      if (title.isFileTitle) {
         renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
       } else {
-        titleEl.textContent = title;
+        titleEl.textContent = title.text;
+        if (title.isEmpty) titleEl.addClass("is-empty-title");
       }
     }
     const meta = card.createDiv({ cls: "db-board-card-meta" });
@@ -626,10 +618,9 @@ export class BoardRenderer {
   }
 
   private getMobileRowLabel(config: ViewConfig, row: RowData): string {
-    const columns = this.actions.getColumns(config);
-    const titleField = this.getTitleField(config, columns);
-    const value = titleField ? this.getTitleText(config, row, titleField) : "";
-    return value || row.file.name.replace(/\.md$/, "");
+    const titleField = this.getTitleField(config);
+    const title = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
+    return title && !title.isHidden ? title.text : row.file.name.replace(/\.md$/, "");
   }
 
   private dropGroup(
@@ -779,18 +770,9 @@ export class BoardRenderer {
     return row.frontmatter[col.key];
   }
 
-  private getTitleField(config: ViewConfig, visibleColumns: ColumnDef[]): string | undefined {
+  private getTitleField(config: ViewConfig): string | undefined {
     if (config.titleField === NO_TITLE_FIELD) return undefined;
-    if (config.titleField) return config.titleField;
-    return visibleColumns.some((col) => col.key === "file.name") ? "file.name" : undefined;
-  }
-
-  private getTitleText(config: ViewConfig, row: RowData, field: string): string {
-    const col = config.schema.columns.find((candidate) => candidate.key === field);
-    if (!col) return "";
-    const value = this.getCellValue(row, col);
-    if (value == null) return "";
-    return Array.isArray(value) ? value.join(", ") : safeString(value);
+    return config.titleField || "file.name";
   }
 
   private renderPreviewValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
@@ -855,16 +837,6 @@ export class BoardRenderer {
     }
 
     const values = Array.isArray(value) ? value : [value];
-    const images = values
-      .map((entry) => this.parseImage(entry, row))
-      .filter((entry): entry is ParsedImage => entry !== null);
-    if (images.length > 0) {
-      item.addClass("is-image-field");
-      const gallery = valueEl.createDiv({ cls: "db-board-card-images" });
-      for (const image of images.slice(0, 3)) this.renderImage(gallery, row, image);
-      if (images.length > 3) gallery.createSpan({ cls: "db-board-card-more", text: `+${images.length - 3}` });
-      return;
-    }
 
     if (col.textRenderMode === "markdown" && !isFileFieldKey(col.key)) {
       const mdValues = Array.isArray(value) ? value : [value];
@@ -874,11 +846,13 @@ export class BoardRenderer {
         const onOpenLink = (target: string, external: boolean): void => {
           void this.openTarget(row, target, external);
         };
+        const onResolveImage = (target: string, external: boolean): string | null =>
+          resolveInlineImageSrc(this.app, row, target, external);
         parsed.forEach((nodes, idx) => {
           if (idx > 0) valueEl.appendText(", ");
           if (nodes) {
-            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink });
-            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink });
+            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink, onResolveImage });
+            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink, onResolveImage });
           } else {
             valueEl.appendText(String(mdValues[idx]));
           }
@@ -953,16 +927,6 @@ export class BoardRenderer {
     else badge.addClass("status-color-gray");
   }
 
-  private renderImage(parent: HTMLElement, row: RowData, image: ParsedImage): void {
-    const button = parent.createEl("button", { cls: "db-board-card-image-button", attr: { title: image.label } });
-    button.onclick = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.openTarget(row, image.target, image.external);
-    };
-    button.createEl("img", { attr: { src: image.src, alt: image.alt } });
-  }
-
   private startColumnResize(event: MouseEvent, board: HTMLElement, config: ViewConfig): void {
     event.preventDefault();
     event.stopPropagation();
@@ -1017,38 +981,12 @@ export class BoardRenderer {
     };
   }
 
-  private parseImage(value: unknown, row: RowData): ParsedImage | null {
-    if (typeof value !== "string") return null;
-    const text = value.trim();
-    let target = text;
-    let alt = text;
-    const mdImg = text.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-    const wikiImg = text.match(/^!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
-    if (mdImg) { target = mdImg[2]; alt = mdImg[1] || mdImg[2]; }
-    else if (wikiImg) { target = wikiImg[1]; alt = wikiImg[2] || wikiImg[1]; }
-    if (!this.isImageTarget(target)) return null;
-    const external = isExternalUrl(target);
-    const src = external ? target : this.resolveImageSrc(target, row);
-    if (!src) return null;
-    return { alt, label: alt, target, src, external };
-  }
-
-  private resolveImageSrc(target: string, row: RowData): string | null {
-    const file = this.app.metadataCache.getFirstLinkpathDest(target, row.file.path);
-    if (file instanceof TFile) return this.app.vault.getResourcePath(file);
-    return isExternalUrl(target) ? target : null;
-  }
-
   private async openTarget(row: RowData, target: string, external: boolean): Promise<void> {
     if (external) {
       window.open(target);
       return;
     }
     await this.app.workspace.openLinkText(target, row.file.path);
-  }
-
-  private isImageTarget(target: string): boolean {
-    return /\.(png|jpe?g|gif|webp|svg|avif|bmp)(?:[?#].*)?$/i.test(target);
   }
 
   // 实时收集看板列/子分组候选 rect 与 zone 映射，供容器兜底 drop 与拖拽列命中（方案 B）共用。

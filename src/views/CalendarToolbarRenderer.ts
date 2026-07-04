@@ -142,7 +142,7 @@ export class CalendarToolbarRenderer {
 		this.renderSelect(data, t("viewConfig.eventTitleField"), this.getAnyFieldOptions(config), config.calendarTitleField || "", (value) => {
 			config.calendarTitleField = value || undefined;
 			actions.onChange(t("undo.calendarTitleFieldConfig"));
-		}, "text-cursor-input");
+		}, "text-cursor-input", true);
 
 		// Calendar scale dropdown (Issue 9: moved from header buttons)
 		this.renderSelect(data, t("viewConfig.calendarScale"), [
@@ -165,6 +165,10 @@ export class CalendarToolbarRenderer {
 			config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
 			actions.onChange(t("undo.yearDisplayModeConfig"));
 		}, "calendar");
+		this.renderSwitch(data, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
+			config.showEmptyFields = value || undefined;
+			actions.onChange(t("undo.showEmptyFieldsConfig"));
+		}, "rows-3");
 	}
 
 	private renderSameDateFieldWarning(parent: HTMLElement, startField: string | undefined, endField: string | undefined): void {
@@ -192,8 +196,8 @@ export class CalendarToolbarRenderer {
 		}
 		row.createSpan({ text: t("timeline.invalidEventsCalculating") });
 		void result
-			.then((count) => renderCount(count))
-			.catch(() => { if (row.isConnected) row.remove(); });
+		.then((count) => renderCount(count))
+		.catch(() => { if (row.isConnected) row.remove(); });
 	}
 
 	// ── Layout section: column width and month row height ──
@@ -377,6 +381,7 @@ export class CalendarToolbarRenderer {
 		value: string,
 		onChange: (value: string) => void,
 		icon: string,
+		searchable = options.length > 8,
 	): void {
 		createDropdownField({
 			parent,
@@ -387,7 +392,7 @@ export class CalendarToolbarRenderer {
 			icon,
 			className: "db-chart-options-dropdown",
 			popoverClassName: "db-calendar-options-dropdown",
-			searchable: options.length > 8,
+			searchable,
 			renderIcon: (iconEl, iconName) => {
 				if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
 			},

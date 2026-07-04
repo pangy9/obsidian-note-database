@@ -6,10 +6,12 @@ export interface ConfirmModalOptions {
   message: string;
   confirmText?: string;
   danger?: boolean;
+  /** Optional secondary action button. When clicked, confirmWithModal returns its `value` string. */
+  secondaryButton?: { text: string; value: string };
 }
 
 class ConfirmModal extends Modal {
-  private resolve?: (confirmed: boolean) => void;
+  private resolve?: (result: boolean | string) => void;
 
   constructor(
     app: App,
@@ -18,7 +20,7 @@ class ConfirmModal extends Modal {
     super(app);
   }
 
-  openAndWait(): Promise<boolean> {
+  openAndWait(): Promise<boolean | string> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       super.open();
@@ -37,6 +39,13 @@ class ConfirmModal extends Modal {
       attr: { type: "button" },
     }).onclick = () => this.finish(false);
 
+    if (this.options.secondaryButton) {
+      actions.createEl("button", {
+        text: this.options.secondaryButton.text,
+        attr: { type: "button" },
+      }).onclick = () => this.finish(this.options.secondaryButton!.value);
+    }
+
     actions.createEl("button", {
       cls: this.options.danger ? "mod-warning" : "mod-cta",
       text: this.options.confirmText || t("common.delete"),
@@ -49,14 +58,14 @@ class ConfirmModal extends Modal {
     this.finish(false);
   }
 
-  private finish(confirmed: boolean): void {
+  private finish(result: boolean | string): void {
     const resolve = this.resolve;
     this.resolve = undefined;
     if (this.modalEl.isShown()) this.close();
-    resolve?.(confirmed);
+    resolve?.(result);
   }
 }
 
-export function confirmWithModal(app: App, options: ConfirmModalOptions): Promise<boolean> {
+export function confirmWithModal(app: App, options: ConfirmModalOptions): Promise<boolean | string> {
   return new ConfirmModal(app, options).openAndWait();
 }

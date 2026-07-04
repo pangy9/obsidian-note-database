@@ -1,7 +1,6 @@
 import { setIcon } from "obsidian";
 import { addDateKeyDays, dateKeyDaysBetween } from "../data/CalendarDateTime";
-import { CalendarDayModel } from "../data/CalendarTimelineModel";
-import { parseDateTimeParts } from "../data/DateTimeFormat";
+import { buildCalendarTimelineEvents, CalendarDayModel, CalendarTimelineEvent } from "../data/CalendarTimelineModel";
 import { RowData, ViewConfig } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
 
@@ -48,13 +47,15 @@ export function buildMiniCalendarEventIndex(options: MiniCalendarEventIndexOptio
     yearKeys: new Set(),
   };
   if (!options.startField) return index;
-  for (const row of options.rows) {
-    const start = parseDateTimeParts(getMiniCalendarFieldValue(row, options.startField, options.config))?.dateKey;
-    if (!start) continue;
-    const endValue = options.endField ? getMiniCalendarFieldValue(row, options.endField, options.config) : undefined;
-    const parsedEnd = options.endField ? parseDateTimeParts(endValue)?.dateKey : undefined;
-    const end = parsedEnd && parsedEnd >= start ? parsedEnd : start;
-    addDateRangeToIndex(index, start, end);
+  const events = buildCalendarTimelineEvents(options.rows, options.config, {
+    startField: options.startField,
+    endField: options.endField,
+    titleField: undefined,
+    colorField: undefined,
+  });
+  for (const event of events) {
+    if (event.isInvalid) continue;
+    addDateRangeToIndex(index, event.startDateKey, getMiniCalendarEventIndexEndDate(event));
   }
   return index;
 }
@@ -206,26 +207,16 @@ function addDateRangeToIndex(index: MiniCalendarEventIndex, start: string, end: 
   if (span != null && span > totalDays) addDateKeyToIndex(index, end);
 }
 
+function getMiniCalendarEventIndexEndDate(event: CalendarTimelineEvent): string {
+  if (event.endIsDateOnly) return event.endDateKey;
+  if (event.endDateKey <= event.startDateKey) return event.endDateKey;
+  return (event.endMinutes ?? 0) <= 0 ? addDateKeyDays(event.endDateKey, -1) : event.endDateKey;
+}
+
 function addDateKeyToIndex(index: MiniCalendarEventIndex, dateKey: string): void {
   index.dateKeys.add(dateKey);
   index.monthKeys.add(dateKey.slice(0, 7));
   index.yearKeys.add(dateKey.slice(0, 4));
-}
-
-function getMiniCalendarFieldValue(row: RowData, field: string, config: ViewConfig): unknown {
-  switch (field) {
-    case "file.ctime":
-    case "file.created":
-      return row.file.stat.ctime;
-    case "file.mtime":
-    case "file.modified":
-      return row.file.stat.mtime;
-    default:
-      break;
-  }
-  const column = config.schema.columns.find((col) => col.key === field);
-  if (column?.type === "computed") return row.computed[column.computedKey || column.key];
-  return row.frontmatter[field];
 }
 
 function getMiniCalendarTitle(options: MiniCalendarOptions): string {

@@ -1,4 +1,4 @@
-import { App, Menu, setIcon, TFile } from "obsidian";
+import { App, Menu, setIcon, setTooltip, TFile } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
@@ -10,17 +10,17 @@ import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
-import { safeString } from "../data/SafeString";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
-import { renderInlineMarkdown, valueToTooltip } from "./InlineMarkdownRenderer";
+import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
+import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -180,9 +180,9 @@ export class GalleryRenderer {
     }
     const openBtn = controls.createEl("button", {
       cls: "db-gallery-card-open",
-      attr: { "aria-label": t("menu.openNote"), title: t("menu.openNote") },
     });
     setIcon(openBtn, "maximize-2");
+    setTooltip(openBtn, t("menu.openNote"), { delay: 100 });
     openBtn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -193,18 +193,18 @@ export class GalleryRenderer {
     }
 
     const columns = this.actions.getColumns(config);
-    const titleField = this.getTitleField(config, columns);
-    const titleCol = titleField ? columns.find((col) => col.key === titleField) : undefined;
-    const title = titleField ? this.getTitleText(config, row, titleField) : "";
-    if (title && titleCol) {
+    const titleField = this.getTitleField(config);
+    const title = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
+    if (title && !title.isHidden) {
       const titleEl = body.createDiv({
         cls: "db-gallery-card-title",
-        attr: { title: titleCol.key === "file.name" ? row.file.path : title },
+        attr: { title: title.isFileTitle ? row.file.path : title.isEmpty ? "" : title.text },
       });
-      if (titleCol.key === "file.name") {
+      if (title.isFileTitle) {
         renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
       } else {
-        titleEl.textContent = title;
+        titleEl.textContent = title.text;
+        if (title.isEmpty) titleEl.addClass("is-empty-title");
       }
     }
     const meta = body.createDiv({ cls: "db-gallery-meta" });
@@ -420,7 +420,8 @@ export class GalleryRenderer {
       setIcon(cover.createSpan({ cls: "db-gallery-cover-placeholder" }), "image");
       return;
     }
-    const button = cover.createEl("button", { cls: "db-gallery-cover-button", attr: { title: image.label } });
+    const button = cover.createEl("button", { cls: "db-gallery-cover-button" });
+    setTooltip(button, image.label, { delay: 100 });
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -464,18 +465,9 @@ export class GalleryRenderer {
     return row.frontmatter[col.key];
   }
 
-  private getTitleField(config: ViewConfig, visibleColumns: ColumnDef[]): string | undefined {
+  private getTitleField(config: ViewConfig): string | undefined {
     if (config.titleField === NO_TITLE_FIELD) return undefined;
-    if (config.titleField) return config.titleField;
-    return visibleColumns.some((col) => col.key === "file.name") ? "file.name" : undefined;
-  }
-
-  private getTitleText(config: ViewConfig, row: RowData, field: string): string {
-    const col = config.schema.columns.find((candidate) => candidate.key === field);
-    if (!col) return "";
-    const value = this.getCellValue(row, col);
-    if (value == null) return "";
-    return Array.isArray(value) ? value.join(", ") : safeString(value);
+    return config.titleField || "file.name";
   }
 
   private renderValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
@@ -547,11 +539,13 @@ export class GalleryRenderer {
         const onOpenLink = (target: string, external: boolean): void => {
           void this.openTarget(row, target, external);
         };
+        const onResolveImage = (target: string, external: boolean): string | null =>
+          resolveInlineImageSrc(this.app, row, target, external);
         parsed.forEach((nodes, idx) => {
           if (idx > 0) valueEl.appendText(", ");
           if (nodes) {
-            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink });
-            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink });
+            if (parsed.length === 1) renderInlineMarkdown(valueEl, nodes, { onOpenLink, onResolveImage });
+            else renderInlineMarkdown(valueEl.createSpan(), nodes, { onOpenLink, onResolveImage });
           } else {
             valueEl.appendText(String(mdValues[idx]));
           }

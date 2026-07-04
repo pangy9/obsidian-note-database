@@ -24,6 +24,24 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Import, export, and Bases conversion**: move data with CSV + Markdown ZIP files or convert Obsidian `.base` files.
 - **Local and private**: vault content, metadata, formulas, and settings stay on your device.
 
+## What's New In 1.2.3
+
+- **Property conflict resolution**: detect incompatible frontmatter storage shapes across database files before a type change is saved.
+
+![Property type conflict resolution modal](assets/screenshots/en-property-type-conflict.png)
+
+- **Calendar and timeline result search**: search now shows matching events, current-range counts, click-to-jump navigation, and jump highlights.
+
+![Calendar and timeline search results popover](assets/screenshots/en-calendar-timeline-search-results.png)
+
+- **Floating event detail panels**: inspect and edit calendar/timeline event properties without leaving the current view.
+
+![Floating event detail panel](assets/screenshots/en-record-detail-panel.png)
+
+- **Table editing polish**: keyboard navigation, option-popover focus handling, copy/clone actions, and CSV/Markdown paste handling are more reliable.
+
+- **Field management polish**: file-property creation shortcuts, an option to clean only note properties when deleting columns, date/time picker mini calendars, and compact list field layout.
+
 ## Views
 
 | Table | Board |
@@ -237,6 +255,16 @@ If Note Database helps you, a star or donation helps support continued developme
 
 ## Changelog
 
+### 1.2.3
+
+- Added global property-type conflict detection for database files, with an in-place resolution dialog for incompatible frontmatter storage shapes.
+- Added floating record detail panels for calendar and timeline events, including editable fields, file-name renaming, markdown/link text rendering, and image thumbnails.
+- Improved calendar and timeline search with a focused result panel that shows total matches, current-range matches, grouped results, jump navigation, and jump highlight feedback.
+- Refined calendar and timeline event layout, drag, resize, mini-calendar markers, invalid-event filtering, and month-row density so cross-day events behave more consistently.
+- Added table keyboard navigation, option-popover focus handling, record copy/clone actions, and more robust CSV/Markdown clipboard paste handling.
+- Standardized title-field behavior across board, gallery, list, calendar, and timeline views: configured-but-empty title fields now show an explicit empty title instead of silently falling back to the file name.
+- Added file-property creation shortcuts in the column manager, an option to clean only note frontmatter when deleting columns, date/time picker mini calendars, and compact field wrapping for list cards.
+
 ### 1.2.2
 
 - Added inline markdown rendering for text properties (bold, italic, highlight, strikethrough, code, links, wikilinks, LaTeX) with a plain / link / markdown render-mode switch per column and a floating format toolbar.
@@ -274,8 +302,5 @@ If Note Database helps you, a star or donation helps support continued developme
 - Added database-file tab controls for always opening database files in new tabs and preventing duplicate database-file tabs.
 - Improved embedded views, shared dropdowns, source rules, drag feedback, option editing, and release-readiness UI polish.
 
-### 1.0.9
-
-- Improved Obsidian plugin review compatibility and stability after 1.0.8, including safer icon rendering, computed checkbox formula editing, popout-window compatibility, confirmation modals, Promise handling, type-safety cleanup, and ZIP export buffer handling.
 
 See the [GitHub releases](https://github.com/pangy9/obsidian-note-database/releases) for full release history.

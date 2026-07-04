@@ -1,4 +1,4 @@
-import { setIcon } from "obsidian";
+import { setIcon, setTooltip } from "obsidian";
 import { getColumnOptionValues } from "../data/ColumnTypes";
 import {
   getDefaultChartValueField,
@@ -815,8 +815,9 @@ export class ChartToolbarRenderer {
       actions.onChange(t("undo.chartReferenceLineStyleConfig"));
     }, "minus");
     this.renderReferenceLineColorPicker(wrap, line, actions);
-    const remove = wrap.createEl("button", { cls: "db-chart-reference-line-remove", attr: { type: "button", "aria-label": t("toolbar.delete") } });
+    const remove = wrap.createEl("button", { cls: "db-chart-reference-line-remove", attr: { type: "button" } });
     this.renderOptionIcon(remove, "trash-2");
+    setTooltip(remove, t("toolbar.delete"), { delay: 100 });
     remove.onclick = () => {
       config.chartReferenceLines = (config.chartReferenceLines || []).filter((candidate) => candidate !== line);
       if (config.chartReferenceLines.length === 0) config.chartReferenceLines = undefined;

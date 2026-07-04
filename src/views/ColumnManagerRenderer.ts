@@ -1,11 +1,13 @@
-import { setIcon } from "obsidian";
+import { setIcon, setTooltip } from "obsidian";
 import { applyRangeSelection } from "../data/RangeSelection";
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { getFileFieldFixedType, QUICK_ADD_FILE_FIELDS } from "../data/FileFields";
 import { positionToolbarPopover } from "./PopoverPosition";
-import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getPropertyDropdownIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { DatabaseViewState } from "./ViewStateStore";
 import { isHTMLElement } from "./DomGuards";
+import { openDropdownMenu } from "./DropdownField";
 
 export interface ColumnManagerActions {
   close(): void;
@@ -17,6 +19,7 @@ export interface ColumnManagerActions {
   toggleColumnWrap(col: ColumnDef): void;
   editColumn(col: ColumnDef): void;
   addColumn(): void;
+  addFileFieldColumn?(key: string): void;
   deleteColumn(col: ColumnDef): void;
   /** When true, edit/delete/add buttons are hidden (used by embedded/read-only views) */
   isReadOnly?: boolean;
@@ -54,11 +57,52 @@ export class ColumnManagerRenderer {
     });
 
     if (!actions.isReadOnly) {
-      const addColumnBtn = panel.createEl("button", {
-        cls: "db-panel-button",
-        text: `+ ${t("panel.addColumn")}`,
+      const addRow = panel.createDiv({ cls: "db-column-manager-add-row" });
+      const addColumnBtn = addRow.createEl("button", {
+        cls: "db-panel-button db-column-manager-add-button",
+        attr: { type: "button" },
       });
+      addColumnBtn.createSpan({ cls: "db-panel-button-label", text: `+ ${t("panel.addColumn")}` });
       addColumnBtn.onclick = () => actions.addColumn();
+
+      if (actions.addFileFieldColumn) {
+        const existingKeys = new Set(columns.map((col) => col.key));
+        const available = QUICK_ADD_FILE_FIELDS.filter((f) => !existingKeys.has(f.key));
+        if (available.length > 0) {
+          const addFileBtn = addRow.createEl("button", {
+            cls: "db-panel-button db-column-manager-add-button",
+            attr: { type: "button" },
+          });
+          addFileBtn.createSpan({ cls: "db-panel-button-label", text: `+ ${t("fileField.addFileProperty")}` });
+          addFileBtn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openDropdownMenu({
+              anchor: addFileBtn,
+              label: t("fileField.addFileProperty"),
+              options: available.map((f) => {
+                const type = f.key === "aliases" ? "multi-select" : getFileFieldFixedType(f.key);
+                return {
+                  value: f.key,
+                  text: f.key,
+                  icon: getPropertyDropdownIcon(type),
+                };
+              }),
+              value: "",
+              onChange: (value: string) => {
+                actions.addFileFieldColumn?.(value);
+              },
+              closeOnSelect: true,
+              popoverClassName: "db-column-manager-file-property-dropdown",
+              renderIcon: (parent, icon) => {
+                const type = icon.startsWith("property:") ? icon.slice("property:".length) : icon;
+                parent.addClass("db-column-type-option-icon");
+                renderPropertyTypeIcon(parent, { type } as ColumnDef);
+              },
+            });
+          };
+        }
+      }
     }
     positionToolbarPopover(panel, anchorEl);
     if (savedScroll) panel.scrollTop = savedScroll;
@@ -136,9 +180,10 @@ export class ColumnManagerRenderer {
 
     const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
     const upBtn = moveControls.createEl("button", {
-      attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
+      attr: { type: "button" },
     });
     setIcon(upBtn, "arrow-up");
+    setTooltip(upBtn, t("menu.moveUp"), { delay: 100 });
     upBtn.disabled = index === 0;
     upBtn.onclick = (event) => {
       event.preventDefault();
@@ -146,9 +191,10 @@ export class ColumnManagerRenderer {
       actions.moveColumn(col.key, -1);
     };
     const downBtn = moveControls.createEl("button", {
-      attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
+      attr: { type: "button" },
     });
     setIcon(downBtn, "arrow-down");
+    setTooltip(downBtn, t("menu.moveDown"), { delay: 100 });
     downBtn.disabled = index >= total - 1;
     downBtn.onclick = (event) => {
       event.preventDefault();
@@ -199,9 +245,10 @@ export class ColumnManagerRenderer {
     }
     const wrapBtn = row.createEl("button", {
       cls: `clickable-icon db-column-wrap-toggle${col.wrap ? " is-active" : ""}`,
-      attr: { title: t("panel.wrap"), "aria-label": t("panel.wrap") },
+      attr: {},
     });
     setIcon(wrapBtn, "wrap-text");
+    setTooltip(wrapBtn, t("panel.wrap"), { delay: 100 });
     wrapBtn.onclick = () => actions.toggleColumnWrap(col);
 
     if (!actions.isReadOnly) {
@@ -211,9 +258,10 @@ export class ColumnManagerRenderer {
 
       const deleteBtn = row.createEl("button", {
         cls: "clickable-icon db-column-delete-btn",
-        attr: { title: t("common.delete"), "aria-label": t("common.delete") },
+        attr: {},
       });
       setIcon(deleteBtn, "trash");
+      setTooltip(deleteBtn, t("common.delete"), { delay: 100 });
       deleteBtn.onclick = () => actions.deleteColumn(col);
     }
   }

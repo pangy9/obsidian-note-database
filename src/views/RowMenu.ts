@@ -8,6 +8,7 @@ export interface RowMenuActions {
   app: App;
   openRow(row: RowData): void;
   deleteRow(row: RowData): Promise<void>;
+  duplicateRow?(row: RowData): Promise<void>;
   readonly isReadOnly?: boolean;
 }
 
@@ -36,6 +37,12 @@ export class RowMenu {
     );
 
     if (!this.actions.isReadOnly) {
+      menu.addItem((item) => item
+        .setTitle(t("menu.duplicateRecord"))
+        .setIcon("copy")
+        .onClick(() => { void this.actions.duplicateRow?.(row); })
+      );
+
       menu.addSeparator();
 
       menu.addItem((item) => item

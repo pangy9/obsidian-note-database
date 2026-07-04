@@ -13,6 +13,13 @@ import { t } from "../i18n";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 
+interface DatabaseIdDedupTarget {
+  file: TFile;
+  oldId: string;
+  newId: string;
+  config: DatabaseConfig;
+}
+
 export interface NoteRecord {
   file: TFile;
   frontmatter: Record<string, unknown>;
@@ -30,6 +37,15 @@ export interface ViewConfigMutation {
 }
 
 export type ViewConfigMutationCallback = (mutation: ViewConfigMutation) => void;
+
+function compareDatabaseIdOwners(
+  left: { file: TFile },
+  right: { file: TFile }
+): number {
+  const leftCtime = Number.isFinite(left.file.stat?.ctime) ? left.file.stat.ctime : Number.POSITIVE_INFINITY;
+  const rightCtime = Number.isFinite(right.file.stat?.ctime) ? right.file.stat.ctime : Number.POSITIVE_INFINITY;
+  return leftCtime - rightCtime || left.file.path.localeCompare(right.file.path);
+}
 
 export class DataSource {
   private app: App;
@@ -232,6 +248,16 @@ export class DataSource {
     return await this.app.vault.create(path, content);
   }
 
+  /** 复制笔记全文(frontmatter + body)到同目录,返回新文件。nameSuffix 如 "copy"/"副本"。 */
+  async duplicateNote(file: TFile, nameSuffix: string): Promise<TFile> {
+    const content = await this.app.vault.read(file);
+    const copyName = `${file.basename} ${nameSuffix}`;
+    const parent = file.parent;
+    const basePath = normalizePath(parent && parent.path ? `${parent.path}/${copyName}.md` : `${copyName}.md`);
+    const path = this.getAvailablePath(basePath);
+    return await this.app.vault.create(path, content);
+  }
+
   /** Open a note in the workspace */
   openNote(file: TFile): void {
     void this.app.workspace.getLeaf(false)?.openFile(file);
@@ -301,6 +327,8 @@ export class DataSource {
       }
     }
 
+    const duplicateIdTargets = this.assignUniqueDatabaseIds(results);
+
     // Asynchronously remove redundant top-level "name" from legacy database files
     if (cleanupTargets.length > 0) {
       void this.migrateRemoveTopLevelName(cleanupTargets);
@@ -311,12 +339,42 @@ export class DataSource {
       void this.migrateBackfillDatabaseId(idBackfillTargets);
     }
 
+    // Asynchronously replace duplicated database.id values. This most commonly
+    // happens when users duplicate a db_view Markdown file outside the plugin.
+    if (duplicateIdTargets.length > 0) {
+      void this.migrateDeduplicateDatabaseIds(duplicateIdTargets);
+    }
+
     // Asynchronously absorb legacy typeFilter into source rules and remove it from disk
     if (typeFilterTargets.length > 0) {
       void this.migrateTypeFilterToSourceRules(typeFilterTargets);
     }
 
     return results;
+  }
+
+  private assignUniqueDatabaseIds(results: { file: TFile; config: DatabaseConfig }[]): DatabaseIdDedupTarget[] {
+    const byId = new Map<string, { file: TFile; config: DatabaseConfig }[]>();
+    for (const entry of results) {
+      const id = safeString(entry.config.id);
+      if (!id) continue;
+      const group = byId.get(id);
+      if (group) group.push(entry);
+      else byId.set(id, [entry]);
+    }
+
+    const targets: DatabaseIdDedupTarget[] = [];
+    for (const [id, entries] of byId.entries()) {
+      if (entries.length <= 1) continue;
+      const sorted = entries.slice().sort(compareDatabaseIdOwners);
+      for (const duplicate of sorted.slice(1)) {
+        const newId = generateId();
+        duplicate.config.id = newId;
+        this.rememberViewDefConfig(duplicate.file.path, duplicate.config);
+        targets.push({ file: duplicate.file, oldId: id, newId, config: duplicate.config });
+      }
+    }
+    return targets;
   }
 
   /** Remove the redundant top-level "name" frontmatter field from legacy database files.
@@ -354,6 +412,32 @@ export class DataSource {
       } catch (err) {
         // Non-critical migration; log and continue
         console.warn("Note Database: failed to backfill database id in", target.file.path, err);
+      }
+    }
+  }
+
+  /** Replace duplicated database.id values while keeping the oldest file as the
+   *  owner of the original id. Copying a db_view Markdown file preserves its
+   *  frontmatter id, which breaks dbId-based embedded references unless the copy
+   *  receives a fresh id. */
+  private async migrateDeduplicateDatabaseIds(targets: DatabaseIdDedupTarget[]): Promise<void> {
+    for (const target of targets) {
+      try {
+        await this.app.fileManager.processFrontMatter(target.file, (fm) => {
+          const frontmatter = fm as Record<string, unknown>;
+          const database = frontmatter["database"];
+          if (
+            frontmatter["db_view"] === true &&
+            database &&
+            typeof database === "object" &&
+            (database as Record<string, unknown>)["id"] === target.oldId
+          ) {
+            (database as Record<string, unknown>)["id"] = target.newId;
+          }
+        });
+      } catch (err) {
+        this.viewDefOverrides.delete(target.file.path);
+        console.warn("Note Database: failed to deduplicate database id in", target.file.path, err);
       }
     }
   }
@@ -434,6 +518,7 @@ export class DataSource {
           galleryCardSize: typeof source["galleryCardSize"] === "number" ? source["galleryCardSize"] : undefined,
           galleryImageFit: source["galleryImageFit"] === "contain" ? "contain" : source["galleryImageFit"] === "cover" ? "cover" : undefined,
           showEmptyFields: source["showEmptyFields"] === true || (Array.isArray(source["alwaysShowEmptyFields"]) && (source["alwaysShowEmptyFields"] as unknown[]).length > 0),
+          listCompactFields: source["listCompactFields"] === true,
           columnOrder: Array.isArray(source["columnOrder"]) ? source["columnOrder"] as string[] : undefined,
           columnWidths: this.parseNumberMap(source["columnWidths"]),
           hiddenColumns: Array.isArray(source["hiddenColumns"]) ? source["hiddenColumns"] as string[] : undefined,
@@ -562,6 +647,7 @@ export class DataSource {
       galleryCardSize: typeof v["galleryCardSize"] === "number" ? v["galleryCardSize"] : undefined,
       galleryImageFit: v["galleryImageFit"] === "contain" ? "contain" : v["galleryImageFit"] === "cover" ? "cover" : undefined,
       showEmptyFields: v["showEmptyFields"] === true || (Array.isArray(v["alwaysShowEmptyFields"]) && (v["alwaysShowEmptyFields"] as unknown[]).length > 0),
+      listCompactFields: v["listCompactFields"] === true,
       columnOrder: Array.isArray(v["columnOrder"]) ? v["columnOrder"] as string[] : undefined,
       columnWidths: this.parseNumberMap(v["columnWidths"]),
       hiddenColumns: Array.isArray(v["hiddenColumns"]) ? v["hiddenColumns"] as string[] : undefined,
@@ -773,6 +859,7 @@ export class DataSource {
       galleryCardSize: view.galleryCardSize || 250,
       galleryImageFit: view.galleryImageFit || "cover",
       showEmptyFields: view.showEmptyFields === true,
+      listCompactFields: view.listCompactFields === true,
       statusPresets: view.statusPresets || [],
       defaultStatusPresetId: view.defaultStatusPresetId || "",
       filterLogic: view.filterLogic || "and",
@@ -880,6 +967,7 @@ export class DataSource {
       "galleryImageFit",
       "alwaysShowEmptyFields",
       "showEmptyFields",
+      "listCompactFields",
       "columnOrder",
       "columnWidths",
       "hiddenColumns",

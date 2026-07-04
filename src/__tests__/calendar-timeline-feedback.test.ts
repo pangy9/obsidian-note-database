@@ -61,11 +61,11 @@ describe("calendar timeline feedback fixes", () => {
     expect(i18n).not.toContain("\"sortPanel.calendarMonthHint\"");
   });
 
-  it("hides property and view status preset controls where they do not affect the view", () => {
+  it("shows property columns control for calendar/timeline; hides view status preset where it does not affect the view", () => {
     const toolbar = readFileSync(new URL("../views/ToolbarRenderer.ts", import.meta.url), "utf8");
     const panel = readFileSync(new URL("../views/ViewConfigPanelRenderer.ts", import.meta.url), "utf8");
 
-    expect(toolbar).toContain("const showColumnButton = viewType !== \"chart\" && viewType !== \"timeline\"");
+    expect(toolbar).toContain("const showColumnButton = viewType !== \"chart\"");
     expect(toolbar).toContain("if (showColumnButton) this.renderColumnButton");
     expect(panel).toContain("const showViewStatusPresets = config.viewType !== \"chart\" && config.viewType !== \"calendar\" && config.viewType !== \"timeline\"");
     expect(panel).toContain("if (showViewStatusPresets)");

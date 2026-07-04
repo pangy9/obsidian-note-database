@@ -13,7 +13,7 @@ import {
   getVisibleColumns,
 } from "../data/ColumnConfig";
 import { RowPipeline } from "../data/RowPipeline";
-import { ViewConfig, ColumnDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode } from "../data/types";
+import { ViewConfig, ColumnDef, ComputedFieldDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode } from "../data/types";
 import {
   getDefaultCellValue as getColumnDefaultCellValue,
   getStatusPresetOptions,
@@ -22,6 +22,8 @@ import {
   normalizeStatusPresets,
   resolveDefaultStatusPresetId,
   isOptionColumnType,
+  isColumnType,
+  isComputedFieldType,
   isObsidianTagsKey,
   normalizeObsidianTagValue,
   normalizeValidObsidianTagValue,
@@ -62,20 +64,29 @@ import { ChartRenderer } from "./ChartRenderer";
 import { ChartToolbarRenderer } from "./ChartToolbarRenderer";
 import { getDefaultChartDateBucket, getDefaultChartField, getDefaultChartNumberBucket } from "../data/ChartAggregation";
 import { getDefaultEventDateField, getTimelineDayNonDateTimeColumns } from "../data/CalendarTimelineModel";
+import {
+  buildCalendarTimelineSearchResults,
+  CalendarTimelineSearchResultItem,
+  CalendarTimelineSearchResults,
+  formatCalendarTimelineSearchResultDate,
+} from "../data/CalendarTimelineSearchResults";
 import { CalendarTimelineCreateOptions, CalendarTimelineDateChange, CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { CalendarRenderer } from "./CalendarRenderer";
 import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
-import { ColumnRenameModal } from "./modals/ColumnRenameModal";
+import { ColumnRenameModal, ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
-import { applyAddDatabaseResult } from "../data/AddDatabaseResult";
-import { BaseImportColumn, BaseImportConfirmModal } from "./modals/BaseImportConfirmModal";
-import { collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "../data/FrontmatterScanner";
+import { buildDatabaseWithInferredColumns } from "./modals/AddDatabaseFlow";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
-import { getColumnDisplayType, getComputedStorageKey } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
+import {
+  filterPropertyTypeConflictsForChange,
+  findPropertyTypeConflicts,
+  PropertyTypeConflictEntry,
+} from "../data/PropertyTypeConflict";
 import { isDateLikeColumnType, setDateDisplayMode } from "../data/DateTimeFormat";
 import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, mergeDbAndViewSourceRuleTrees, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
@@ -85,6 +96,15 @@ import { StatusPresetManagerModal } from "./modals/StatusPresetManagerModal";
 import { FormulaModal, FormulaSaveResult } from "./modals/FormulaModal";
 import { ComputedFrontmatterCleanupModal } from "./modals/ComputedFrontmatterCleanupModal";
 import { InvalidTimeEventEdit, InvalidTimeEventsModal } from "./modals/InvalidTimeEventsModal";
+import {
+  PropertyTypeConflictChange,
+  PropertyTypeConflictModal,
+  PropertyTypeConflictModalResult,
+} from "./modals/PropertyTypeConflictModal";
+import {
+  confirmNewDatabasePropertyTypeConflicts,
+  MutablePropertyTypeConflictEntry,
+} from "./PropertyTypeConflictWorkflow";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { CsvMarkdownExportOptions } from "../data/CsvMarkdownZipExport";
 import { t } from "../i18n";
@@ -95,9 +115,11 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
+import { parseClipboardTable, serializeSelectedCells as serializeClipboardSelectedCells } from "../data/ClipboardSerializer";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { closeRecordDetailPanel, getOpenRecordDetailPath, openRecordDetailPanel, refreshRecordDetailPanel } from "./RecordDetailPanel";
 import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
-import { highlightSearchMatches } from "./SearchHighlight";
+import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 const NEW_COLUMN_HIGHLIGHT_MS = 2200;
@@ -116,6 +138,11 @@ function filtersEqual(left: FilterRule, right: FilterRule): boolean {
 function clampColumnWidth(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function propertyTypeChangeTargetsEntry(entry: { sourcePath: string; config: DatabaseConfig }, change: PropertyTypeConflictChange): boolean {
+  if (change.databasePath) return entry.sourcePath === change.databasePath;
+  return (entry.config.id || entry.sourcePath) === change.databaseId;
 }
 
 export const DATABASE_VIEW_TYPE = "note-database-view";
@@ -237,6 +264,7 @@ export class DatabaseView extends FileView {
   private mobileColumnWidthPanelCleanup?: () => void;
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
+    openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
     createEntryForDate: (config, dateKey, options) => { void this.createCalendarTimelineEntry(config, dateKey, options); },
     updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
@@ -258,6 +286,7 @@ export class DatabaseView extends FileView {
   });
   private calendarRenderer = new CalendarRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
+    openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
     createEntryForDate: (config, dateKey, timeRange) => { void this.createCalendarTimelineEntry(config, dateKey, timeRange); },
     updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
@@ -286,6 +315,7 @@ export class DatabaseView extends FileView {
   private rows: RowData[] = [];
   private timelineInvalidRowsVersion = 0;
   private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
+  private calendarTimelineSearchResultsEl: HTMLElement | null = null;
   private selectedRows = new Set<string>();
   private lastSelectedRowPath: string | null = null;
   private cellSelection: CellSelectionRange | null = null;
@@ -320,11 +350,13 @@ export class DatabaseView extends FileView {
   private pendingConfigSave: PendingConfigSave | null = null;
   private computedSyncTimer: number | null = null;
   private syncingComputed = false;
+  private propertyTypeConflictModalOpen = false;
   private suppressDataReloadUntil = 0;
   private suppressNextSettingsUpdate = false;
   private pendingNewFilePath?: string;
   private pendingNewRecord?: NoteRecord & { expiresAt: number };
   private pendingNewRevealTimer: number | null = null;
+  private pendingSearchResultRevealPath?: string;
   private pendingCalendarTimelineCreates = new Set<string>();
   private lastCalendarTimelineSameDateFieldNoticeAt = 0;
   /** Last view type we finished rendering. Used to reset the calendar/timeline
@@ -364,7 +396,8 @@ export class DatabaseView extends FileView {
       (row, col, value) => this.saveCellValueWithHistory(row, col, value),
       (row) => this.getFileTitleInfo(row),
       () => this.getConfig()?.schema.computedFields || [],
-      this.app
+      this.app,
+      (row, col) => this.restoreTableCellFocus(row, col)
     );
     this.columnOperations = new ColumnOperations({
       app: this.app,
@@ -396,6 +429,7 @@ export class DatabaseView extends FileView {
       app: this.app,
       openRow: (row) => { void this.openRow(row); },
       deleteRow: (row) => this.deleteRow(row),
+      duplicateRow: (row) => this.duplicateRow(row),
     });
     const shouldHideResultCreateEntryButtons = () => this.shouldHideResultCreateEntryButtons();
     this.columnHeaderController = new ColumnHeaderController({
@@ -924,6 +958,7 @@ export class DatabaseView extends FileView {
 
   async onClose(): Promise<void> {
     this.chartRenderer.destroy();
+    this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免视图关闭后泄漏
     this.calendarTimelineRenderer.destroy();
     // 取消可能仍在调度的无效时间事件分块扫描，避免视图关闭后继续占用 idle 回调
@@ -1001,6 +1036,8 @@ export class DatabaseView extends FileView {
       return;
     }
     if (isEditing) return;
+    // 字段编辑弹出层（选项/日期/颜色选择器）打开时，方向键/Enter 由弹出层自己的 keydown 处理，不导航单元格
+    if (this.containerEl_?.querySelector(".db-cell-option-popover, .db-cell-date-popover, .db-color-picker-popup")) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && this.cellSelection) {
       event.preventDefault();
       void this.copySelectedCells();
@@ -1019,7 +1056,83 @@ export class DatabaseView extends FileView {
     if ((event.key === "Delete" || event.key === "Backspace") && this.cellSelection) {
       event.preventDefault();
       void this.clearSelectedCells();
+      return;
     }
+
+    if (this.cellSelection) {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        this.moveCellFocus(event.shiftKey ? "ArrowLeft" : "ArrowRight", false);
+        return;
+      }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        this.moveCellFocus(event.key, event.shiftKey);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.startEditAtCellSelectionFocus();
+        return;
+      }
+    }
+  }
+
+  private moveCellFocus(key: string, extend: boolean): void {
+    if (!this.cellSelection || !this.containerEl_) return;
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    if (rowPaths.length === 0 || colKeys.length === 0) return;
+    const focusRow = rowPaths.indexOf(this.cellSelection.focus.rowPath);
+    const focusCol = colKeys.indexOf(this.cellSelection.focus.colKey);
+    if (focusRow < 0 || focusCol < 0) return;
+    let newRow = focusRow;
+    let newCol = focusCol;
+    if (key === "ArrowUp") newRow = Math.max(0, focusRow - 1);
+    else if (key === "ArrowDown") newRow = Math.min(rowPaths.length - 1, focusRow + 1);
+    else if (key === "ArrowLeft") newCol = Math.max(0, focusCol - 1);
+    else if (key === "ArrowRight") newCol = Math.min(colKeys.length - 1, focusCol + 1);
+    const newAddr: CellAddress = { rowPath: rowPaths[newRow], colKey: colKeys[newCol] };
+    this.cellSelection = extend
+      ? { anchor: this.cellSelection.anchor, focus: newAddr }
+      : { anchor: newAddr, focus: newAddr };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+    this.scrollCellIntoView(newAddr);
+  }
+
+  private startEditAtCellSelectionFocus(): void {
+    if (!this.cellSelection || !this.containerEl_) return;
+    const { rowPath, colKey } = this.cellSelection.focus;
+    const td = this.containerEl_.querySelector<HTMLElement>(
+      `td[data-note-database-row-path="${CSS.escape(rowPath)}"][data-note-database-column-key="${CSS.escape(colKey)}"]`
+    );
+    if (!td || td.classList.contains("db-cell-editing")) return;
+    const row = this.rows.find((r) => r.file.path === rowPath);
+    const col = this.getConfig().schema.columns.find((c) => c.key === colKey);
+    if (!row || !col) return;
+    this.cellRenderer.startEdit(td, row, col);
+  }
+
+  private scrollCellIntoView(addr: CellAddress): void {
+    if (!this.containerEl_) return;
+    const td = this.containerEl_.querySelector<HTMLElement>(
+      `td[data-note-database-row-path="${CSS.escape(addr.rowPath)}"][data-note-database-column-key="${CSS.escape(addr.colKey)}"]`
+    );
+    if (!td) return;
+    td.focus();
+    td.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  private restoreTableCellFocus(row: RowData, col: ColumnDef): void {
+    if (!this.containerEl_ || this.getConfig()?.viewType !== "table") return;
+    const address: CellAddress = { rowPath: row.file.path, colKey: col.key };
+    if (!this.cellSelection) {
+      this.cellSelection = { anchor: address, focus: address };
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
+    }
+    this.scrollCellIntoView(address);
   }
 
   private refreshOnActivation(): void {
@@ -1087,6 +1200,10 @@ export class DatabaseView extends FileView {
         this.vs().searchText = value;
         this.refresh({ viewport: "reset-top" });
       },
+      onSearchFocus: () => {
+        const config = this.getConfig();
+        if (config) this.renderCalendarTimelineSearchResultsPanel(config);
+      },
       setGroupByField: (value) => this.setGroupByField(value),
       setGroupOrderMode: (mode) => this.setGroupOrderMode(mode),
       setShowEmptyGroups: (field, value) => this.setShowEmptyGroups(field, value),
@@ -1117,7 +1234,7 @@ export class DatabaseView extends FileView {
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover("columns", anchorEl),
       syncComputedFields: () => this.syncComputedFieldsManually(),
       closeToolbarPopovers: () => this.closeHeaderPopovers(),
-      createEntry: (defaults) => { void this.createBlankEntry(defaults); },
+      createEntry: (defaults) => { void this.createCalendarAwareCreateEntry(defaults); },
       isReadOnly: needsSetup,
       showChartOptions: true,
       showDatabaseChrome: true,
@@ -1899,104 +2016,9 @@ export class DatabaseView extends FileView {
     if (!result) return;
 
     const dbName = this.getUniqueDatabaseName(result.name);
-    const sourceFolder = result.sourceFolder || "";
-
-    // Scan frontmatter from source folder. Pass the modal's source rules (including the
-    // full rule tree) so column inference only considers records that will actually belong
-    // to the database — same semantics as the query engine.
-    const allKeys = new Map<string, string>();
-    allKeys.set("file.name", t("defaults.nameColumn"));
-    const sampleValues = new Map<string, unknown[]>();
-    const fileCounts = new Map<string, number>();
-    collectFileFrontmatterKeys(this.app, sourceFolder, result.sourceRules, allKeys, sampleValues, fileCounts, result.sourceLogic, result.sourceRuleTree);
-
-    // Build column list: always start with file.name
-    const columns: ColumnDef[] = [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }];
-
-    if (allKeys.size > 1) {
-      // Found frontmatter keys — show confirmation modal
-      const STATUS_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
-      const inferredColumns: BaseImportColumn[] = [];
-
-      for (const [key, label] of allKeys) {
-        if (key === "file.name") continue;
-        const type = inferColumnType(key, sampleValues.get(key) || []);
-        const col: BaseImportColumn = { key, label, type, fileCount: fileCounts.get(key) || 0 };
-
-        // Pre-populate options for option-based types
-        if (type === "multi-select" && isObsidianTagsKey(key)) {
-          const vaultTags = getVaultTags(this.app, sourceFolder, undefined);
-          if (vaultTags.length > 0) {
-            col.statusOptions = vaultTags.map((tag: string, i: number) => ({
-              value: tag,
-              color: STATUS_COLORS[i % STATUS_COLORS.length],
-            }));
-          }
-        } else if (type === "multi-select") {
-          const uniqueValues = collectUniqueListValues(this.app, key, sourceFolder, undefined);
-          if (uniqueValues.length > 0) {
-            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
-              value: val,
-              color: STATUS_COLORS[i % STATUS_COLORS.length],
-            }));
-          }
-        } else if (type === "select" || type === "status") {
-          const uniqueValues = collectUniqueStringValues(this.app, key, sourceFolder, undefined);
-          if (uniqueValues.length > 0) {
-            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
-              value: val,
-              color: STATUS_COLORS[i % STATUS_COLORS.length],
-            }));
-          }
-        }
-
-        inferredColumns.push(col);
-      }
-
-      const confirmed = await new BaseImportConfirmModal(
-        this.app,
-        inferredColumns,
-        {
-          titleText: t("addDatabase.scanTitle"),
-          descText: t("addDatabase.scanDesc"),
-          defaultUnchecked: true,
-        }
-      ).openAndWait();
-      if (!confirmed) return;
-
-      // Collect statusOptions for columns where user changed to option types
-      for (const col of confirmed) {
-        if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && !col.statusOptions) {
-          const uniqueValues = collectUniqueStringValues(this.app, col.key, sourceFolder, undefined);
-          if (uniqueValues.length > 0) {
-            col.statusOptions = uniqueValues.map((val: string, i: number) => ({
-              value: val,
-              color: STATUS_COLORS[i % STATUS_COLORS.length],
-            }));
-          }
-        }
-        columns.push({ key: col.key, label: col.label || col.key, type: col.type, statusOptions: col.statusOptions });
-      }
-    } else {
-      // No frontmatter found
-      new Notice(t("notice.noImportableProperties"));
-    }
-
-    const view: ViewConfig = {
-      id: generateId(),
-      name: t("common.tableView"),
-      viewType: "table",
-      sourceFolder: "",
-      schema: { columns, computedFields: [] },
-    };
-    const newDb: DatabaseConfig = {
-      id: generateId(),
-      name: dbName,
-      sourceFolder,
-      schema: view.schema,
-      views: [view],
-    };
-    applyAddDatabaseResult(newDb, result);
+    const newDb = await buildDatabaseWithInferredColumns(this.app, result, dbName);
+    if (!newDb) return;
+    if (!await this.confirmNewDatabasePropertyTypeConflicts(newDb)) return;
 
     const file = await this.dataSource.createViewDefFile(
       this.databaseFolder,
@@ -2013,6 +2035,30 @@ export class DatabaseView extends FileView {
     this.refresh({ viewport: "reset-top" });
   }
 
+  private async confirmNewDatabasePropertyTypeConflicts(newDb: DatabaseConfig): Promise<boolean> {
+    const existingEntries: MutablePropertyTypeConflictEntry[] = this.viewEntries.map((entry) => ({
+      config: entry.config,
+      sourcePath: entry.sourcePath,
+    }));
+    const result = await confirmNewDatabasePropertyTypeConflicts(this.app, existingEntries, { config: newDb }, {
+      getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
+      getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
+    });
+    if (!result) return false;
+    for (const entry of result.changedEntries) {
+      if (!entry.sourcePath) continue;
+      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+      if (!(file instanceof TFile)) continue;
+      await this.dataSource.updateViewDefFile(file, entry.config, {
+        dbId: entry.config.id,
+        dbPath: entry.sourcePath,
+        sourceInstanceId: this.instanceId,
+      });
+      this.configSnapshots.set(this.getConfigHistoryKey(entry as ViewEntry), this.cloneDatabaseConfig(entry.config));
+    }
+    return true;
+  }
+
   private async duplicateCurrentDatabase(): Promise<void> {
     const entry = this.getCurrentEntry();
     if (!entry) return;
@@ -2020,10 +2066,11 @@ export class DatabaseView extends FileView {
 
     const folder = this.getParentPath(entry.sourcePath) || this.databaseFolder;
     const file = await this.dataSource.createViewDefFile(folder, duplicate.name, duplicate);
-    this.viewEntries.push({ config: duplicate, sourcePath: file.path });
-    this.currentDbIndex = this.viewEntries.length - 1;
     new Notice(t("notice.copiedDbFile", { path: file.path }));
     void this.onConfigChanged?.();
+    this.rebuildViewEntries();
+    const idx = this.viewEntries.findIndex((e) => e.sourcePath === file.path);
+    this.currentDbIndex = idx >= 0 ? idx : this.viewEntries.length - 1;
 
     this.currentViewIndex = 0;
     this.clearViewStateCache();
@@ -2308,6 +2355,7 @@ export class DatabaseView extends FileView {
   /** Re-render toolbar with current state (used after view switch) */
   private rerenderToolbar(): void {
     if (!this.containerEl_) return;
+    this.closeCalendarTimelineSearchResultsPanel();
     const existing = this.containerEl_.querySelector(".db-header");
     if (existing) existing.remove();
     this.renderToolbar();
@@ -2343,6 +2391,24 @@ export class DatabaseView extends FileView {
       window.clearTimeout(this.pendingRevealColumnTimer);
       this.pendingRevealColumnTimer = null;
     }
+  }
+
+  /** 日历/时间线视图的 toolbar 新建：注入今日日期作为开始日期，否则新建笔记无日期不在视图中显示 */
+  private async createCalendarAwareCreateEntry(defaults?: Record<string, unknown>): Promise<void> {
+    const config = this.getConfig();
+    const viewType = config?.viewType;
+    if ((viewType === "calendar" || viewType === "timeline") && !defaults) {
+      const startField = viewType === "timeline"
+        ? (config.timelineStartDateField || config.calendarStartDateField || getDefaultEventDateField(config))
+        : (config.calendarStartDateField || getDefaultEventDateField(config));
+      if (startField) {
+        const d = new Date();
+        const todayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        void this.createBlankEntry({ [startField]: todayKey });
+        return;
+      }
+    }
+    void this.createBlankEntry(defaults);
   }
 
   private async createBlankEntry(defaults: Record<string, unknown> = {}, position?: CreateEntryPosition): Promise<void> {
@@ -2947,10 +3013,15 @@ export class DatabaseView extends FileView {
   private renderCellSelectionClasses(): void {
     if (!this.containerEl_) return;
     const selected = this.getSelectedCellAddressSet();
+    const focusKey = this.cellSelection
+      ? this.cellSelection.focus.rowPath + "\u0000" + this.cellSelection.focus.colKey
+      : null;
     this.containerEl_.querySelectorAll<HTMLElement>("td[data-note-database-row-path][data-note-database-column-key]").forEach((cell) => {
       const rowPath = cell.dataset.noteDatabaseRowPath;
       const colKey = cell.dataset.noteDatabaseColumnKey;
-      cell.toggleClass("db-cell-range-selected", Boolean(rowPath && colKey && selected.has(`${rowPath}\u0000${colKey}`)));
+      const key = rowPath && colKey ? rowPath + "\u0000" + colKey : null;
+      cell.toggleClass("db-cell-range-selected", Boolean(key && selected.has(key)));
+      cell.toggleClass("db-cell-focus", Boolean(key && key === focusKey));
     });
   }
 
@@ -3071,6 +3142,7 @@ export class DatabaseView extends FileView {
         toggleColumnWrap: (col) => this.toggleColumnWrap(col),
         editColumn: (col) => this.showColumnRenameModal(col),
         addColumn: () => { void this.columnOperations.appendColumn(); },
+        addFileFieldColumn: (key) => { void this.columnOperations.addFileFieldColumn(key); },
         deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
       },
       this.getHeaderPopoverAnchor("columns")
@@ -3157,6 +3229,14 @@ export class DatabaseView extends FileView {
     const config = this.getConfig();
     if (!config) return;
     new ColumnRenameModal(this.app, col, config.schema.columns, async (result) => {
+      const decision = await this.confirmPropertyTypeConflictBeforeColumnRename(col, result);
+      if (!decision) return false;
+      if (decision.changes.length > 0) {
+        await this.applyPropertyTypeConflictChanges(decision.changes, result.key.trim());
+      }
+      if (decision.type && decision.type !== col.type) {
+        this.applyColumnTypeToColumn(col, decision.type);
+      }
       await this.columnOperations.renameColumn(col, result);
     }, config.schema.computedFields).open();
   }
@@ -3307,7 +3387,7 @@ export class DatabaseView extends FileView {
       }
       const change = this.createCurrentCellChange(row, target, transaction.value);
       if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
-      await this.applyCellChanges([change], t("undo.editCell"));
+      await this.applyCellChanges([change], t("undo.editCell"), { preserveCellSelection: true });
       return;
     }
 
@@ -3315,7 +3395,7 @@ export class DatabaseView extends FileView {
       if (!transaction.setValue) return;
       const change = this.createCurrentCellChange(row, target, transaction.value);
       if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
-      await this.applyCellChanges([change], t("undo.editCell"));
+      await this.applyCellChanges([change], t("undo.editCell"), { preserveCellSelection: true });
       return;
     }
 
@@ -3384,8 +3464,16 @@ export class DatabaseView extends FileView {
     if (changes.length > 0) {
       await this.applyFrontmatterChanges(changes, "new");
       await this.refreshAfterSave();
+      if (options.setValue && options.currentRow) {
+        this.renderCellSelectionClasses();
+        this.renderSelectionStatusBar();
+      }
     } else {
       this.refresh();
+      if (options.setValue && options.currentRow) {
+        this.renderCellSelectionClasses();
+        this.renderSelectionStatusBar();
+      }
     }
     if (this.showColumnManager) this.renderColumnManager();
   }
@@ -3532,7 +3620,7 @@ export class DatabaseView extends FileView {
     ).open();
   }
 
-  private showFormulaModal(col: ColumnDef): void {
+  private showFormulaModal(col: ColumnDef, initialResultType?: ComputedFieldDef["type"]): void {
     const config = this.getConfig();
     const entry = this.getCurrentEntry();
     if (!config || !entry) return;
@@ -3543,8 +3631,17 @@ export class DatabaseView extends FileView {
       ? this.app.metadataCache.getFileCache(baseThisFile)?.frontmatter
       : undefined;
     new FormulaModal(this.app, col, computedField, this.rows, config.schema.columns, normalizeComputedSyncMode(entry.config.computedSyncMode), async (result) => {
-      await this.saveFormula(entry, config, col, result);
-    }, baseThisFile instanceof TFile ? baseThisFile : undefined, baseThisFrontmatter).open();
+      const decision = await this.confirmPropertyTypeConflictBeforeFormulaSave(col, result.resultType);
+      if (!decision) return false;
+      const computedKey = col.computedKey || col.key;
+      if (decision.changes.length > 0) {
+        await this.applyPropertyTypeConflictChanges(decision.changes, computedKey);
+      }
+      await this.saveFormula(entry, config, col, {
+        ...result,
+        resultType: decision.resultType || result.resultType,
+      });
+    }, baseThisFile instanceof TFile ? baseThisFile : undefined, baseThisFrontmatter, initialResultType).open();
   }
 
   private showComputedFrontmatterCleanupModal(): void {
@@ -3674,8 +3771,326 @@ export class DatabaseView extends FileView {
   }
 
   private async changeColumnType(col: ColumnDef, type: ColumnDef["type"]): Promise<void> {
-    await this.columnOperations.changeColumnType(col, type);
-    if (type === "computed") this.showFormulaModal(col);
+    const decision = type === "computed"
+      ? await this.confirmPropertyTypeConflictBeforeComputedCreation(col, "text")
+      : await this.confirmPropertyTypeConflictBeforeColumnChange(col, type);
+    if (!decision) return;
+    if (decision.changes.length > 0) {
+      await this.applyPropertyTypeConflictChanges(decision.changes, col.key);
+    }
+    if (!decision.type) {
+      this.refreshSchemaChanged();
+      return;
+    }
+    await this.columnOperations.changeColumnType(col, decision.type);
+    if (decision.type === "computed") {
+      this.showFormulaModal(col, decision.computedResultType);
+    }
+  }
+
+  private async confirmPropertyTypeConflictBeforeColumnChange(
+    col: ColumnDef,
+    requestedType: ColumnDef["type"]
+  ): Promise<{ type?: ColumnDef["type"]; computedResultType?: ComputedFieldDef["type"]; changes: PropertyTypeConflictChange[] } | null> {
+    if (this.propertyTypeConflictModalOpen) return null;
+    const entry = this.getCurrentEntry();
+    if (!entry) return { type: requestedType, changes: [] };
+    const existingEntries = this.buildPropertyConflictEntries();
+    const prospectiveEntries = this.buildProspectivePropertyConflictEntries(col.key, requestedType);
+    const prospectiveEntry = prospectiveEntries.find((candidate) => candidate.sourcePath === entry.sourcePath);
+    if (!prospectiveEntry) return { type: requestedType, changes: [] };
+    const conflicts = filterPropertyTypeConflictsForChange(
+      findPropertyTypeConflicts(existingEntries),
+      findPropertyTypeConflicts(prospectiveEntries),
+      prospectiveEntry,
+      col.key
+    );
+    if (conflicts.length === 0) return { type: requestedType, changes: [] };
+
+    this.propertyTypeConflictModalOpen = true;
+    const result = await new PropertyTypeConflictModal(this.app, {
+      conflicts,
+      activeConflictKey: col.key,
+      mode: "confirm-change",
+    }, {
+      onClosed: () => {
+        this.propertyTypeConflictModalOpen = false;
+      },
+    }).openAndWait();
+    if (result.action === "cancel") return null;
+    if (result.action === "ignore") return { type: requestedType, changes: [] };
+    return this.resolveColumnTypeDecisionFromModalResult(result, col.key);
+  }
+
+  private async confirmPropertyTypeConflictBeforeColumnRename(
+    col: ColumnDef,
+    result: ColumnRenameResult
+  ): Promise<{ type?: ColumnDef["type"]; changes: PropertyTypeConflictChange[] } | null> {
+    const newKey = result.key.trim();
+    if (this.propertyTypeConflictModalOpen) return null;
+    if (!newKey || newKey === col.key || isFileFieldKey(col.key) || isFileFieldKey(newKey)) {
+      return { changes: [] };
+    }
+    const entry = this.getCurrentEntry();
+    if (!entry) return { changes: [] };
+    const existingEntries = this.buildPropertyConflictEntries();
+    const prospectiveEntries = this.buildProspectivePropertyConflictEntriesForRename(col.key, newKey);
+    const prospectiveEntry = prospectiveEntries.find((candidate) => candidate.sourcePath === entry.sourcePath);
+    if (!prospectiveEntry) return { changes: [] };
+    const conflicts = filterPropertyTypeConflictsForChange(
+      findPropertyTypeConflicts(existingEntries),
+      findPropertyTypeConflicts(prospectiveEntries),
+      prospectiveEntry,
+      newKey
+    );
+    if (conflicts.length === 0) return { changes: [] };
+
+    this.propertyTypeConflictModalOpen = true;
+    const modalResult = await new PropertyTypeConflictModal(this.app, {
+      conflicts,
+      activeConflictKey: newKey,
+      mode: "confirm-change",
+    }, {
+      onClosed: () => {
+        this.propertyTypeConflictModalOpen = false;
+      },
+    }).openAndWait();
+    if (modalResult.action === "cancel") return null;
+    if (modalResult.action === "ignore") return { changes: [] };
+    return this.resolveColumnTypeDecisionFromModalResult(modalResult, newKey);
+  }
+
+  private async confirmPropertyTypeConflictBeforeComputedCreation(
+    col: ColumnDef,
+    requestedType: ComputedFieldDef["type"]
+  ): Promise<{ type?: ColumnDef["type"]; computedResultType?: ComputedFieldDef["type"]; changes: PropertyTypeConflictChange[] } | null> {
+    const decision = await this.confirmPropertyTypeConflictBeforeFormulaSave(col, requestedType);
+    if (!decision) return null;
+    return {
+      type: "computed",
+      computedResultType: decision.resultType || requestedType,
+      changes: decision.changes,
+    };
+  }
+
+  private async confirmPropertyTypeConflictBeforeFormulaSave(
+    col: ColumnDef,
+    requestedType: ComputedFieldDef["type"]
+  ): Promise<{ resultType?: ComputedFieldDef["type"]; changes: PropertyTypeConflictChange[] } | null> {
+    if (this.propertyTypeConflictModalOpen) return null;
+    const entry = this.getCurrentEntry();
+    if (!entry) return { resultType: requestedType, changes: [] };
+    const computedKey = col.computedKey || col.key;
+    const existingEntries = this.buildPropertyConflictEntries();
+    const prospectiveEntries = this.buildProspectivePropertyConflictEntriesForComputedType(col, requestedType);
+    const prospectiveEntry = prospectiveEntries.find((candidate) => candidate.sourcePath === entry.sourcePath);
+    if (!prospectiveEntry) return { resultType: requestedType, changes: [] };
+    const conflicts = filterPropertyTypeConflictsForChange(
+      findPropertyTypeConflicts(existingEntries),
+      findPropertyTypeConflicts(prospectiveEntries),
+      prospectiveEntry,
+      computedKey
+    );
+    if (conflicts.length === 0) return { resultType: requestedType, changes: [] };
+
+    this.propertyTypeConflictModalOpen = true;
+    const result = await new PropertyTypeConflictModal(this.app, {
+      conflicts,
+      activeConflictKey: computedKey,
+      mode: "confirm-change",
+    }, {
+      onClosed: () => {
+        this.propertyTypeConflictModalOpen = false;
+      },
+    }).openAndWait();
+    if (result.action === "cancel") return null;
+    if (result.action === "ignore") return { resultType: requestedType, changes: [] };
+    return this.resolveComputedTypeDecisionFromModalResult(result, computedKey);
+  }
+
+  private buildProspectivePropertyConflictEntries(
+    key: string,
+    type: ColumnDef["type"]
+  ): PropertyTypeConflictEntry[] {
+    const currentEntry = this.getCurrentEntry();
+    return this.viewEntries.map((entry) => {
+      const config = this.cloneDatabaseConfig(entry.config);
+      if (currentEntry?.sourcePath === entry.sourcePath) {
+        this.applyPropertyTypeToConfig(config, {
+          databaseId: config.id || entry.sourcePath,
+          databasePath: entry.sourcePath,
+          key,
+          sourceKind: "column",
+          type,
+        });
+      }
+      return { sourcePath: entry.sourcePath, config };
+    });
+  }
+
+  private buildProspectivePropertyConflictEntriesForRename(
+    oldKey: string,
+    newKey: string
+  ): PropertyTypeConflictEntry[] {
+    const currentEntry = this.getCurrentEntry();
+    return this.viewEntries.map((entry) => {
+      const config = this.cloneDatabaseConfig(entry.config);
+      if (currentEntry?.sourcePath === entry.sourcePath) {
+        for (const col of config.schema.columns || []) {
+          if (col.key !== oldKey) continue;
+          const oldComputedKey = getComputedStorageKey(col);
+          const newComputedKey = col.type === "computed" ? normalizeComputedStorageKey(newKey) : newKey;
+          col.key = newKey;
+          if (col.type === "computed") {
+            col.computedKey = newComputedKey;
+            const computed = config.schema.computedFields.find((field) => field.key === oldComputedKey);
+            if (computed) {
+              computed.key = newComputedKey;
+              computed.label = col.label;
+            }
+          }
+          break;
+        }
+      }
+      return { sourcePath: entry.sourcePath, config };
+    });
+  }
+
+  private buildProspectivePropertyConflictEntriesForComputedType(
+    col: ColumnDef,
+    type: ComputedFieldDef["type"]
+  ): PropertyTypeConflictEntry[] {
+    const currentEntry = this.getCurrentEntry();
+    const computedKey = col.computedKey || col.key;
+    return this.viewEntries.map((entry) => {
+      const config = this.cloneDatabaseConfig(entry.config);
+      if (currentEntry?.sourcePath === entry.sourcePath) {
+        const targetCol = config.schema.columns.find((candidate) => candidate.key === col.key);
+        if (targetCol) {
+          targetCol.type = "computed";
+          targetCol.computedKey = computedKey;
+        }
+        const existing = config.schema.computedFields.find((field) => field.key === computedKey);
+        if (existing) {
+          existing.type = type;
+        } else {
+          config.schema.computedFields.push({
+            key: computedKey,
+            label: targetCol?.label || col.label,
+            expression: "",
+            type,
+          });
+        }
+      }
+      return { sourcePath: entry.sourcePath, config };
+    });
+  }
+
+  private buildPropertyConflictEntries(): PropertyTypeConflictEntry[] {
+    return this.viewEntries.map((entry) => ({
+      sourcePath: entry.sourcePath,
+      config: this.cloneDatabaseConfig(entry.config),
+    }));
+  }
+
+  private resolveColumnTypeDecisionFromModalResult(
+    result: Extract<PropertyTypeConflictModalResult, { action: "resolve" }>,
+    currentKey: string
+  ): { type?: ColumnDef["type"]; changes: PropertyTypeConflictChange[] } {
+    const entry = this.getCurrentEntry();
+    const currentDatabaseId = entry ? (entry.config.id || entry.sourcePath) : "";
+    const currentDatabasePath = entry?.sourcePath;
+    const currentChange = result.changes.find((change) =>
+      change.key === currentKey &&
+      change.sourceKind === "column" &&
+      (currentDatabasePath ? change.databasePath === currentDatabasePath : change.databaseId === currentDatabaseId)
+    );
+    const type = isColumnType(currentChange?.type) ? currentChange.type : undefined;
+    return {
+      type,
+      changes: result.changes.filter((change) => !(
+        change.key === currentKey &&
+        change.sourceKind === "column" &&
+        (currentDatabasePath ? change.databasePath === currentDatabasePath : change.databaseId === currentDatabaseId)
+      )),
+    };
+  }
+
+  private resolveComputedTypeDecisionFromModalResult(
+    result: Extract<PropertyTypeConflictModalResult, { action: "resolve" }>,
+    currentKey: string
+  ): { resultType?: ComputedFieldDef["type"]; changes: PropertyTypeConflictChange[] } {
+    const entry = this.getCurrentEntry();
+    const currentDatabaseId = entry ? (entry.config.id || entry.sourcePath) : "";
+    const currentDatabasePath = entry?.sourcePath;
+    const currentChange = result.changes.find((change) =>
+      change.key === currentKey &&
+      change.sourceKind === "computed" &&
+      (currentDatabasePath ? change.databasePath === currentDatabasePath : change.databaseId === currentDatabaseId)
+    );
+    const resultType = isComputedFieldType(currentChange?.type) ? currentChange.type : undefined;
+    return {
+      resultType,
+      changes: result.changes.filter((change) => !(
+        change.key === currentKey &&
+        change.sourceKind === "computed" &&
+        (currentDatabasePath ? change.databasePath === currentDatabasePath : change.databaseId === currentDatabaseId)
+      )),
+    };
+  }
+
+  private async applyPropertyTypeConflictChanges(changes: PropertyTypeConflictChange[], currentKey: string): Promise<void> {
+    const touched = new Set<string>();
+    for (const change of changes) {
+      const entry = this.viewEntries.find((candidate) => propertyTypeChangeTargetsEntry(candidate, change));
+      if (!entry) continue;
+      if (!this.applyPropertyTypeToConfig(entry.config, change)) continue;
+      touched.add(entry.sourcePath);
+    }
+    for (const sourcePath of touched) {
+      const entry = this.viewEntries.find((candidate) => candidate.sourcePath === sourcePath);
+      if (!entry) continue;
+      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+      if (!(file instanceof TFile)) continue;
+      await this.dataSource.updateViewDefFile(file, entry.config, {
+        dbId: entry.config.id,
+        dbPath: entry.sourcePath,
+        sourceInstanceId: this.instanceId,
+      });
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+    }
+    if (touched.size > 0) {
+      new Notice(t("propertyConflict.updatedDefinitions", { count: touched.size, key: currentKey }));
+    }
+  }
+
+  private applyPropertyTypeToConfig(config: DatabaseConfig, change: PropertyTypeConflictChange): boolean {
+    if (change.sourceKind === "computed") {
+      const field = config.schema.computedFields.find((candidate) => candidate.key === change.key);
+      if (!field || !isComputedFieldType(change.type) || field.type === change.type) return false;
+      field.type = change.type;
+      return true;
+    }
+    const col = config.schema.columns.find((candidate) => candidate.key === change.key);
+    if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed") return false;
+    return this.applyColumnTypeToColumn(col, change.type);
+  }
+
+  private applyColumnTypeToColumn(col: ColumnDef, type: ColumnDef["type"]): boolean {
+    if (col.type === type || col.type === "computed") return false;
+    col.type = type;
+    if (isOptionColumnType(type)) {
+      if (!col.statusOptions?.length) {
+        col.statusOptions = type === "status" ? this.getDefaultStatusOptions() : [];
+        col.statusPresetId = type === "status" ? this.getDefaultStatusPresetId() : undefined;
+      } else {
+        col.statusPresetId = undefined;
+      }
+    } else {
+      col.statusOptions = undefined;
+      col.statusPresetId = undefined;
+    }
+    return true;
   }
 
   private getFilesForConfig(config: ViewConfig): TFile[] {
@@ -3845,6 +4260,7 @@ export class DatabaseView extends FileView {
 
   private render(): void {
     this.applyDisplayWidth();
+    this.closeCalendarTimelineSearchResultsPanel();
     this.containerEl_?.toggleClass("has-selection-status", false);
     if (!this.hasActiveDatabase()) {
       this.applyViewTypeClass("table");
@@ -3925,11 +4341,13 @@ export class DatabaseView extends FileView {
       this.renderTable(config);
     }
     if (config.viewType === "chart") this.renderSummary(config);
+    this.renderCalendarTimelineSearchResultsPanel(config);
     this.renderSelectionStatusBar();
     // Clear pending-show flags after one render cycle
     this.pendingShowColumns.clear();
     this.applyPendingColumnHighlight();
     this.revealPendingNewRow();
+    this.revealPendingSearchResult();
     this.lastRenderedViewType = viewType;
     if (viewTypeChanged && (viewType === "calendar" || viewType === "timeline")) {
       this.resetCalendarTimelineScroll();
@@ -3944,6 +4362,122 @@ export class DatabaseView extends FileView {
   private resetCalendarTimelineScroll(): void {
     if (!this.containerEl_) return;
     this.containerEl_.scrollTop = 0;
+  }
+
+  private renderCalendarTimelineSearchResultsPanel(config: ViewConfig): void {
+    this.closeCalendarTimelineSearchResultsPanel();
+    if (!this.containerEl_ || (config.viewType !== "calendar" && config.viewType !== "timeline")) return;
+    const query = this.vs().searchText.trim();
+    if (!query) return;
+    const searchControl = this.containerEl_.querySelector<HTMLElement>(".db-search-control");
+    const searchInput = searchControl?.querySelector<HTMLInputElement>(".db-search-input");
+    if (!searchControl || !searchInput) return;
+    if (window.activeDocument.activeElement !== searchInput) return;
+    const visibleRange = config.viewType === "timeline"
+      ? this.calendarTimelineRenderer.getCurrentVisibleRange()
+      : this.calendarRenderer.getCurrentVisibleRange();
+    const results = buildCalendarTimelineSearchResults(this.rows, config, visibleRange);
+    const panel = window.activeDocument.body.createDiv({ cls: "db-calendar-search-results-popover" });
+    this.calendarTimelineSearchResultsEl = panel;
+    this.positionCalendarTimelineSearchResultsPanel(panel, searchControl);
+    this.renderCalendarTimelineSearchResultsContent(panel, results, query);
+    panel.onmousedown = (event) => {
+      event.preventDefault();
+    };
+    searchInput.onblur = () => {
+      this.closeCalendarTimelineSearchResultsPanel();
+    };
+    searchInput.onkeydown = (event) => {
+      if (event.key !== "Escape") return;
+      if (this.calendarTimelineSearchResultsEl?.isConnected) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeCalendarTimelineSearchResultsPanel();
+        searchInput.blur();
+      }
+    };
+  }
+
+  private renderCalendarTimelineSearchResultsContent(panel: HTMLElement, results: CalendarTimelineSearchResults, query: string): void {
+    panel.createDiv({
+      cls: "db-calendar-search-results-summary",
+      text: t("search.calendarTimelineSummary", { total: results.totalCount, visible: results.visibleCount }),
+    });
+    if (results.totalCount === 0) {
+      panel.createDiv({ cls: "db-calendar-search-results-empty", text: t("search.noMatches") });
+      return;
+    }
+    const list = panel.createDiv({ cls: "db-calendar-search-results-list" });
+    const currentRangeItems = results.items.filter((item) => item.inCurrentRange);
+    const outsideRangeItems = results.items.filter((item) => !item.inCurrentRange);
+    const visibleItems = [...currentRangeItems, ...outsideRangeItems].slice(0, 50);
+    const currentVisibleItems = visibleItems.filter((item) => item.inCurrentRange);
+    const outsideVisibleItems = visibleItems.filter((item) => !item.inCurrentRange);
+    const renderSection = (label: string, items: CalendarTimelineSearchResultItem[]) => {
+      if (items.length === 0) return;
+      const section = list.createDiv({ cls: "db-calendar-search-results-section" });
+      section.createDiv({ cls: "db-calendar-search-results-section-title", text: label });
+      for (const item of items) this.renderCalendarTimelineSearchResultButton(section, item, query);
+    };
+    renderSection(t("search.inCurrentRange"), currentVisibleItems);
+    renderSection(t("search.outsideCurrentRange"), outsideVisibleItems);
+    if (results.totalCount > visibleItems.length) {
+      panel.createDiv({
+        cls: "db-calendar-search-results-more",
+        text: t("search.moreResults", { count: results.totalCount - visibleItems.length }),
+      });
+    }
+  }
+
+  private renderCalendarTimelineSearchResultButton(list: HTMLElement, item: CalendarTimelineSearchResultItem, query: string): void {
+    const button = list.createEl("button", {
+      cls: `db-calendar-search-result${item.inCurrentRange ? " is-current-range" : ""}`,
+      attr: { type: "button" },
+    });
+    renderSearchHighlightedText(button.createSpan({ cls: "db-calendar-search-result-title" }), item.title || t("common.untitled"), query);
+    renderSearchHighlightedText(button.createSpan({ cls: "db-calendar-search-result-date" }), formatCalendarTimelineSearchResultDate(item), query);
+    button.onclick = (event) => {
+      event.preventDefault();
+      this.closeCalendarTimelineSearchResultsPanel();
+      const activeEl = window.activeDocument.activeElement;
+      if (activeEl instanceof HTMLElement) activeEl.blur();
+      this.jumpToCalendarTimelineSearchResult(item);
+    };
+  }
+
+  private positionCalendarTimelineSearchResultsPanel(panel: HTMLElement, anchor: HTMLElement): void {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.max(320, Math.min(480, window.innerWidth - 16));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 80);
+    panel.setCssProps({
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+    });
+  }
+
+  private closeCalendarTimelineSearchResultsPanel(): void {
+    this.calendarTimelineSearchResultsEl?.remove();
+    this.calendarTimelineSearchResultsEl = null;
+  }
+
+  private jumpToCalendarTimelineSearchResult(item: CalendarTimelineSearchResultItem): void {
+    const config = this.getConfig();
+    if (!config) return;
+    this.pendingSearchResultRevealPath = item.filePath;
+    if (config.viewType === "timeline") {
+      const timeMinutes = (config.timelineScale || "week") === "day" ? item.startMinutes : undefined;
+      this.updateTimelineAnchor(item.startDateKey, t("undo.timelineAnchorConfig"), timeMinutes);
+      return;
+    }
+    if (config.viewType !== "calendar") return;
+    config.calendarMonth = item.startDateKey.slice(0, 7);
+    config.calendarWeekStart = item.startDateKey;
+    config.calendarDay = item.startDateKey;
+    this.pendingUndoLabel = t("undo.calendarMonthConfig");
+    this.scheduleConfigSave();
+    this.refresh();
   }
 
   private getTimelineRenderConfig(config: ViewConfig): ViewConfig {
@@ -4444,6 +4978,22 @@ export class DatabaseView extends FileView {
     });
   }
 
+  private revealPendingSearchResult(): void {
+    const path = this.pendingSearchResultRevealPath;
+    if (!path || !this.containerEl_) return;
+    const target = this.findRenderedRowElement(path);
+    if (!target) return;
+    this.pendingSearchResultRevealPath = undefined;
+    window.requestAnimationFrame(() => {
+      if (!target.isConnected) return;
+      target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      target.addClass("is-new-record-highlight");
+      window.setTimeout(() => {
+        if (target.isConnected) target.removeClass("is-new-record-highlight");
+      }, 2200);
+    });
+  }
+
   /** Reveal a wide list row without asking the browser to scroll outer Obsidian containers. */
   private revealListRowLeadingEdge(target: HTMLElement): void {
     if (!this.containerEl_) return;
@@ -4573,6 +5123,19 @@ export class DatabaseView extends FileView {
   private async openRow(row: RowData): Promise<void> {
     await this.syncComputedFieldsNow(false);
     this.dataSource.openNote(row.file);
+  }
+
+  private async duplicateRow(row: RowData): Promise<void> {
+    try {
+      const file = await this.dataSource.duplicateNote(row.file, t("menu.copySuffix"));
+      new Notice(t("notice.duplicatedRecord", { path: file.path }));
+      this.pendingNewFilePath = file.path;
+      this.pendingNewRecord = { file, frontmatter: { ...row.frontmatter }, expiresAt: Date.now() + 8000 };
+      await this.refreshAfterSave();
+    } catch (err) {
+      console.error("Note Database: failed to duplicate row", err);
+      new Notice(t("errors.deleteFailed", { error: String(err) }));
+    }
   }
 
   private renderCell(
@@ -4942,44 +5505,21 @@ export class DatabaseView extends FileView {
   private async copySelectedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
     const selected = this.getSelectedCellAddresses();
     if (selected.length === 0) return;
-    const content = this.serializeSelectedCells(format);
-    await navigator.clipboard.writeText(content);
-    new Notice(t("notice.copiedCells", { count: selected.length }));
-  }
-
-  private serializeSelectedCells(format: "tsv" | "markdown" | "csv"): string {
     const rowPaths = this.getRenderedTableRowPaths();
     const colKeys = this.getRenderedTableColumnKeys();
-    const selected = this.getSelectedCellAddresses();
-    const selectedSet = new Set(selected.map((cell) => `${cell.rowPath}\u0000${cell.colKey}`));
     const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
     const colByKey = new Map(this.getConfig().schema.columns.map((col) => [col.key, col]));
-    const matrix: string[][] = [];
-    const includedColKeys = colKeys.filter((colKey) => selected.some((cell) => cell.colKey === colKey));
-    for (const rowPath of rowPaths) {
-      const values: string[] = [];
-      for (const colKey of colKeys) {
-        if (!selectedSet.has(`${rowPath}\u0000${colKey}`)) continue;
-        const row = rowByPath.get(rowPath);
-        const col = colByKey.get(colKey);
-        values.push(row && col ? this.getColumnDisplayText(row, col) : "");
-      }
-      if (values.length > 0) matrix.push(values);
-    }
-    if (format === "markdown") {
-      const headers = includedColKeys.map((key) => colByKey.get(key)?.label || key);
-      const escapeMarkdown = (value: string) => value.replace(/\|/g, "\\|").replace(/\n/g, " ");
-      return [
-        `| ${headers.map(escapeMarkdown).join(" | ")} |`,
-        `| ${headers.map(() => "---").join(" | ")} |`,
-        ...matrix.map((row) => `| ${row.map(escapeMarkdown).join(" | ")} |`),
-      ].join("\n");
-    }
-    if (format === "csv") {
-      const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
-      return matrix.map((row) => row.map(escapeCsv).join(",")).join("\n");
-    }
-    return matrix.map((row) => row.join("\t")).join("\n");
+    const content = serializeClipboardSelectedCells(
+      format,
+      selected,
+      rowPaths,
+      colKeys,
+      rowByPath,
+      colByKey,
+      (row, col) => this.getColumnDisplayText(row, col),
+    );
+    await navigator.clipboard.writeText(content);
+    new Notice(t("notice.copiedCells", { count: selected.length }));
   }
 
   private async fillSelectedCells(input: string): Promise<void> {
@@ -5008,7 +5548,7 @@ export class DatabaseView extends FileView {
   private async pasteCellsFromClipboard(): Promise<void> {
     if (!this.cellSelection) return;
     const text = await navigator.clipboard.readText();
-    const matrix = this.parseClipboardTable(text);
+    const matrix = parseClipboardTable(text);
     if (matrix.length === 0 || matrix.every((row) => row.length === 0)) return;
     const plan = this.getPasteTargetPlan(matrix);
     if (plan.targets.length === 0) {
@@ -5029,40 +5569,6 @@ export class DatabaseView extends FileView {
     if (changes.length === 0) return;
     await this.applyCellChanges(changes, t("undo.pasteCells"));
     this.showBatchNotice("pasted", changes.length, skipped);
-  }
-
-  private parseClipboardTable(text: string): string[][] {
-    const trimmed = text.trim();
-    if (!trimmed) return [];
-    const lines = trimmed.split(/\r?\n/);
-    const markdownRows = lines
-      .filter((line) => /^\s*\|/.test(line) && !/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line))
-      .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim().replace(/\\\|/g, "|")));
-    if (markdownRows.length > 0) return markdownRows;
-    if (trimmed.includes("\t")) return lines.map((line) => line.split("\t"));
-    return lines.map((line) => this.parseCsvLine(line));
-  }
-
-  private parseCsvLine(line: string): string[] {
-    const values: string[] = [];
-    let current = "";
-    let quoted = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"' && line[i + 1] === '"') {
-        current += '"';
-        i += 1;
-      } else if (char === '"') {
-        quoted = !quoted;
-      } else if (char === "," && !quoted) {
-        values.push(current);
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-    values.push(current);
-    return values;
   }
 
   private getPasteTargetPlan(matrix: string[][]): BatchTargetPlan<FillTarget & { value: string }> {
@@ -5189,7 +5695,11 @@ export class DatabaseView extends FileView {
     return value;
   }
 
-  private async applyCellChanges(changes: CellEditChange[], label: string): Promise<void> {
+  private async applyCellChanges(
+    changes: CellEditChange[],
+    label: string,
+    options: { preserveCellSelection?: boolean } = {}
+  ): Promise<void> {
     const effectiveChanges = changes.filter((change) => change.key !== "file.name" && !isReadonlyFileField(change.key));
     if (effectiveChanges.length === 0) return;
     const updatesByPath = new Map<string, { file: TFile; updates: Record<string, unknown> }>();
@@ -5206,8 +5716,12 @@ export class DatabaseView extends FileView {
       } catch (err) {
         if (appliedChanges.length > 0) {
           this.pushHistory({ type: "cells", label, changes: appliedChanges });
-          this.clearCellSelection();
+          if (!options.preserveCellSelection) this.clearCellSelection();
           await this.refreshAfterSave();
+          if (options.preserveCellSelection) {
+            this.renderCellSelectionClasses();
+            this.renderSelectionStatusBar();
+          }
           this.rerenderToolbar();
         }
         throw err;
@@ -5226,8 +5740,12 @@ export class DatabaseView extends FileView {
         }
       }
     }
-    this.clearCellSelection();
+    if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
+    if (options.preserveCellSelection) {
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
+    }
     this.rerenderToolbar();
   }
 
@@ -6148,6 +6666,28 @@ export class DatabaseView extends FileView {
     });
   }
 
+  private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
+    if (!this.containerEl_) return;
+    const config = this.getConfig();
+    if (!config) return;
+    const columns = getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns);
+    openRecordDetailPanel({
+      anchorEl,
+      host: this.containerEl_,
+      row,
+      columns,
+      config,
+      app: this.app,
+      actions: {
+        editCell: (target, r, col, event) => this.cellRenderer.startEdit(target, r, col, event),
+        editFileName: (target, r, currentName, restore) => this.cellRenderer.editFileName(target, r, currentName, restore),
+        showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
+        openRow: (r) => this.dataSource.openNote(r.file),
+        isReadOnly: false,
+      },
+    });
+  }
+
   refresh(options: { viewport?: DatabaseViewportRequest } = {}): void {
     if (!this.containerEl_) return;
     const nextViewType = this.hasActiveDatabase() ? (this.getConfig()?.viewType || "table") : "table";
@@ -6188,6 +6728,13 @@ export class DatabaseView extends FileView {
     }
     const searchQuery = this.vs().searchText;
     if (searchQuery) highlightSearchMatches(this.containerEl_, searchQuery);
+    // 视图 re-render 后刷新常驻面板：同记录则局部刷新字段（编辑后常驻），否则关闭（记录被筛掉/切库）
+    const openDetailPath = getOpenRecordDetailPath();
+    if (openDetailPath) {
+      const newRow = this.rows.find((r) => r.file.path === openDetailPath);
+      if (newRow) refreshRecordDetailPanel(newRow);
+      else closeRecordDetailPanel();
+    }
   }
 
 }

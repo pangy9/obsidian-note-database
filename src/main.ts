@@ -16,6 +16,10 @@ import {
 } from "./data/ColumnTypes";
 import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/EmbeddedDatabaseRenderer";
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
+import {
+  confirmNewDatabasePropertyTypeConflicts,
+  MutablePropertyTypeConflictEntry,
+} from "./views/PropertyTypeConflictWorkflow";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
 import { absorbTypeFilterIntoRules, combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
@@ -53,6 +57,7 @@ interface BaseFileViewData {
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
   dataSource!: DataSource;
+  private readonly instanceId = generateId();
   private getActiveDbView(): DatabaseView | null {
     const leaf = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE)[0];
     return leaf?.view instanceof DatabaseView ? leaf.view : null;
@@ -771,6 +776,7 @@ export default class NoteDatabasePlugin extends Plugin {
     this.assignColumnWidthsFromData(config);
     const uniqueName = this.getUniqueDatabaseName(file.basename);
     config.name = uniqueName;
+    if (!await this.confirmNewDatabasePropertyTypeConflicts(config)) return;
     const created = await this.dataSource.createViewDefFile(
       this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
       uniqueName,
@@ -808,6 +814,29 @@ export default class NoteDatabasePlugin extends Plugin {
     let i = 1;
     while (existing.has(`${baseName} ${i}`)) i++;
     return `${baseName} ${i}`;
+  }
+
+  async confirmNewDatabasePropertyTypeConflicts(config: DatabaseConfig): Promise<boolean> {
+    const existingEntries: MutablePropertyTypeConflictEntry[] = this.dataSource.getViewDefFiles().map((entry) => ({
+      config: entry.config,
+      sourcePath: entry.file.path,
+    }));
+    const result = await confirmNewDatabasePropertyTypeConflicts(this.app, existingEntries, { config }, {
+      getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
+      getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
+    });
+    if (!result) return false;
+    for (const entry of result.changedEntries) {
+      if (!entry.sourcePath) continue;
+      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+      if (!(file instanceof TFile)) continue;
+      await this.dataSource.updateViewDefFile(file, entry.config, {
+        dbId: entry.config.id,
+        dbPath: entry.sourcePath,
+        sourceInstanceId: this.instanceId,
+      });
+    }
+    return true;
   }
 
   async exportCurrentViewAsCsvMarkdownZip(): Promise<void> {
@@ -944,37 +973,6 @@ export default class NoteDatabasePlugin extends Plugin {
     if (!columns.some((col) => col.key === "file.name")) {
       columns.unshift({ key: "file.name", label: t("defaults.nameColumn"), type: "text" });
     }
-    const colByKey = new Map(columns.map((col) => [col.key, col]));
-
-    let imported = 0;
-    for (const row of rows) {
-      const title = (row[titleIndex] || "").trim() || t("defaults.untitledNote");
-      const page = markdownByTitle.get(this.normalizeCsvMarkdownTitle(title));
-      const frontmatter: Record<string, unknown> = { ...(page?.frontmatter || {}) };
-      delete frontmatter["db_view"];
-      delete frontmatter["database"];
-      for (const item of dataHeaders) {
-        const key = columnKeys.get(item.index)!;
-        const col = colByKey.get(key);
-        if (col?.type === "computed") continue;
-        const raw = row[item.index] || "";
-        const value = this.parseCsvMarkdownCellValue(raw, col?.type || "text", key);
-        if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
-        if (key === "file.tags") {
-          frontmatter["tags"] = toValidObsidianTagValues(value);
-          continue;
-        }
-        if (isFileFieldKey(key)) continue;
-        frontmatter[key] = value;
-      }
-      const body = page?.body || "";
-      const path = this.getAvailableVaultPath(folder, `${this.sanitizeFilename(title)}.md`);
-      const yaml = stringifyYaml(frontmatter).trim();
-      const content = yaml ? `---\n${yaml}\n---\n\n${body}` : body;
-      await this.app.vault.create(path, content || `# ${title}\n`);
-      imported++;
-    }
-
     const schema = {
       columns,
       computedFields: metadata?.database?.schema?.computedFields
@@ -1029,6 +1027,37 @@ export default class NoteDatabasePlugin extends Plugin {
           columnOrder: columns.map((col) => col.key),
         }],
       };
+    if (!await this.confirmNewDatabasePropertyTypeConflicts(config)) return;
+
+    const colByKey = new Map(columns.map((col) => [col.key, col]));
+    let imported = 0;
+    for (const row of rows) {
+      const title = (row[titleIndex] || "").trim() || t("defaults.untitledNote");
+      const page = markdownByTitle.get(this.normalizeCsvMarkdownTitle(title));
+      const frontmatter: Record<string, unknown> = { ...(page?.frontmatter || {}) };
+      delete frontmatter["db_view"];
+      delete frontmatter["database"];
+      for (const item of dataHeaders) {
+        const key = columnKeys.get(item.index)!;
+        const col = colByKey.get(key);
+        if (col?.type === "computed") continue;
+        const raw = row[item.index] || "";
+        const value = this.parseCsvMarkdownCellValue(raw, col?.type || "text", key);
+        if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
+        if (key === "file.tags") {
+          frontmatter["tags"] = toValidObsidianTagValues(value);
+          continue;
+        }
+        if (isFileFieldKey(key)) continue;
+        frontmatter[key] = value;
+      }
+      const body = page?.body || "";
+      const path = this.getAvailableVaultPath(folder, `${this.sanitizeFilename(title)}.md`);
+      const yaml = stringifyYaml(frontmatter).trim();
+      const content = yaml ? `---\n${yaml}\n---\n\n${body}` : body;
+      await this.app.vault.create(path, content || `# ${title}\n`);
+      imported++;
+    }
     const file = await this.dataSource.createViewDefFile(this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder, dbName, config);
     new Notice(t("notice.csvMarkdownImportComplete", { count: imported, path: file.path }));
     this.dataSource.openNote(file);

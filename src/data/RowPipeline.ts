@@ -12,6 +12,7 @@ import { parseDateTimeParts } from "./DateTimeFormat";
 import { getDefaultEventDateField } from "./CalendarTimelineModel";
 import { getColumnDisplayType } from "./ColumnDisplay";
 import { getDateSearchDisplayText, isDateSearchColumn, matchesDateSearch, normalizeSearchQuery } from "./Search";
+import { resolveTitleFieldDisplay } from "./TitleFieldDisplay";
 
 export class RowPipeline {
   private queryEngine = new QueryEngine();
@@ -133,18 +134,14 @@ export class RowPipeline {
 
   private getCalendarTimelineTitleField(config: ViewConfig): string | undefined {
     if (config.viewType === "timeline") {
-      return config.timelineTitleField || config.calendarTitleField || config.titleField;
+      return config.timelineTitleField;
     }
-    return config.calendarTitleField || config.titleField;
+    return config.calendarTitleField;
   }
 
   private getCalendarTimelineSearchTitle(row: RowData, config: ViewConfig): string {
-    const titleField = this.getCalendarTimelineTitleField(config);
-    if (titleField) {
-      const value = stringifyValue(this.getSearchFieldValue(row, config, titleField)).trim();
-      if (value) return value;
-    }
-    return row.file.basename || row.file.name.replace(/\.md$/i, "");
+    const display = resolveTitleFieldDisplay(row, config, this.getCalendarTimelineTitleField(config));
+    return display.isEmpty || display.isHidden ? "" : display.text;
   }
 
   private getSearchFieldValue(row: RowData, config: ViewConfig, field: string): unknown {

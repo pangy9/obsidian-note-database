@@ -113,9 +113,15 @@ describe("text render mode wiring", () => {
   });
 
   it("card/list title fields stay plain text even when markdown mode exists for field values", () => {
-    expect(read("../views/BoardRenderer.ts")).toContain("titleEl.textContent = title");
-    expect(read("../views/GalleryRenderer.ts")).toContain("titleEl.textContent = title");
-    expect(read("../views/ListRenderer.ts")).toContain("title.textContent = titleText");
+    expect(read("../views/BoardRenderer.ts")).toContain("resolveTitleFieldDisplay");
+    expect(read("../views/BoardRenderer.ts")).toContain("titleEl.textContent = title.text");
+    expect(read("../views/GalleryRenderer.ts")).toContain("resolveTitleFieldDisplay");
+    expect(read("../views/GalleryRenderer.ts")).toContain("titleEl.textContent = title.text");
+    expect(read("../views/ListRenderer.ts")).toContain("resolveTitleFieldDisplay");
+    expect(read("../views/ListRenderer.ts")).toContain("title.textContent = titleDisplay.text");
+    expect(read("../views/BoardRenderer.ts")).toContain("is-empty-title");
+    expect(read("../views/GalleryRenderer.ts")).toContain("is-empty-title");
+    expect(read("../views/ListRenderer.ts")).toContain("is-empty-title");
   });
 
   it("table view renders markdown mode via parseInlineMarkdown + renderInlineMarkdown", () => {

@@ -6,7 +6,7 @@ import { ComputedFieldEngine } from "../../data/ComputedField";
 import { getComputedStorageKey } from "../../data/ColumnDisplay";
 import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef } from "../../data/types";
 import { getEffectiveLocale, t } from "../../i18n";
-import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "../PropertyTypeIcon";
 import { createDropdownField } from "../DropdownField";
 import { confirmWithModal } from "./ConfirmModal";
 import { safeString } from "../../data/SafeString";
@@ -138,9 +138,10 @@ export class FormulaModal extends Modal {
     private rows: RowData[],
     private columns: ColumnDef[],
     private computedSyncMode: ComputedSyncMode,
-    private onSave: (result: FormulaSaveResult) => Promise<void>,
+    private onSave: (result: FormulaSaveResult) => Promise<void | boolean>,
     private baseThisFile?: RowData["file"],
-    private baseThisFrontmatter?: Record<string, unknown>
+    private baseThisFrontmatter?: Record<string, unknown>,
+    private initialResultType?: ComputedFieldDef["type"]
   ) {
     super(app);
   }
@@ -152,7 +153,7 @@ export class FormulaModal extends Modal {
     this.contentEl.addClass("formula-workbench-modal");
     this.originalExpression = this.computedField?.expression || "";
     this.originalResultType = this.computedField?.type || "text";
-    this.selectedResultType = this.originalResultType;
+    this.selectedResultType = this.initialResultType || this.originalResultType;
     this.selectedPreviewIndex = 0;
     this.expressionSyntax = this.computedField?.expressionSyntax || "note-database";
 
@@ -197,10 +198,11 @@ export class FormulaModal extends Modal {
     createDropdownField({
       parent: typeLabel,
       label: t("formula.resultType"),
-      options: RESULT_TYPE_KEYS.map(([value, labelKey]) => ({ value, text: t(labelKey) })),
+      options: RESULT_TYPE_KEYS.map(([value, labelKey]) => ({ value, text: t(labelKey), icon: getPropertyDropdownIcon(value) })),
       value: this.selectedResultType,
       className: "db-modal-dropdown db-formula-result-type-dropdown",
       hideLabel: true,
+      renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (value) => {
         this.selectedResultType = value as ComputedFieldDef["type"];
         this.updatePreview();
@@ -590,11 +592,12 @@ export class FormulaModal extends Modal {
         return;
       }
       const expression = this.textarea.value.trim();
-      await this.onSave({
+      const saved = await this.onSave({
         expression,
         resultType: this.selectedResultType,
         expressionSyntax: this.expressionSyntax,
       });
+      if (saved === false) return;
       this.saved = true;
       this.close();
     };

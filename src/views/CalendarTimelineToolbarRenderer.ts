@@ -98,7 +98,7 @@ export class CalendarTimelineToolbarRenderer {
     this.renderSelect(data, t("viewConfig.eventTitleField"), this.getAnyFieldOptions(config), config.timelineTitleField || "", (value) => {
       config.timelineTitleField = value || undefined;
       actions.onChange(t("undo.timelineTitleFieldConfig"));
-    }, "text-cursor-input");
+    }, "text-cursor-input", true);
     this.renderSelect(data, t("viewConfig.timelineScale"), [
       { value: "day", text: t("viewConfig.timelineScale.day") },
       { value: "week", text: t("viewConfig.timelineScale.week") },
@@ -126,12 +126,30 @@ export class CalendarTimelineToolbarRenderer {
       actions.onChange(t("undo.yearDisplayModeConfig"));
     }, "calendar");
 
+    this.renderSwitch(data, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
+      config.showEmptyFields = value || undefined;
+      actions.onChange(t("undo.showEmptyFieldsConfig"));
+    }, "rows-3");
+
     const layout = this.createSection(panel, t("timeline.layoutSection"));
+    this.renderLayoutContent(layout, config, actions);
+
+    const style = this.createSection(panel, t("chart.optionsStyle"));
+    this.renderSelect(style, t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.timelineColorField || "", (value) => {
+      config.timelineColorField = value || undefined;
+      actions.onChange(t("undo.timelineColorFieldConfig"));
+    }, "palette");
+  }
+
+  /** layout section 内容：自定义列宽开关 + 列宽滑块 + (day)时段粒度。开关列宽只重建本 section，
+   *  不重建 data section（含 invalid 事件提示），避免无效事件提示「calculating→count」闪烁。 */
+  private renderLayoutContent(layout: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
+    layout.empty();
     this.renderSwitch(layout, t("viewConfig.customColumnWidth"), config.timelineColumnSizeMode === "custom", (checked) => {
       config.timelineColumnSizeMode = checked ? "custom" : undefined;
       actions.onChange(t("undo.timelineColumnWidthConfig"));
-      // 重建 popover，让列宽滑块行立即出现/消失（与 startDateField/endDateField 一致）。
-      if (this.popoverContent) this.renderTimelineOptions(this.popoverContent, config, actions);
+      // 只重建 layout section（让列宽滑块行立即出现/消失），不重建 data section 以免 invalid 提示闪烁
+      this.renderLayoutContent(layout, config, actions);
     }, "columns");
     if (config.timelineColumnSizeMode === "custom") {
       this.renderRange(layout, t("timeline.columnWidth"), config.timelineCustomUnitWidth ?? this.defaultUnitWidth(config), this.unitWidthMin(config), this.unitWidthMax(config), 1, (value) => {
@@ -150,12 +168,6 @@ export class CalendarTimelineToolbarRenderer {
         actions.onChange(t("undo.calendarSlotDurationConfig"));
       }, "clock");
     }
-
-    const style = this.createSection(panel, t("chart.optionsStyle"));
-    this.renderSelect(style, t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.timelineColorField || "", (value) => {
-      config.timelineColorField = value || undefined;
-      actions.onChange(t("undo.timelineColorFieldConfig"));
-    }, "palette");
   }
 
   private normalizeTimelineScale(value: string): NonNullable<ViewConfig["timelineScale"]> {
@@ -212,6 +224,7 @@ export class CalendarTimelineToolbarRenderer {
     value: string,
     onChange: (value: string) => void,
     icon: string,
+    searchable = options.length > 8,
   ): void {
     createDropdownField({
       parent,
@@ -222,21 +235,21 @@ export class CalendarTimelineToolbarRenderer {
       icon,
       className: "db-chart-options-dropdown",
       popoverClassName: "db-calendar-timeline-options-dropdown",
-      searchable: options.length > 8,
+      searchable,
       renderIcon: (iconEl, iconName) => {
         if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
       },
     });
   }
 
-  private renderSwitch(parent: HTMLElement, label: string, value: boolean, onChange: (checked: boolean) => void, icon?: string): void {
-    const row = parent.createDiv({ cls: "db-chart-options-row" });
-    if (icon) setIcon(row.createDiv({ cls: "db-chart-options-row-icon" }), icon);
-    row.createDiv({ cls: "db-chart-options-row-label", text: label });
-    const checkbox = row.createEl("input", { type: "checkbox", cls: "db-chart-options-switch" });
-    checkbox.checked = value;
-    checkbox.addEventListener("change", () => onChange(checkbox.checked));
-  }
+	private renderSwitch(parent: HTMLElement, label: string, value: boolean, onChange: (value: boolean) => void, icon: string): void {
+		const row = parent.createEl("label", { cls: "db-chart-options-row db-chart-options-switch-row" });
+		setIcon(row.createSpan({ cls: "db-chart-options-row-icon" }), icon);
+		row.createDiv({ cls: "db-chart-options-row-text" }).createSpan({ cls: "db-chart-options-label", text: label });
+		const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });
+		input.checked = value;
+		input.onchange = () => onChange(input.checked);
+	}
 
   private renderRange(parent: HTMLElement, label: string, value: number, min: number, max: number, step: number, onChange: (value: number) => void): void {
     const row = parent.createDiv({ cls: "db-chart-options-row db-calendar-range-row db-calendar-timeline-range-row" });

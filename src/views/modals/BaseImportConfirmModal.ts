@@ -4,7 +4,7 @@ import { applyRangeSelection, clearSelection, selectAll } from "../../data/Range
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
 import { createDropdownField } from "../DropdownField";
-import { renderPropertyTypeIcon } from "../PropertyTypeIcon";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "../PropertyTypeIcon";
 
 export interface BaseImportColumn extends ColumnDef {
   /** Number of files that have this property */
@@ -92,20 +92,17 @@ export class BaseImportConfirmModal extends Modal {
       };
       const typeTd = tr.createEl("td");
       typeTd.addClass("base-import-type-cell");
-      let iconEl = renderPropertyTypeIcon(typeTd, col);
       const typeLabels = COLUMN_TYPE_LABELS();
-      const typeDropdown = createDropdownField({
+      createDropdownField({
         parent: typeTd,
         label: t("baseImport.inferredType"),
-        options: BaseImportConfirmModal.TYPES.map((type) => ({ value: type, text: typeLabels[type] })),
+        options: BaseImportConfirmModal.TYPES.map((type) => ({ value: type, text: typeLabels[type], icon: getPropertyDropdownIcon(type) })),
         value: col.type,
         className: "db-modal-dropdown db-base-import-type-dropdown",
         hideLabel: true,
+        renderIcon: renderDropdownPropertyTypeIcon,
         onChange: (value) => {
           col.type = value as ColumnDef["type"];
-          iconEl.remove();
-          iconEl = renderPropertyTypeIcon(typeTd, col);
-          typeTd.insertBefore(iconEl, typeDropdown.button);
         },
       });
       tr.createEl("td", { text: col.fileCount > 0 ? String(col.fileCount) : "-" });

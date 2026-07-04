@@ -1,4 +1,4 @@
-import { App, Notice, setIcon } from "obsidian";
+import { App, Notice, setIcon, setTooltip } from "obsidian";
 import { ColumnDef, ComputedSyncMode, DatabaseConfig, DatabaseViewType, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusPresetDef, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { isObsidianAliasesKey, isObsidianTagsKey } from "../data/ColumnTypes";
@@ -283,6 +283,12 @@ export class ViewConfigPanelRenderer {
         config.showEmptyFields = value || undefined;
         actions.onChange(t("undo.showEmptyFieldsConfig"));
       });
+      if (config.viewType === "list") {
+        this.renderSwitch(panel, t("viewConfig.listCompactFields"), config.listCompactFields === true, (value) => {
+          config.listCompactFields = value || undefined;
+          actions.onChange(t("undo.listCompactFieldsConfig"));
+        });
+      }
     }
     if (config.viewType === "gallery") {
       this.renderGallerySettings(panel, config, actions);
@@ -411,7 +417,7 @@ export class ViewConfigPanelRenderer {
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row db-source-rules-setting" });
     row.createDiv({ cls: "db-view-config-label", text: t("viewConfig.sourceRules") });
-    const field = row.createDiv({ cls: "db-view-config-field" });
+    const field = row.createDiv({ cls: "db-view-config-field db-view-config-field-stack" });
     field.createDiv({ cls: "db-view-config-help db-source-rules-help", text: t("viewConfig.sourceRules.help") });
     const editor = field.createDiv({ cls: "db-source-rules-editor" });
     const tree = createEditableSourceRuleRoot(getSourceRuleTree(database.sourceRuleTree, database.sourceRules, database.sourceLogic));
@@ -869,8 +875,9 @@ export class ViewConfigPanelRenderer {
   }
 
   private createSourceRuleIconButton(parent: HTMLElement, icon: string, title: string, onClick: () => void): void {
-    const button = parent.createEl("button", { cls: "db-source-rule-icon-button", attr: { type: "button", title, "aria-label": title } });
+    const button = parent.createEl("button", { cls: "db-source-rule-icon-button", attr: { type: "button" } });
     setIcon(button, icon);
+    setTooltip(button, title, { delay: 100 });
     button.onclick = onClick;
   }
 
@@ -900,7 +907,7 @@ export class ViewConfigPanelRenderer {
     ];
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: t("viewConfig.computedSyncMode") });
-    const field = row.createDiv({ cls: "db-view-config-field" });
+    const field = row.createDiv({ cls: "db-view-config-field db-view-config-field-stack" });
     if (readOnly) {
       field.createDiv({
         cls: "db-view-config-readonly-value",
@@ -1026,7 +1033,7 @@ export class ViewConfigPanelRenderer {
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: t("viewConfig.newRecordFolder") });
-    const field = row.createDiv({ cls: "db-view-config-field" });
+    const field = row.createDiv({ cls: "db-view-config-field db-view-config-field-stack" });
 
     if (readOnly) {
       field.createDiv({
@@ -1122,7 +1129,8 @@ export class ViewConfigPanelRenderer {
       (value) => {
         config.titleField = value || undefined;
         actions.onChange(t("undo.titleFieldConfig"));
-      }
+      },
+      true
     );
   }
 
@@ -1201,7 +1209,8 @@ export class ViewConfigPanelRenderer {
     label: string,
     options: DropdownOption[],
     value: string,
-    onChange: (value: string) => void
+    onChange: (value: string) => void,
+    searchable = false
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
@@ -1217,6 +1226,7 @@ export class ViewConfigPanelRenderer {
       popoverClassName: "db-view-config-dropdown-popover",
       placeholder: t("common.notSet"),
       hideLabel: true,
+      searchable,
       renderIcon: hasPropertyIcons ? renderDropdownPropertyTypeIcon : undefined,
     });
   }
@@ -1241,7 +1251,7 @@ export class ViewConfigPanelRenderer {
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
-    const field = row.createDiv({ cls: "db-view-config-field" });
+    const field = row.createDiv({ cls: "db-view-config-field db-view-config-field-stack" });
     if (disabled) {
       field.createDiv({ cls: "db-view-config-readonly-value", text: value || t("common.notSet") });
       if (helpText) field.createDiv({ cls: "db-view-config-help", text: helpText });

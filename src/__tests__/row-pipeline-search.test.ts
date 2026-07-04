@@ -198,7 +198,7 @@ describe("RowPipeline search", () => {
     expect(build(rows, view, state("6-17"))).toEqual(["alpha.md"]);
   });
 
-  it("calendar and timeline search only uses visible event title/date fields, with file title fallback", () => {
+  it("calendar and timeline search only uses visible event title/date fields", () => {
     const view = config({
       viewType: "timeline",
       timelineStartDateField: "start",
@@ -222,8 +222,11 @@ describe("RowPipeline search", () => {
 
     expect(build(rows, view, state("launch"))).toEqual(["draft-alpha.md"]);
     expect(build(rows, view, state("draft-alpha"))).toEqual([]);
-    expect(build(rows, view, state("fallback-beta"))).toEqual(["fallback-beta.md"]);
+    expect(build(rows, view, state("fallback-beta"))).toEqual([]);
     expect(build(rows, view, state("needle"))).toEqual([]);
+
+    const fileTitleView = { ...view, timelineTitleField: undefined };
+    expect(build(rows, fileTitleView, state("fallback-beta"))).toEqual(["fallback-beta.md"]);
   });
 
   it("sets the full-view date display mode before building searchable rows", () => {

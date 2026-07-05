@@ -255,6 +255,10 @@ If Note Database helps you, a star or donation helps support continued developme
 
 ## Changelog
 
+### 1.2.4
+
+- Fixed table selection-column checkbox alignment.
+
 ### 1.2.3
 
 - Added global property-type conflict detection for database files, with an in-place resolution dialog for incompatible frontmatter storage shapes.

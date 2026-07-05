@@ -198,7 +198,7 @@ export class TableRenderer {
   }
 
   private getSelectionColumnWidth(): number {
-    return this.isPhoneLayout() ? 62 : 40;
+    return this.isPhoneLayout() ? 48 : 40;
   }
 
   private getAvailableTableWidth(tableWrap: HTMLElement): number {

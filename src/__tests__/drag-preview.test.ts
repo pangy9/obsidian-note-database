@@ -70,21 +70,26 @@ describe("drag preview targets", () => {
     const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
     const selectCol = cssRule(styles, ".note-database-container .db-table col.db-select-colgroup");
     const selectCell = cssRule(styles, ".note-database-container .db-table th.db-select-col,\n.note-database-container .db-table td.db-select-col");
-    const headerReserve = cssRule(styles, ".note-database-container .db-table th.db-select-col .db-select-inner::before");
-    const mobileHeaderReserve = cssRule(styles, ".is-phone .note-database-container .db-table th.db-select-col .db-select-inner::before");
-    const mobileCheckbox = cssRule(styles, ".is-phone .note-database-container .db-table th.db-select-col input[type=\"checkbox\"],\n.is-phone .note-database-container .db-table td.db-select-col input[type=\"checkbox\"]");
     const mobileMoveButton = cssRule(styles, ".is-phone .note-database-container .db-table-mobile-move-btn");
+    const mobileSelectCell = cssRule(styles, ".is-phone .note-database-container .db-table th.db-select-col,\n.is-phone .note-database-container .db-table td.db-select-col");
 
-    expect(tableRenderer).toContain("return this.isPhoneLayout() ? 62 : 40");
+    expect(tableRenderer).toContain("return this.isPhoneLayout() ? 48 : 40");
     expect(tableRenderer.indexOf("this.renderMobileMoveButton(selectInner")).toBeLessThan(tableRenderer.indexOf("const cb = selectInner.createEl(\"input\""));
     expect(selectCol).toContain("width: 40px");
     expect(selectCell).toContain("width: 40px");
-    expect(mobileHeaderReserve).toContain("flex-basis: 24px");
-    expect(mobileCheckbox).toContain("margin: 0 8px 0 auto");
+    expect(mobileSelectCell).toContain("width: 48px");
     expect(mobileMoveButton).toContain("flex: 0 0 24px");
     expect(mobileMoveButton).toContain("margin: 0");
-    expect(headerReserve).toContain('content: ""');
-    expect(headerReserve).toContain("flex: 0 0 17px");
+    // checkbox 用绝对定位钉在距右边缘固定位置：列宽 40px(桌面) / 48px(手机) 都含
+    // td 右边框 1px，db-select-inner 实际 content 宽 = 列宽 − 1。若用 margin-left:auto，
+    // 无手柄行算出的填充与有手柄行被手柄挤到的位置会差 1px，切换排序状态时抖动；
+    // 绝对定位让 checkbox 位置与手柄有无解耦，桌面/手机三种状态都必然重合。
+    const selectCheckbox = cssRule(styles, ".note-database-container .db-table .db-select-col .db-select-inner input[type=\"checkbox\"]");
+    expect(selectCheckbox).toContain("position: absolute");
+    expect(selectCheckbox).toContain("right: 6px");
+    expect(selectCheckbox).toContain("width: 16px");
+    expect(selectCheckbox).toContain("height: 16px");
+    expect(selectCheckbox).toContain("margin: 0");
   });
 
   it("uses shared targeted drop feedback for table, list, and gallery item reordering", () => {

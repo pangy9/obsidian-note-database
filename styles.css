@@ -3931,23 +3931,30 @@
   box-shadow: none;
 }
 
-/* 选择列内部容器：拖拽手柄（左）与 checkbox（右）同一行排布；
-   表头无手柄时 checkbox 同样贴右，与各行 checkbox 上下对齐。 */
+/* 选择列内部容器：手柄（左）走文档流垂直居中；checkbox 用绝对定位钉在距右
+   边缘固定 6px 处。checkbox 不参与 flex 计算，位置与「手柄有无」完全解耦——
+   表头、可拖拽行、有排序规则(无手柄)行三种状态下 checkbox 精确重合，切换
+   排序状态时零抖动。
+   必须用绝对定位：列宽 40px 含 td 右边框 1px，db-select-inner 实际 content
+   宽只有 39px；若用 margin-left:auto，无手柄行算出 17px、有手柄行被手柄
+   (margin 2 + width 16 = 18)挤到 18px，切换排序状态即出现 1px 错位。 */
 .note-database-container .db-table .db-select-col .db-select-inner {
+  position: relative;
   display: flex;
   align-items: center;
   width: 100%;
   height: 100%;
 }
 
-.note-database-container .db-table th.db-select-col .db-select-inner::before {
-  content: "";
-  flex: 0 0 17px;
-}
-
 .note-database-container .db-table .db-select-col .db-select-inner input[type="checkbox"] {
-  margin-left: auto;
-  flex: 0 0 auto;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 /* 笔记名称列的链接样式 */
@@ -14209,24 +14216,11 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 .is-phone .note-database-container .db-table col.db-select-colgroup,
 .is-phone .note-database-container .db-table th.db-select-col,
 .is-phone .note-database-container .db-table td.db-select-col {
-  width: 62px;
-  min-width: 62px;
-  max-width: 62px;
-}
-
-.is-phone .note-database-container .db-table .db-select-col .db-select-inner {
-  gap: 0;
-}
-
-.is-phone .note-database-container .db-table th.db-select-col .db-select-inner::before {
-  flex-basis: 24px;
-}
-
-.is-phone .note-database-container .db-table th.db-select-col input[type="checkbox"],
-.is-phone .note-database-container .db-table td.db-select-col input[type="checkbox"] {
-  display: inline-block;
-  margin: 0 8px 0 auto;
-  vertical-align: middle;
+  /* 48px = move button 24 + checkbox 16 + 右间距 8；与桌面同走「左侧控件文档流 +
+     checkbox 绝对定位 right:6」布局，避开 td 右边框 1px 的 content 误差。 */
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
 }
 
 .is-phone .note-database-container .db-table-mobile-move-btn {

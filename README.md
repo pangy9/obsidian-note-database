@@ -24,23 +24,9 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Import, export, and Bases conversion**: move data with CSV + Markdown ZIP files or convert Obsidian `.base` files.
 - **Local and private**: vault content, metadata, formulas, and settings stay on your device.
 
-## What's New In 1.2.3
+## What's New In 1.2.4
 
-- **Property conflict resolution**: detect incompatible frontmatter storage shapes across database files before a type change is saved.
-
-![Property type conflict resolution modal](assets/screenshots/en-property-type-conflict.png)
-
-- **Calendar and timeline result search**: search now shows matching events, current-range counts, click-to-jump navigation, and jump highlights.
-
-![Calendar and timeline search results popover](assets/screenshots/en-calendar-timeline-search-results.png)
-
-- **Floating event detail panels**: inspect and edit calendar/timeline event properties without leaving the current view.
-
-![Floating event detail panel](assets/screenshots/en-record-detail-panel.png)
-
-- **Table editing polish**: keyboard navigation, option-popover focus handling, copy/clone actions, and CSV/Markdown paste handling are more reliable.
-
-- **Field management polish**: file-property creation shortcuts, an option to clean only note properties when deleting columns, date/time picker mini calendars, and compact list field layout.
+- **Table selection column alignment**: checkboxes in the header and rows now stay perfectly aligned when toggling sort rules on or off. The checkbox is pinned by absolute positioning to eliminate the 1px shift caused by the cell border. The mobile selection column is also narrowed from 62px to 48px to reclaim horizontal space.
 
 ## Views
 
@@ -254,6 +240,11 @@ If Note Database helps you, a star or donation helps support continued developme
 <img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## Changelog
+
+### 1.2.4
+
+- Fixed table selection-column checkbox alignment: header and row checkboxes are now pinned via absolute positioning, eliminating the 1px shift when toggling sort rules on or off (the selection column's content width is 1px narrower than its declared width due to the cell border).
+- Narrowed the mobile selection column from 62px to 48px.
 
 ### 1.2.3
 

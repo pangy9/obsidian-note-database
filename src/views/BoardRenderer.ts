@@ -4,10 +4,10 @@ import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
-import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { formatGroupKeyDisplay, isComputedGroupField } from "../data/GroupDisplay";
 import { parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
-import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -59,13 +59,15 @@ export interface BoardRendererActions {
   areAllRowsSelected(rows: RowData[]): boolean;
   toggleRowsSelected(rows: RowData[], selected: boolean): void;
   editCell(target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent): void;
+  editFileName?(target: HTMLElement, row: RowData, currentName: string): void;
   getColumns(config: ViewConfig): ColumnDef[];
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   expandGroup?(field: string, key: string, count: number): void;
-  showRowMenu?(event: MouseEvent, row: RowData): void;
+  showRowMenu?(event: MouseEvent, row: RowData, context?: RowCreateContext): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
   readonly canReorderGroups?: boolean;
@@ -238,8 +240,12 @@ export class BoardRenderer {
     }
     renderGroupExpandControls(cards, config, groupField, group.key, group.rows.length, this.actions);
     if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
-      cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
-        () => this.createEntryNearEnd({ [groupField]: group.key || "" }, group.rows);
+      if (isComputedGroupField(config, groupField)) {
+        cards.createEl("button", { cls: "db-board-new-card is-disabled", text: t("group.computedCreateDisabled"), attr: { disabled: "true" } });
+      } else {
+        cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
+          () => this.createEntryNearEnd({ [groupField]: group.key || "" }, group.rows);
+      }
     }
   }
 
@@ -284,8 +290,12 @@ export class BoardRenderer {
     }
     renderGroupExpandControls(cards, config, subgroupField, subgroup.key, subgroup.rows.length, this.actions);
     if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
-      cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
-        () => this.createEntryNearEnd({ [groupField]: group.key || "", [subgroupField]: subgroup.key || "" }, subgroup.rows);
+      if (isComputedGroupField(config, groupField) || isComputedGroupField(config, subgroupField)) {
+        cards.createEl("button", { cls: "db-board-new-card is-disabled", text: t("group.computedCreateDisabled"), attr: { disabled: "true" } });
+      } else {
+        cards.createEl("button", { cls: "db-board-new-card", text: `+ ${t("toolbar.new")}` }).onclick =
+          () => this.createEntryNearEnd({ [groupField]: group.key || "", [subgroupField]: subgroup.key || "" }, subgroup.rows);
+      }
     }
   }
 
@@ -355,7 +365,13 @@ export class BoardRenderer {
       cls: "db-board-card",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
-    this.attachRowContextMenu(card, row);
+    this.attachRowContextMenu(card, row, {
+      visibleRows,
+      groups: [
+        { field: groupField, key: group.key },
+        ...(subgroupField && subgroupKey != null ? [{ field: subgroupField, key: subgroupKey }] : []),
+      ],
+    });
     if (!this.actions.isReadOnly && !this.isPhoneLayout()) {
       card.draggable = true;
       card.addEventListener("dragstart", (event) => {
@@ -461,12 +477,22 @@ export class BoardRenderer {
     const titleField = this.getTitleField(config);
     const title = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
     if (title && !title.isHidden) {
-      const titleEl = card.createDiv({
+      const titleLine = card.createDiv({ cls: "db-record-title-line" });
+      this.actions.renderRecordIcon?.(titleLine, row, config);
+      const titleEl = titleLine.createDiv({
         cls: "db-board-card-title",
         attr: { title: title.isFileTitle ? row.file.path : title.isEmpty ? "" : title.text },
       });
       if (title.isFileTitle) {
         renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
+        if (!this.actions.isReadOnly && this.actions.editFileName) {
+          titleEl.addClass("db-editable-cell");
+          setFieldTooltip(titleEl, row.file.path, t("cell.doubleClickRename"));
+          titleEl.addEventListener("dblclick", (event) => {
+            event.stopPropagation();
+            this.actions.editFileName?.(titleEl, row, row.file.basename);
+          });
+        }
       } else {
         titleEl.textContent = title.text;
         if (title.isEmpty) titleEl.addClass("is-empty-title");
@@ -493,10 +519,10 @@ export class BoardRenderer {
     }
   }
 
-  private attachRowContextMenu(el: HTMLElement, row: RowData): void {
+  private attachRowContextMenu(el: HTMLElement, row: RowData, context?: RowCreateContext): void {
     el.addEventListener("contextmenu", (event) => {
       if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
-      this.actions.showRowMenu?.(event, row);
+      this.actions.showRowMenu?.(event, row, context);
     });
   }
 

@@ -248,6 +248,37 @@ function getObsidianTagInputEntries(value: unknown): unknown[] {
   return [value];
 }
 
+/** User-facing tag text accepts Obsidian-style #tag tokens separated by commas or whitespace. */
+export function toValidObsidianTagInputValues(value: unknown): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const raw of getObsidianTagTextInputEntries(value)) {
+    const tag = normalizeValidObsidianTagValue(raw);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    values.push(tag);
+  }
+  return values;
+}
+
+export function getInvalidObsidianTagInputValues(value: unknown): string[] {
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of getObsidianTagTextInputEntries(value)) {
+    const result = validateObsidianTagValue(raw);
+    if (result.valid || !result.value || seen.has(result.value)) continue;
+    seen.add(result.value);
+    invalid.push(result.value);
+  }
+  return invalid;
+}
+
+function getObsidianTagTextInputEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value == null || value === "") return [];
+  return stringifyValue(value).split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+}
+
 export function toObsidianTagValues(value: unknown): string[] {
   const rawValues = Array.isArray(value)
     ? value

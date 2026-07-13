@@ -108,6 +108,13 @@ export interface CreateEntryPosition {
   afterPath?: string;
 }
 
+export interface RowCreateContext {
+  /** Rows rendered beside the clicked record, in their current visual order. */
+  visibleRows?: RowData[];
+  /** Explicit group/subgroup keys for the rendered occurrence of the record. */
+  groups?: Array<{ field: string; key: string }>;
+}
+
 export type FilterOperator = "eq" | "neq" | "contains" | "hasTag" | "gt" | "lt" | "gte" | "lte" | "empty" | "notempty";
 
 export interface FilterRule {
@@ -216,6 +223,8 @@ export type SourceRuleNode = SourceRule | SourceRuleGroup | SourceRuleNot | Sour
 export interface DatabaseConfig {
   id: string;
   name: string;
+  /** Database title icon token: an emoji grapheme or lucide:<id>@<color>. */
+  icon?: string;
   description?: string;
   sourceFolder: string;
   sourceRules?: SourceRule[];
@@ -225,6 +234,8 @@ export interface DatabaseConfig {
   /** Runtime-only file path used for Bases `this`; not persisted. */
   baseThisFilePath?: string;
   newRecordFolder?: string;
+  /** Default writable text property used for per-record icon tokens. */
+  recordIconField?: string;
   schema: RecordSchema;
   /** Database-specific status presets. Global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
@@ -260,6 +271,12 @@ export interface ViewConfig {
    *  and the editor is hidden. When true, they are combined with db-level rules and the
    *  editor is shown. */
   viewSourceRulesEnabled?: boolean;
+  /** Whether record title surfaces render an icon slot. */
+  showRecordIcon?: boolean;
+  /** When true, recordIconField overrides the database default, including explicit empty. */
+  recordIconFieldOverrideEnabled?: boolean;
+  /** View-specific writable text property used for per-record icon tokens. */
+  recordIconField?: string;
   /** Runtime-only file path used for Bases `this`; not persisted. */
   baseThisFilePath?: string;
   newRecordFolder?: string;
@@ -484,6 +501,12 @@ export interface PluginSettings {
   databaseFilesPreventDuplicateTabs?: boolean;
   statusPresets?: StatusPresetDef[];
   defaultStatusPresetId?: string;
+  /** Recently selected emoji/Lucide icon tokens, newest first. */
+  recentRecordIcons?: string[];
+  /** Show the database icon in the header (global toggle). Default true. */
+  showDatabaseIcon?: boolean;
+  /** Last plugin version whose changelog was shown to the user. */
+  lastChangelogVersion?: string;
   language?: LocaleCode;
   trashedDatabases?: TrashedDatabase[];
   /** Set to true after databases have been migrated from settings to files. */

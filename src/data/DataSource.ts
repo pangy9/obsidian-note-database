@@ -158,16 +158,23 @@ export class DataSource {
 
   /** Query records using database-level config (sourceFolder, sourceRules) */
   getRecordsForDatabase(db: DatabaseConfig): NoteRecord[] {
-    const effectiveRules = this.getEffectiveSourceRules(db);
-    const sourceRuleTree = getSourceRuleTree(db.sourceRuleTree, effectiveRules, db.sourceLogic);
-    if (!sourceRuleTree && effectiveRules.length === 0) {
-      return this.getNotesInFolder(db.sourceFolder);
-    }
+    const matches = this.createRecordDatabaseMatcher(db);
     const records = this.vault.getMarkdownFiles()
       .map((file) => this.toRecord(file))
-      .filter((record): record is NoteRecord => record != null)
-      .filter((record) => record.frontmatter["db_view"] !== true);
-    return records.filter((record) => {
+      .filter((record): record is NoteRecord => record != null);
+    return records.filter(matches);
+  }
+
+  /** Match an in-memory candidate record with exactly the same source semantics as a vault query. */
+  matchesRecordForDatabase(record: NoteRecord, db: DatabaseConfig): boolean {
+    return this.createRecordDatabaseMatcher(db)(record);
+  }
+
+  private createRecordDatabaseMatcher(db: DatabaseConfig): (record: NoteRecord) => boolean {
+    const effectiveRules = this.getEffectiveSourceRules(db);
+    const sourceRuleTree = getSourceRuleTree(db.sourceRuleTree, effectiveRules, db.sourceLogic);
+    return (record) => {
+      if (record.file.extension !== "md" || record.frontmatter["db_view"] === true) return false;
       if (db.sourceFolder && !this.isInFolder(record.file, db.sourceFolder)) return false;
       if (sourceRuleTree && !matchesSourceRuleTree(
         sourceRuleTree,
@@ -175,7 +182,7 @@ export class DataSource {
         (rule) => this.matchesSourceExpression(record, rule.expression, db)
       )) return false;
       return true;
-    });
+    };
   }
 
   private getEffectiveSourceRules(db: DatabaseConfig): SourceRule[] {
@@ -502,6 +509,9 @@ export class DataSource {
           sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
           sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
           sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
+          showRecordIcon: source["showRecordIcon"] === true,
+          recordIconFieldOverrideEnabled: source["recordIconFieldOverrideEnabled"] === true,
+          recordIconField: safeString(source["recordIconField"]) || undefined,
           newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
           schema: sharedSchema,
           statusPresets: normalizeStatusPresets(source["viewStatusPresets"] || [], []),
@@ -601,12 +611,14 @@ export class DataSource {
       return {
         id: database["id"] != null ? safeString(database["id"]) : generateId(),
         name: safeString(source["name"] || fm["name"]),
+        icon: safeString(source["icon"]) || undefined,
         description: safeString(source["description"]) || undefined,
         sourceFolder: safeString(source["sourceFolder"]),
         sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
         sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
         sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
         newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
+        recordIconField: safeString(source["recordIconField"]) || undefined,
         computedSyncMode: normalizeComputedSyncMode(source["computedSyncMode"]),
         summaryFormulas: this.parseStringMap(source["summaryFormulas"]),
         schema: sharedSchema,
@@ -631,6 +643,9 @@ export class DataSource {
       sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as SourceRule[] : undefined,
       sourceLogic: v["sourceLogic"] === "or" ? "or" : "and",
       sourceRuleTree: parsedSourceRuleTree,
+      showRecordIcon: v["showRecordIcon"] === true,
+      recordIconFieldOverrideEnabled: v["recordIconFieldOverrideEnabled"] === true,
+      recordIconField: safeString(v["recordIconField"]) || undefined,
       newRecordFolder: safeString(v["newRecordFolder"]) || undefined,
       schema: sharedSchema,
       statusPresets: normalizeStatusPresets(v["statusPresets"] || [], []),
@@ -802,12 +817,14 @@ export class DataSource {
     return {
       id: dbConfig.id,
       name: dbConfig.name || "",
+      icon: dbConfig.icon || "",
       description: dbConfig.description || "",
       sourceFolder: dbConfig.sourceFolder || "",
       sourceRules: dbConfig.sourceRules || [],
       sourceLogic: dbConfig.sourceLogic || "and",
       sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
+      recordIconField: dbConfig.recordIconField || "",
       computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
       summaryFormulas: dbConfig.summaryFormulas || {},
       columns: dbConfig.schema.columns || [],
@@ -827,6 +844,9 @@ export class DataSource {
       sourceRules: view.sourceRules || [],
       sourceLogic: view.sourceLogic || "and",
       sourceRuleTree: view.sourceRuleTree,
+      showRecordIcon: view.showRecordIcon === true,
+      recordIconFieldOverrideEnabled: view.recordIconFieldOverrideEnabled === true,
+      recordIconField: view.recordIconField || "",
       newRecordFolder: view.newRecordFolder || "",
       displayWidth: view.displayWidth || "default",
       sortColumn: view.sortColumn || "",

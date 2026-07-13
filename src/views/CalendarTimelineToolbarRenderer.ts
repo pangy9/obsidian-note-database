@@ -2,15 +2,18 @@ import { setIcon } from "obsidian";
 import { getTimelineColumnWidthSpec, normalizeTimelineDayScale } from "../data/CalendarTimelineModel";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
-import { ColumnDef, ViewConfig } from "../data/types";
+import { ColumnDef, DatabaseConfig, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { createDropdownField, DropdownOption } from "./DropdownField";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
 
 export interface CalendarTimelineToolbarActions {
   onChange(label?: string): void;
+  database?: DatabaseConfig;
+  createRecordIconField?(): void;
   updateTimelineScale?(scale: NonNullable<ViewConfig["timelineScale"]>, label?: string): boolean | Promise<boolean> | void;
   /** Async count of hidden invalid events; the notice shows "calculating..." until it resolves. */
   getInvalidEventCount?: () => number | Promise<number>;
@@ -139,6 +142,40 @@ export class CalendarTimelineToolbarRenderer {
       config.timelineColorField = value || undefined;
       actions.onChange(t("undo.timelineColorFieldConfig"));
     }, "palette");
+    this.renderRecordIconSettings(style, config, actions);
+  }
+
+  private renderRecordIconSettings(parent: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
+    const database = actions.database;
+    if (!database) return;
+    this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
+      config.showRecordIcon = value || undefined;
+      if (value && !resolveRecordIconField(database, config) && !database.recordIconField) config.recordIconFieldOverrideEnabled = true;
+      actions.onChange(t("recordIcon.show"));
+      if (this.popoverContent) this.renderTimelineOptions(this.popoverContent, config, actions);
+    }, "smile-plus");
+    if (config.showRecordIcon !== true) return;
+    this.renderSwitch(parent, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
+      config.recordIconFieldOverrideEnabled = value || undefined;
+      actions.onChange(t("recordIcon.override"));
+      if (this.popoverContent) this.renderTimelineOptions(this.popoverContent, config, actions);
+    }, "replace");
+    if (config.recordIconFieldOverrideEnabled !== true) {
+      const key = database.recordIconField || "";
+      const column = key ? config.schema.columns.find((c) => c.key === key) : undefined;
+      this.renderSelect(parent, t("recordIcon.field"), [{ value: key, text: getRecordIconFieldLabel(database, config) || t("common.notSet"), icon: column ? getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)) : undefined }], key, () => {}, "", false, true);
+      return;
+    }
+    const options: DropdownOption[] = [
+      { value: "", text: t("common.notSet") },
+      ...getOrderedRecordIconColumns(config, config.recordIconField).map((column) => ({ value: column.key, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)) })),
+      ...(actions.createRecordIconField ? [{ value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus", preserveValueOnSelect: true }] : []),
+    ];
+    this.renderSelect(parent, t("recordIcon.field"), options, config.recordIconField || "", (value) => {
+      if (value === "__create_record_icon_field__") { actions.createRecordIconField?.(); return; }
+      config.recordIconField = value || undefined;
+      actions.onChange(t("recordIcon.field"));
+    }, "", true);
   }
 
   /** layout section 内容：自定义列宽开关 + 列宽滑块 + (day)时段粒度。开关列宽只重建本 section，
@@ -225,6 +262,7 @@ export class CalendarTimelineToolbarRenderer {
     onChange: (value: string) => void,
     icon: string,
     searchable = options.length > 8,
+    disabled = false,
   ): void {
     createDropdownField({
       parent,
@@ -236,6 +274,7 @@ export class CalendarTimelineToolbarRenderer {
       className: "db-chart-options-dropdown",
       popoverClassName: "db-calendar-timeline-options-dropdown",
       searchable,
+      disabled,
       renderIcon: (iconEl, iconName) => {
         if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
       },

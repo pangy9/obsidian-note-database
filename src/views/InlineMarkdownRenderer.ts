@@ -13,8 +13,9 @@
  */
 
 import { App, finishRenderMath, renderMath, TFile } from "obsidian";
-import type { InlineMarkdownNode } from "../data/InlineMarkdown";
+import { parseInlineMarkdown, type InlineMarkdownNode } from "../data/InlineMarkdown";
 import type { RowData } from "../data/types";
+import { parseTextLink } from "../data/TextLink";
 
 export type LinkClickStrategy = "table" | "card";
 
@@ -28,6 +29,96 @@ export interface RenderInlineMarkdownOptions {
   baseClass?: string;
   /** How anchor clicks coexist with the host interaction. Default "card". */
   linkClickStrategy?: LinkClickStrategy;
+}
+
+export interface RenderedTextWidthMeasurer {
+  measure(raw: string, mode: "markdown" | "link"): number | null;
+  dispose(): void;
+}
+
+/**
+ * Create one hidden real table cell for an auto-fit pass. Reusing the visible
+ * renderer and CSS makes width measurement include bold/italic/code styling,
+ * Obsidian link decoration and MathJax's actual layout.
+ */
+export function createRenderedTextWidthMeasurer(): RenderedTextWidthMeasurer | null {
+  if (typeof window === "undefined" || !window.activeDocument?.body) return null;
+  const doc = window.activeDocument;
+  const host = doc.createElement("div");
+  const table = doc.createElement("table");
+  const tbody = doc.createElement("tbody");
+  const tr = doc.createElement("tr");
+  const td = doc.createElement("td");
+  if (typeof td.createEl !== "function" || typeof td.empty !== "function") return null;
+
+  host.className = "note-database-container db-column-width-measure";
+  table.className = "db-table db-column-width-measure-table";
+  td.className = "db-column-width-measure-cell";
+
+  tr.appendChild(td);
+  tbody.appendChild(tr);
+  table.appendChild(tbody);
+  host.appendChild(table);
+  doc.body.appendChild(host);
+
+  const cache = new Map<string, number | null>();
+  return {
+    measure(raw: string, mode: "markdown" | "link"): number | null {
+      const cacheKey = `${mode}\u0000${raw}`;
+      if (cache.has(cacheKey)) return cache.get(cacheKey) ?? null;
+      if (mode === "markdown") {
+        const nodes = parseInlineMarkdown(raw);
+        if (!nodes) {
+          cache.set(cacheKey, null);
+          return null;
+        }
+        // Measuring must not trigger image fetches. Images use the pure fallback
+        // estimator; surrounding text is still accounted for there.
+        if (containsNodeType(nodes, "image")) {
+          cache.set(cacheKey, null);
+          return null;
+        }
+        renderInlineMarkdown(td, nodes, { onOpenLink: () => undefined, linkClickStrategy: "table" });
+        // renderMath falls back to raw `$...$` while MathJax is unavailable.
+        // Never treat that TeX source as the rendered formula width.
+        if (containsNodeType(nodes, "math")) {
+          const mathElements = Array.from(td.querySelectorAll<HTMLElement>(".db-text-md-math"));
+          if (mathElements.some((element) => !element.querySelector("mjx-container"))) {
+            cache.set(cacheKey, null);
+            return null;
+          }
+        }
+      } else {
+        const link = parseTextLink(raw);
+        if (!link) {
+          cache.set(cacheKey, null);
+          return null;
+        }
+        td.empty();
+        td.createEl("a", {
+          cls: `db-text-link ${link.external ? "external-link" : "internal-link"}`,
+          text: link.label,
+          attr: { href: link.external ? link.target : "#" },
+        });
+      }
+      const width = Math.max(td.scrollWidth, td.getBoundingClientRect().width);
+      const measured = Number.isFinite(width) && width > 0 ? Math.ceil(width + 2) : null;
+      cache.set(cacheKey, measured);
+      return measured;
+    },
+    dispose(): void {
+      host.remove();
+    },
+  };
+}
+
+function containsNodeType(nodes: InlineMarkdownNode[], type: InlineMarkdownNode["type"]): boolean {
+  return nodes.some((node) => {
+    if (node.type === type) return true;
+    if ("children" in node) return containsNodeType(node.children, type);
+    if (node.type === "link") return containsNodeType(node.label, type);
+    return false;
+  });
 }
 
 /** Render an inline-markdown token tree into `parent`. Clears `parent` first. */

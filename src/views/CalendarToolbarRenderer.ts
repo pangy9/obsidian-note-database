@@ -1,17 +1,20 @@
 import { setIcon } from "obsidian";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
-import { ColumnDef, ViewConfig } from "../data/types";
+import { ColumnDef, DatabaseConfig, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { HOUR_HEIGHT_MIN } from "../data/CalendarLayoutModel";
 import { createDropdownField, DropdownOption } from "./DropdownField";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
 
 /** Actions exposed by the calendar toolbar settings panel. */
 export interface CalendarToolbarActions {
 	onChange(label?: string): void;
+	database?: DatabaseConfig;
+	createRecordIconField?(): void;
 	/** Async count of hidden invalid events; the notice shows "calculating..." until it resolves. */
 	getInvalidEventCount?: () => number | Promise<number>;
 	/** Open the modal to review/fix negative-interval events. */
@@ -252,6 +255,40 @@ export class CalendarToolbarRenderer {
 			config.calendarColorField = value || undefined;
 			actions.onChange(t("undo.calendarColorFieldConfig"));
 		}, "palette");
+		this.renderRecordIconSettings(style, config, actions);
+	}
+
+	private renderRecordIconSettings(parent: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
+		const database = actions.database;
+		if (!database) return;
+		this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
+			config.showRecordIcon = value || undefined;
+			if (value && !resolveRecordIconField(database, config) && !database.recordIconField) config.recordIconFieldOverrideEnabled = true;
+			actions.onChange(t("recordIcon.show"));
+			if (this.popoverContent) this.renderSections(this.popoverContent, config, actions);
+		}, "smile-plus");
+		if (config.showRecordIcon !== true) return;
+		this.renderSwitch(parent, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
+			config.recordIconFieldOverrideEnabled = value || undefined;
+			actions.onChange(t("recordIcon.override"));
+			if (this.popoverContent) this.renderSections(this.popoverContent, config, actions);
+		}, "replace");
+		if (config.recordIconFieldOverrideEnabled !== true) {
+			const key = database.recordIconField || "";
+			const column = key ? config.schema.columns.find((c) => c.key === key) : undefined;
+			this.renderSelect(parent, t("recordIcon.field"), [{ value: key, text: getRecordIconFieldLabel(database, config) || t("common.notSet"), icon: column ? getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)) : undefined }], key, () => {}, "", false, true);
+			return;
+		}
+		const options: DropdownOption[] = [
+			{ value: "", text: t("common.notSet") },
+			...getOrderedRecordIconColumns(config, config.recordIconField).map((column) => ({ value: column.key, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)) })),
+			...(actions.createRecordIconField ? [{ value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus", preserveValueOnSelect: true }] : []),
+		];
+		this.renderSelect(parent, t("recordIcon.field"), options, config.recordIconField || "", (value) => {
+			if (value === "__create_record_icon_field__") { actions.createRecordIconField?.(); return; }
+			config.recordIconField = value || undefined;
+			actions.onChange(t("recordIcon.field"));
+		}, "", true);
 	}
 
 	/** Render the sizing rows (used by renderSizingSection and refreshSizingRows). */
@@ -382,6 +419,7 @@ export class CalendarToolbarRenderer {
 		onChange: (value: string) => void,
 		icon: string,
 		searchable = options.length > 8,
+		disabled = false,
 	): void {
 		createDropdownField({
 			parent,
@@ -393,6 +431,7 @@ export class CalendarToolbarRenderer {
 			className: "db-chart-options-dropdown",
 			popoverClassName: "db-calendar-options-dropdown",
 			searchable,
+			disabled,
 			renderIcon: (iconEl, iconName) => {
 				if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
 			},

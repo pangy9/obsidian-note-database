@@ -30,6 +30,8 @@ import { ColumnManagerRenderer } from "./ColumnManagerRenderer";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { FilterPanelRenderer } from "./FilterPanelRenderer";
 import { RowMenu } from "./RowMenu";
+import { resolveRecordIconField } from "../data/RecordIcon";
+import { renderRecordIcon } from "./RecordIconRenderer";
 import { SortPanelRenderer } from "./SortPanelRenderer";
 import { SummaryRenderer } from "./SummaryRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
@@ -58,6 +60,7 @@ import { DATABASE_VIEW_TYPE, DatabaseView } from "./DatabaseView";
 
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
+import { createRenderedTextWidthMeasurer } from "./InlineMarkdownRenderer";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
@@ -119,6 +122,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
     getCalendarInvalidEventCount: () => this.getEmbeddedInvalidEventCount(),
     openCalendarInvalidEvents: () => this.openEmbeddedInvalidEvents(),
+    renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
   });
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
@@ -137,6 +141,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     },
     getTimelineInvalidEventCount: () => this.getEmbeddedInvalidEventCount(),
     openTimelineInvalidEvents: () => this.openEmbeddedInvalidEvents(),
+    renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
   });
   /** 嵌入式展开：只读预览（嵌入式 record mutation 只读，字段不可编辑，仅展示 + 打开笔记）。 */
   private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
@@ -153,6 +158,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       actions: {
         editCell: () => {},
         openRow: (r) => this.dataSource.openNote(r.file),
+        renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
         isReadOnly: true,
       },
     });
@@ -287,6 +293,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       isReadOnly: isCodeBlock,
       canReorderGroups: true,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
@@ -307,6 +314,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       isReadOnly: isCodeBlock,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
@@ -325,6 +333,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
+      renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       isReadOnly: isCodeBlock,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
@@ -332,6 +341,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private readonly handleEmbedKeydownBound = (event: KeyboardEvent) => this.handleEmbedKeydown(event);
   private readonly handleMouseUpBound = () => { this.isSelectingCells = false; };
+
+  private renderEmbeddedRecordIcon(parent: HTMLElement, row: RowData, config: ViewConfig, compact = false): HTMLElement | null {
+    if (config.showRecordIcon !== true || !this.currentDbConfig) return null;
+    const field = resolveRecordIconField(this.currentDbConfig, config);
+    return renderRecordIcon(parent, field ? row.frontmatter[field] : undefined, { compact, editable: false });
+  }
 
   onload(): void {
     this.containerEl.addClass("note-database-container");
@@ -1029,6 +1044,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(config, anchorEl),
       toggleCalendarOptions: (containerEl, anchor, cfg) => {
         this.calendarToolbarRenderer.togglePopover(containerEl, anchor, cfg, {
+          database: this.currentDbConfig,
           onChange: () => {
             this.persistEmbeddedConfigLocally(cfg);
             this.renderResults(cfg);
@@ -1741,7 +1757,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
-    return estimateAutoColumnWidth(col, rows, (row, column) => this.getColumnDisplayText(row, column));
+    return estimateAutoColumnWidth(
+      col,
+      rows,
+      (row, column) => this.getColumnDisplayText(row, column),
+      createRenderedTextWidthMeasurer,
+    );
   }
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {

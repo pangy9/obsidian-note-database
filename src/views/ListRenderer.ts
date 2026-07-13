@@ -4,10 +4,10 @@ import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
-import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { formatGroupKeyDisplay, isComputedGroupField } from "../data/GroupDisplay";
 import { parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
-import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
@@ -39,6 +39,7 @@ export interface ListRendererActions {
   areAllRowsSelected(rows: RowData[]): boolean;
   toggleRowsSelected(rows: RowData[], selected: boolean): void;
   editCell(target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent): void;
+  editFileName?(target: HTMLElement, row: RowData, currentName: string): void;
   getColumns(config: ViewConfig): ColumnDef[];
   moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void;
   moveRowsToGroup?(row: RowData, field: string, fromGroupKey: string, toGroupKey: string): void | Promise<void>;
@@ -53,9 +54,10 @@ export interface ListRendererActions {
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   expandGroup?(field: string, key: string, count: number): void;
-  showRowMenu?(event: MouseEvent, row: RowData): void;
+  showRowMenu?(event: MouseEvent, row: RowData, context?: RowCreateContext): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
 }
@@ -112,7 +114,8 @@ export class ListRenderer {
       const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
       for (const row of group.rows.slice(0, visibleCount)) this.renderRow(list, config, row, groupField, group.key, groups, group.rows);
       renderGroupExpandControls(list, config, groupField, group.key, group.rows.length, this.actions);
-      this.renderNewRow(list, { [groupField]: group.key || "" }, group.rows);
+      const computedGroup = isComputedGroupField(config, groupField);
+      this.renderNewRow(list, computedGroup ? undefined : { [groupField]: group.key || "" }, group.rows, computedGroup);
     }
   }
 
@@ -144,7 +147,10 @@ export class ListRenderer {
       cls: "db-list-row",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
-    this.attachRowContextMenu(item, row);
+    this.attachRowContextMenu(item, row, {
+      visibleRows: allRows,
+      groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+    });
     if (allRows) {
       if (this.canManualReorder(config)) this.setupReorderDrag(item, config, row, allRows, groupField, groupKey);
       else this.setupGroupedRowDrag(item, row, groupField, groupKey);
@@ -178,7 +184,9 @@ export class ListRenderer {
     const titleCol = titleField ? config.schema.columns.find((col) => col.key === titleField) : undefined;
     const titleDisplay = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
     if (titleDisplay && !titleDisplay.isHidden) {
-      const title = main.createDiv({
+      const titleLine = main.createDiv({ cls: "db-record-title-line" });
+      this.actions.renderRecordIcon?.(titleLine, row, config);
+      const title = titleLine.createDiv({
         cls: "db-list-row-title",
         attr: { title: titleDisplay.isFileTitle ? row.file.path : titleDisplay.isEmpty ? "" : titleDisplay.text },
       });
@@ -189,11 +197,23 @@ export class ListRenderer {
         if (titleDisplay.isEmpty) title.addClass("is-empty-title");
       }
       if (titleCol) {
-        title.onclick = (event) => {
-          if (this.actions.isReadOnly) return;
-          event.stopPropagation();
-          this.actions.editCell(title, row, titleCol, event);
-        };
+        if (titleCol.key === "file.name" && this.actions.editFileName) {
+          if (!this.actions.isReadOnly) {
+            title.addClass("db-editable-cell");
+            setFieldTooltip(title, row.file.path, t("cell.doubleClickRename"));
+            title.addEventListener("dblclick", (event) => {
+              if (this.actions.isReadOnly) return;
+              event.stopPropagation();
+              this.actions.editFileName?.(title, row, row.file.basename);
+            });
+          }
+        } else {
+          title.onclick = (event) => {
+            if (this.actions.isReadOnly) return;
+            event.stopPropagation();
+            this.actions.editCell(title, row, titleCol, event);
+          };
+        }
       }
     }
 
@@ -219,10 +239,10 @@ export class ListRenderer {
     }
   }
 
-  private attachRowContextMenu(el: HTMLElement, row: RowData): void {
+  private attachRowContextMenu(el: HTMLElement, row: RowData, context?: RowCreateContext): void {
     el.addEventListener("contextmenu", (event) => {
       if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
-      this.actions.showRowMenu?.(event, row);
+      this.actions.showRowMenu?.(event, row, context);
     });
   }
 
@@ -402,8 +422,12 @@ export class ListRenderer {
     return window.activeDocument.body.classList.contains("is-phone");
   }
 
-  private renderNewRow(list: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
+  private renderNewRow(list: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = [], computedGroup = false): void {
     if (this.actions.isReadOnly || this.actions.hideCreateEntry) return;
+    if (computedGroup) {
+      list.createEl("button", { cls: "db-list-new-row is-disabled", text: t("group.computedCreateDisabled"), attr: { disabled: "true" } });
+      return;
+    }
     const button = list.createEl("button", { cls: "db-list-new-row", text: `+ ${t("toolbar.new")}` });
     button.onclick = () => this.createEntryNearEnd(defaults, rows);
   }

@@ -47,6 +47,7 @@ export interface CalendarRendererActions {
 	updateCalendarScale?(scale: "month" | "week" | "day", anchorDateKey: string, label?: string): void;
 	onConfigChange?(label?: string): void;
 	getColumns(config: ViewConfig): ColumnDef[];
+	renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
 	/** 统计被隐藏的无效时间事件数（A2：日历也接入 invalid 修复入口）。 */
 	getCalendarInvalidEventCount?(): number | Promise<number>;
 	/** 打开无效时间事件修复弹窗。 */
@@ -225,6 +226,7 @@ export class CalendarRenderer {
 					eventEl.createSpan({ cls: "db-calendar-month-time", text: formatCalendarTime(segment.startMinutes) });
 				}
 			}
+			this.actions.renderRecordIcon?.(eventEl, segment.event.row, config, true);
 			eventEl.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
 			// Show the start–end date range on multi-day all-day segments so a spanning
 			// event reads as a date range rather than just a title bar.
@@ -350,6 +352,7 @@ export class CalendarRenderer {
 					eventEl.createSpan({ cls: "db-calendar-month-time", text: formatCalendarTime(timing.startMinutes) });
 				}
 			}
+			this.actions.renderRecordIcon?.(eventEl, event.row, config, true);
 			eventEl.createSpan({ cls: `db-calendar-month-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
 			eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(event.startDateKey, event.endDateKey, event.startMinutes, event.endMinutes) });
 			this.attachEventOpenHandlers(eventEl, event);
@@ -570,6 +573,7 @@ export class CalendarRenderer {
 			// Row 1 is reserved for the detached day number, so event lanes start at row 2.
 			eventEl.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
 			this.applyEventColor(eventEl, segment.event.color);
+			this.actions.renderRecordIcon?.(eventEl, segment.event.row, config, true);
 			eventEl.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
 			if (segment.event.endDateKey > segment.event.startDateKey) {
 				eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(segment.event.startDateKey, segment.event.endDateKey, segment.event.startMinutes, segment.event.endMinutes) });
@@ -609,7 +613,7 @@ export class CalendarRenderer {
 				const showPopover = () => {
 					cancelHide();
 					if (popover) { popover.removeClass("is-hidden"); return; }
-					popover = this.createAllDayOverflowPopover(button, hiddenEvents, cancelHide, scheduleHide);
+					popover = this.createAllDayOverflowPopover(button, hiddenEvents, config, cancelHide, scheduleHide);
 				};
 				button.addEventListener("mouseenter", showPopover);
 				button.addEventListener("mouseleave", scheduleHide);
@@ -621,6 +625,7 @@ export class CalendarRenderer {
 	private createAllDayOverflowPopover(
 		anchor: HTMLElement,
 		events: CalendarTimelineEvent[],
+		config: ViewConfig,
 		cancelHide: () => void,
 		scheduleHide: () => void,
 	): HTMLElement {
@@ -633,6 +638,7 @@ export class CalendarRenderer {
 				attr: { type: "button", title: event.title, "data-note-database-row-path": event.row.file.path },
 			});
 			this.applyEventColor(eventEl, event.color);
+			this.actions.renderRecordIcon?.(eventEl, event.row, config, true);
 			eventEl.createSpan({ cls: `db-calendar-month-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
 			eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(event.startDateKey, event.endDateKey, event.startMinutes, event.endMinutes) });
 			this.attachEventOpenHandlers(eventEl, event);
@@ -734,6 +740,7 @@ export class CalendarRenderer {
 		const content = eventEl.createDiv({ cls: "db-calendar-week-event-content" });
 		// Title first (top) so a short card still shows what the event is; the
 		// time range renders below only when there's room.
+		this.actions.renderRecordIcon?.(content, layout.event.row, config, true);
 		content.createDiv({ cls: `db-calendar-week-event-title${layout.event.titleIsEmpty ? " is-empty-title" : ""}`, text: layout.event.title });
 		if (!isCompact) {
 			content.createDiv({

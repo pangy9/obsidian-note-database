@@ -6,13 +6,17 @@ import { ColumnDef, RowData } from "./types";
 /** File properties presented as quick-add options in the column manager. */
 export const QUICK_ADD_FILE_FIELDS: Array<{ key: string }> = [
   { key: "file.name" },
+  { key: "file.path" },
   { key: "file.ctime" },
   { key: "file.mtime" },
-  { key: "file.tags" },
   { key: "file.size" },
   { key: "file.folder" },
   { key: "file.ext" },
   { key: "file.basename" },
+  { key: "file.tags" },
+  { key: "file.links" },
+  { key: "file.backlinks" },
+  { key: "file.embeds" },
   { key: "aliases" },
 ];
 
@@ -39,7 +43,7 @@ export const BASE_FILE_FIELD_KEYS = new Set([
 const EDITABLE_FILE_FIELD_KEYS = new Set(["file.name", "file.tags"]);
 const FILE_LINK_LIST_FIELD_KEYS = new Set(["file.links", "file.backlinks", "file.embeds"]);
 /** Read-only file identity fields rendered as a link that opens the row's own file. */
-const FILE_SELF_LINK_FIELD_KEYS = new Set(["file.file", "file.path", "file.basename"]);
+const FILE_SELF_LINK_FIELD_KEYS = new Set(["file.file", "file.path"]);
 
 /** Any file.* key is reserved for virtual file metadata, even if unsupported. */
 export function isFileFieldKey(key: string): boolean {
@@ -66,7 +70,7 @@ export function isFileLinkListField(key: string): boolean {
   return FILE_LINK_LIST_FIELD_KEYS.has(key);
 }
 
-/** Read-only file fields (file.file/path/basename) rendered as a link to the row's file. */
+/** Read-only file fields (file.file/path) rendered as a link to the row's file. */
 export function isFileSelfLinkField(key: string): boolean {
   return FILE_SELF_LINK_FIELD_KEYS.has(key);
 }

@@ -24,23 +24,21 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Import, export, and Bases conversion**: move data with CSV + Markdown ZIP files or convert Obsidian `.base` files.
 - **Local and private**: vault content, metadata, formulas, and settings stay on your device.
 
-## What's New In 1.2.3
+## What's New In 1.2.5
 
-- **Property conflict resolution**: detect incompatible frontmatter storage shapes across database files before a type change is saved.
+- **Database and record icons**: assign Unicode Emoji or Lucide icons to databases and individual records, with a database-wide default, per-view field overrides, and a shared icon picker.
 
-![Property type conflict resolution modal](assets/screenshots/en-property-type-conflict.png)
+![Database and record icons](assets/screenshots/en-database-icons.png)
 
-- **Calendar and timeline result search**: search now shows matching events, current-range counts, click-to-jump navigation, and jump highlights.
+- **Typed bulk editing**: edit the same field across many records at once using native typed editors, with impact previews, risk confirmation, transactional rollback, and single-step undo.
 
-![Calendar and timeline search results popover](assets/screenshots/en-calendar-timeline-search-results.png)
+![Typed bulk editing](assets/screenshots/en-bulk-edit.png)
 
-- **Floating event detail panels**: inspect and edit calendar/timeline event properties without leaving the current view.
+- **Source-rule-aware record creation**: new notes derive writable file names, folders, tags, properties, and supported boundaries from active database and view source rules, with clear warnings when a rule cannot be guaranteed.
 
-![Floating event detail panel](assets/screenshots/en-record-detail-panel.png)
+- **Insert records above or below**: row-menu actions to insert a record above or below the current visible row, preserving group, subgroup, and manual-order context.
 
-- **Table editing polish**: keyboard navigation, option-popover focus handling, copy/clone actions, and CSV/Markdown paste handling are more reliable.
-
-- **Field management polish**: file-property creation shortcuts, an option to clean only note properties when deleting columns, date/time picker mini calendars, and compact list field layout.
+- **Dashboard and editing polish**: dashboards refresh immediately after settings changes; automatic column width measures rendered Markdown, links, code, and MathJax; and `file.*` fields, title editing, Cmd/Ctrl+F search focus, mobile database-list layout, and grouped insertion stability are improved.
 
 ## Views
 
@@ -254,6 +252,18 @@ If Note Database helps you, a star or donation helps support continued developme
 <img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## Changelog
+
+### 1.2.5
+
+- Added source-rule-aware record creation: new notes now derive writable file names, folders, tags, properties, and supported boundaries from active database and view source rules, with clear warnings when a rule cannot be guaranteed.
+- Added typed bulk editing across table, board, gallery, and list views. Native editors, impact previews, risk confirmation, option registration, rollback, and single-step undo are shared across bulk workflows.
+- New select, status, and multi-select values explicitly entered or adopted through plugin UI are now registered automatically, while values written externally remain non-destructive to the database schema.
+- Added configurable database and record icons using Unicode Emoji or Lucide icons. Record icons can inherit a database field or use a per-view override across board, gallery, list, calendar, and timeline cards.
+- Added row-menu actions to insert a record above or below the current visible row, preserving group/subgroup context and manual order where available.
+
+- Open dashboards now react immediately to database settings changes and restore the active database by identity after settings reorder or deletion.
+- Improved automatic column width measurement for rendered Markdown, links, bold text, inline code, and MathJax formulas, plus gallery grouped-width and newly-added-column reveal behavior.
+- Improved `file.*` field handling, title editing, Cmd/Ctrl+F search focus, mobile database-list layout, and several grouped insertion and popover interaction edge cases.
 
 ### 1.2.4
 

@@ -36,9 +36,10 @@ import { positionToolbarPopover } from "./PopoverPosition";
 
 export interface RecordDetailActions {
   editCell: (target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent) => void;
-  editFileName?: (target: HTMLElement, row: RowData, currentName: string, restore?: () => void) => void;
+  editFileName?: (target: HTMLElement, row: RowData, currentName: string) => void;
   showColumnMenu?: (event: MouseEvent, col: ColumnDef, anchorEl: HTMLElement) => void;
   openRow: (row: RowData) => void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   isReadOnly?: boolean;
 }
 
@@ -128,6 +129,7 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
     const titleField = title.field || "file.name";
     // 标题区（对齐事件卡片标题）+ 右上角「打开笔记」按钮（复用看板卡片 db-board-card-open 样式）
     const header = panel.createDiv({ cls: "db-record-detail-header" });
+    actions.renderRecordIcon?.(header, r, config);
     const titleEl = header.createDiv({ cls: "db-record-detail-title", text: title.text });
     if (title.isEmpty) titleEl.addClass("is-empty-title");
     // 仅 file.name 标题可双击重命名；其它字段标题只读（用字段编辑改值）
@@ -135,10 +137,7 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
     if (editFileName && !actions.isReadOnly) {
       titleEl.addEventListener("dblclick", (event) => {
         event.stopPropagation();
-        editFileName(titleEl, r, title.text, () => {
-          titleEl.textContent = title.text;
-          setFieldTooltip(titleEl, title.text, t("cell.doubleClickRename"));
-        });
+        editFileName(titleEl, r, title.text);
       });
       setFieldTooltip(titleEl, title.text, t("cell.doubleClickRename"));
     } else {

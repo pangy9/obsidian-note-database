@@ -136,6 +136,7 @@ export function updateColumnKeyReferences(
   };
   config.columnOrder = replaceKeys(config.columnOrder);
   config.titleField = replaceValue(config.titleField);
+  config.recordIconField = replaceValue(config.recordIconField);
   config.galleryImageField = replaceValue(config.galleryImageField);
   config.boardGroupField = replaceValue(config.boardGroupField);
   config.boardSubgroupField = replaceValue(config.boardSubgroupField);

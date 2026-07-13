@@ -12,6 +12,10 @@ import {
   updateSummaryFormulaReferences,
   updateSourceRuleKeyReferences,
 } from "../data/ColumnConfig";
+import {
+  removeDatabaseRecordIconFieldReference,
+  updateDatabaseRecordIconFieldReference,
+} from "../data/RecordIcon";
 import { createOptionsFromValues, isOptionColumnType } from "../data/ColumnTypes";
 import { getDefaultChartDateBucket, getDefaultChartNumberBucket, isChartAggregationValueColumn, requiresChartValueField } from "../data/ChartAggregation";
 import { normalizeTimelineDayScale } from "../data/CalendarTimelineModel";
@@ -181,6 +185,7 @@ export class ColumnOperations {
       }
       updateSourceRuleKeyReferences(db.sourceRules, oldKey, newKey);
       updateSourceRuleTreeKeyReferences(db.sourceRuleTree, oldKey, newKey);
+      updateDatabaseRecordIconFieldReference(db, oldKey, newKey);
       updateSummaryFormulaReferences(db, oldKey, newKey, oldLabel, newLabel);
       if (activeStateChanged) {
         this.deps.viewStateStore.persist(config, state);
@@ -362,6 +367,7 @@ export class ColumnOperations {
     for (const view of db.views || []) {
       view.schema = db.schema;
     }
+    for (const key of referenceKeys) removeDatabaseRecordIconFieldReference(db, key);
   }
 
   private removeColumnReferences(config: ViewConfig, key: string): void {
@@ -377,6 +383,7 @@ export class ColumnOperations {
     if (config.sortColumnOrder === key) config.sortColumnOrder = undefined;
     if (config.groupByField === key) config.groupByField = undefined;
     if (config.titleField === key) config.titleField = undefined;
+    if (config.recordIconField === key) config.recordIconField = undefined;
     if (config.galleryImageField === key) config.galleryImageField = undefined;
     if (config.boardGroupField === key) config.boardGroupField = undefined;
     if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;
@@ -470,6 +477,44 @@ export class ColumnOperations {
     await this.ensureNewColumnInFiles(config, newCol, t("column.addColumn"), t("column.addedColumn"));
   }
 
+  async appendNamedTextColumn(
+    key: string,
+    label: string,
+    applyReference: (column: ColumnDef) => void,
+    rollbackReference: () => void,
+  ): Promise<ColumnDef | null> {
+    const config = this.deps.getConfig();
+    if (!config || !key || isFileFieldKey(key) || config.schema.columns.some((column) => column.key === key)) return null;
+    const newCol: ColumnDef = { key, label: label || key, type: "text" };
+    ensureColumnOrder(config);
+    config.schema.columns.push(newCol);
+    config.columnOrder!.push(key);
+    applyReference(newCol);
+    const changes = this.getEnsureKeyChanges(config, newCol);
+    this.deps.markPendingColumn(key);
+    this.deps.setPendingUndoLabel(t("undo.insertColumnConfig"));
+    this.deps.setPendingConfigCellChanges(changes);
+    try {
+      await this.deps.saveConfigImmediately();
+      await this.propertySync.ensure(config, newCol);
+      await this.deps.refreshAfterSave();
+      this.deps.refreshSchemaChanged({ preserveViewport: true });
+      new Notice(t("column.addedProperty", { prefix: t("column.addedColumn"), key, count: changes.length }));
+      return newCol;
+    } catch (err) {
+      for (const change of changes) {
+        try { await this.deps.dataSource.updateFrontmatter(change.file, { [key]: null }); } catch { /* best-effort compensation */ }
+      }
+      config.schema.columns = config.schema.columns.filter((column) => column !== newCol);
+      config.columnOrder = (config.columnOrder || []).filter((candidate) => candidate !== key);
+      rollbackReference();
+      try { await this.deps.saveConfigImmediately(); } catch { /* original failure is reported below */ }
+      console.error("Note Database: failed to create record icon property", err);
+      new Notice(t("column.actionFailed", { action: t("recordIcon.createField"), error: String(err) }));
+      return null;
+    }
+  }
+
   async duplicateColumn(col: ColumnDef): Promise<void> {
     const config = this.deps.getConfig();
     if (!config || isFileFieldKey(col.key)) return;
@@ -533,8 +578,11 @@ export class ColumnOperations {
     this.deps.markPendingColumn(key);
     this.deps.setPendingUndoLabel(t("undo.addColumnConfig"));
     await this.deps.saveConfigImmediately();
+    // file.* / aliases 不写 frontmatter，无需 refreshAfterSave 等 metadata 重新解析。
+    // refreshSchemaChanged 已重建视图并通过 revealPendingColumn 平滑滚动到新列（右端）；
+    // 再调 refreshAfterSave 会在 smooth 滚动完成前重建 DOM、中断滚动，且
+    // pendingRevealColumnScrolled 已置位不再重新滚动，导致视图从新列位置回到左端。
     this.deps.refreshSchemaChanged();
-    await this.deps.refreshAfterSave();
     this.deps.refreshColumnManager();
   }
 

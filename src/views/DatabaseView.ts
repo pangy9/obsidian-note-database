@@ -1,4 +1,4 @@
-import { App, FileView, WorkspaceLeaf, Notice, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
+import { App, FileView, Scope, WorkspaceLeaf, Notice, Platform, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
 import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { evaluateBaseFilterExpression } from "../data/BaseExpression";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
@@ -7,13 +7,14 @@ import { PropertyService } from "../data/PropertyService";
 import { ComputedFieldEngine } from "../data/ComputedField";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import { applyRangeSelection } from "../data/RangeSelection";
+import { resolveViewSelection } from "../data/ViewSelection";
 import {
   ensureColumnOrder,
   getColumnsInOrder,
   getVisibleColumns,
 } from "../data/ColumnConfig";
 import { RowPipeline } from "../data/RowPipeline";
-import { ViewConfig, ColumnDef, ComputedFieldDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode } from "../data/types";
+import { ViewConfig, ColumnDef, ComputedFieldDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode, RowCreateContext } from "../data/types";
 import {
   getDefaultCellValue as getColumnDefaultCellValue,
   getStatusPresetOptions,
@@ -25,7 +26,6 @@ import {
   isColumnType,
   isComputedFieldType,
   isObsidianTagsKey,
-  normalizeObsidianTagValue,
   normalizeValidObsidianTagValue,
   normalizeOptionValueForKey,
   toBooleanValue,
@@ -33,15 +33,20 @@ import {
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
-import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { formatGroupKeyDisplay, isComputedGroupField, resolveGroupCreateDefaults } from "../data/GroupDisplay";
 import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
-import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
-import { CellOptionTransaction, CellRenderer } from "./CellRenderer";
+import { generateRanks, rankBetween, rebalanceRanks, resolveNewEntryRankBounds } from "../data/ManualOrder";
+import { CellEditSession, CellOptionTransaction, CellRenderer } from "./CellRenderer";
+import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { ColumnMenu, ColumnMenuOptions } from "./ColumnMenu";
 import { ColumnHeaderController } from "./ColumnHeaderController";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { RowMenu } from "./RowMenu";
+import { openDropdownMenu } from "./DropdownField";
+import { openIconPickerPopover } from "./IconPickerPopover";
+import { renderRecordIcon } from "./RecordIconRenderer";
+import { resolveRecordIconField } from "../data/RecordIcon";
 import { TableRenderer } from "./TableRenderer";
 import {
   captureDatabaseViewport,
@@ -74,6 +79,7 @@ import { CalendarTimelineCreateOptions, CalendarTimelineDateChange, CalendarTime
 import { CalendarRenderer } from "./CalendarRenderer";
 import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ColumnRenameModal, ColumnRenameResult } from "./modals/ColumnRenameModal";
+import { CreateRecordIconFieldModal } from "./modals/CreateRecordIconFieldModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
@@ -88,7 +94,10 @@ import {
   PropertyTypeConflictEntry,
 } from "../data/PropertyTypeConflict";
 import { isDateLikeColumnType, setDateDisplayMode } from "../data/DateTimeFormat";
-import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, matchesBaseSourceType, matchesSourceRuleTree, mergeDbAndViewSourceRuleTrees, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
+import { getAllSourceRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, mergeDbAndViewSourceRuleTrees, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
+import { planCreateEntry, CreateEntryDiagnostic } from "../data/CreateEntryPlan";
+import { planOptionRegistration } from "../data/OptionRegistration";
+import { buildBulkEditImpact, buildBulkEditPlan, BulkEditImpact, BulkEditorRequest, getBulkEditableColumns, resolveBulkEditInitialValue, resolveBulkEditorRequest } from "../data/BulkEdit";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
@@ -113,9 +122,11 @@ import { saveZipWithPicker } from "../data/ExportSaveTarget";
 import { getEffectiveFilterRules } from "../data/FilterRules";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { estimateAutoColumnWidth } from "./ColumnWidth";
+import { createRenderedTextWidthMeasurer } from "./InlineMarkdownRenderer";
 import { isHTMLElement } from "./DomGuards";
 import { safeString } from "../data/SafeString";
 import { parseClipboardTable, serializeSelectedCells as serializeClipboardSelectedCells } from "../data/ClipboardSerializer";
+import { openBulkEditFieldMenu } from "./BulkEditFieldMenu";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { closeRecordDetailPanel, getOpenRecordDetailPath, openRecordDetailPanel, refreshRecordDetailPanel } from "./RecordDetailPanel";
 import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
@@ -195,6 +206,16 @@ interface CellEditChange {
   newValue: unknown;
 }
 
+// A bulk edit that has been impact-predicted and resolved to concrete frontmatter changes,
+// but not yet written. prepareBulkEdit builds it (no writes), confirmBulkEdit gates it behind
+// the confirmation modal + staleness recheck, commitPreparedBulkEdit performs the writes.
+interface PreparedBulkEdit {
+  plan: ReturnType<typeof buildBulkEditPlan>;
+  impact: BulkEditImpact;
+  column: ColumnDef;
+  changes: CellEditChange[];
+}
+
 interface CellHistoryEntry {
   type: "cells";
   label: string;
@@ -210,6 +231,7 @@ interface ConfigHistoryEntry {
   before: DatabaseConfig;
   after: DatabaseConfig;
   cellChanges?: CellEditChange[];
+  createdPaths?: string[];
 }
 
 interface CreatedHistoryEntry {
@@ -283,6 +305,7 @@ export class DatabaseView extends FileView {
       this.scheduleConfigSave();
       this.refresh();
     },
+    renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
   });
   private calendarRenderer = new CalendarRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
@@ -298,6 +321,7 @@ export class DatabaseView extends FileView {
     },
     getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
     getCalendarInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+    renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
     openCalendarInvalidEvents: () => { void this.openInvalidEvents(); },
     isReadOnly: false,
   });
@@ -321,6 +345,8 @@ export class DatabaseView extends FileView {
   private cellSelection: CellSelectionRange | null = null;
   private isSelectingCells = false;
   private showCellFillInput = false;
+  private bulkEditingColumnKey?: string;
+  private closeBulkEditPopover?: () => void;
   private historyStack: HistoryEntry[] = [];
   private configSnapshots = new Map<string, DatabaseConfig>();
   private pendingConfigCellChanges: CellEditChange[] | null = null;
@@ -404,7 +430,7 @@ export class DatabaseView extends FileView {
       dataSource: this.dataSource,
       propertyService: this.propertyService,
       viewStateStore: this.viewStateStore,
-      getConfig: () => this.getConfig(),
+      getConfig: () => this.getStatefulConfig(this.getConfig()),
       getActiveDb: () => this.getActiveDb(),
       getState: () => this.vs(),
       getFilesForConfig: (config) => this.getFilesForConfig(config),
@@ -430,6 +456,13 @@ export class DatabaseView extends FileView {
       openRow: (row) => { void this.openRow(row); },
       deleteRow: (row) => this.deleteRow(row),
       duplicateRow: (row) => this.duplicateRow(row),
+      isRecordIconShown: () => this.getConfig()?.showRecordIcon === true,
+      canToggleRecordIcon: () => ["board", "gallery", "list", "calendar", "timeline"].includes(this.getConfig()?.viewType || "table"),
+      toggleRecordIcon: (anchor, row) => this.toggleCurrentViewRecordIcon(anchor, row),
+      createEntry: (defaults, position) => { void this.createBlankEntry(defaults ?? {}, position); },
+      getConfig: () => this.getConfig(),
+      getVisibleRows: () => this.rows,
+      getCreateDefaults: (row, context) => this.getCreateEntryDefaultsForRow(row, context),
     });
     const shouldHideResultCreateEntryButtons = () => this.shouldHideResultCreateEntryButtons();
     this.columnHeaderController = new ColumnHeaderController({
@@ -448,7 +481,7 @@ export class DatabaseView extends FileView {
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       setupColumnHeader: (th, col) => this.setupColumnHeader(th, col),
-      setupRow: (tr, row) => this.setupRowInteractions(tr, row),
+      setupRow: (tr, row, context) => this.setupRowInteractions(tr, row, context),
       renderCell: (td, row, col) => this.renderCell(td, row, col),
       setupFillHandle: (td, row, col) => this.setupTableFillHandle(td, row, col),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
@@ -476,15 +509,17 @@ export class DatabaseView extends FileView {
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
+      editFileName: (target, row, currentName) => this.cellRenderer.editFileName(target, row, currentName),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
-      showRowMenu: (event, row) => this.rowMenu.show(event, row),
+      showRowMenu: (event, row, context) => this.rowMenu.show(event, row, context),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
@@ -495,6 +530,7 @@ export class DatabaseView extends FileView {
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
+      editFileName: (target, row, currentName) => this.cellRenderer.editFileName(target, row, currentName),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
       updateCardSize: (width) => this.updateGalleryCardSize(width),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
@@ -504,11 +540,12 @@ export class DatabaseView extends FileView {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
-      showRowMenu: (event, row) => this.rowMenu.show(event, row),
+      showRowMenu: (event, row, context) => this.rowMenu.show(event, row, context),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
@@ -519,6 +556,7 @@ export class DatabaseView extends FileView {
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
       toggleRowsSelected: (rows, selected) => this.toggleRowsSelected(rows, selected),
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
+      editFileName: (target, row, currentName) => this.cellRenderer.editFileName(target, row, currentName),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       moveRowsToGroup: (row, field, fromGroupKey, toGroupKey) => this.updateBoardGroup(row, field, toGroupKey, fromGroupKey),
@@ -527,11 +565,12 @@ export class DatabaseView extends FileView {
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
-      showRowMenu: (event, row) => this.rowMenu.show(event, row),
+      showRowMenu: (event, row, context) => this.rowMenu.show(event, row, context),
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
       editFormula: (col) => this.showFormulaModal(col),
+      renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.columnMenu = new ColumnMenu({
@@ -867,16 +906,37 @@ export class DatabaseView extends FileView {
     return `file:${entry.sourcePath}`;
   }
 
+  private restoreViewSelection(sourcePath?: string, viewId?: string): void {
+    const selection = resolveViewSelection(
+      this.viewEntries.map((entry) => ({
+        sourcePath: entry.sourcePath,
+        viewIds: entry.config.views.map((view) => view.id),
+      })),
+      { sourcePath, viewId },
+      this.currentDbIndex,
+      this.currentViewIndex,
+    );
+    this.currentDbIndex = selection.databaseIndex;
+    this.currentViewIndex = selection.viewIndex;
+  }
+
   /** Update database configs from settings (called when settings change) */
   updateConfigs(
     databaseFileOrder: string[] = this.databaseFileOrder,
     statusPresets: StatusPresetDef[] = this.statusPresets,
-    defaultStatusPresetId: string | undefined = this.defaultStatusPresetId
+    defaultStatusPresetId: string | undefined = this.defaultStatusPresetId,
+    databaseFolder: string = this.databaseFolder
   ): void {
+    const currentEntry = this.getCurrentEntry();
+    const currentSourcePath = currentEntry?.sourcePath;
+    const currentViewId = currentEntry?.config.views[this.currentViewIndex]?.id
+      || currentEntry?.config.views[0]?.id;
     this.databaseFileOrder = databaseFileOrder;
     this.statusPresets = normalizeStatusPresets(statusPresets);
     this.defaultStatusPresetId = defaultStatusPresetId;
+    this.databaseFolder = databaseFolder;
     this.rebuildViewEntries();
+    this.restoreViewSelection(currentSourcePath, currentViewId);
     if (this.suppressNextSettingsUpdate) {
       this.suppressNextSettingsUpdate = false;
       return;
@@ -933,12 +993,18 @@ export class DatabaseView extends FileView {
     }
     window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
     this.registerDomEvent(window.activeDocument, "keydown", (event) => this.handleDatabaseKeydown(event));
+    // Cmd/Ctrl+F：view scope keymap 优先于全局 editor:open-search（DOM bubble/capture 都会被
+    // Obsidian keymap 抢先 stopPropagation）。Mod 自动适配 macOS Cmd / 其它平台 Ctrl；
+    // ["Mod"]+"f" 只匹配 Mod+F，Mod+Shift+F 全局搜索不受影响。View.scope 默认 null，需自建。
+    this.scope = new Scope(this.app.scope);
+    this.scope.register(["Mod"], "f", (event) => this.handleSearchShortcut(event));
     this.registerDomEvent(window, "focus", () => this.refreshOnActivation());
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
       if (leaf === this.leaf) this.refreshOnActivation();
       else this.closeHeaderPopovers();
     }));
     this.registerEvent(this.app.workspace.on("css-change", () => this.chartRenderer.refreshTheme()));
+    this.registerEvent(this.app.workspace.on("database-icon-visibility-change" as never, () => this.rerenderToolbar()));
     try {
       this.renderToolbar();
       this.render();
@@ -1022,6 +1088,37 @@ export class DatabaseView extends FileView {
     event.preventDefault();
   }
 
+  private isActiveView(): boolean {
+    return this.app.workspace.getActiveViewOfType(DatabaseView) === this;
+  }
+
+  private focusSearch(): boolean {
+    const control = this.containerEl_?.querySelector<HTMLElement>(".db-search-control");
+    const searchInput = control?.querySelector<HTMLInputElement>(".db-search-input");
+    if (!control || !searchInput) return false;
+    control.addClass("is-active");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        searchInput.focus();
+        searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+      });
+    });
+    return true;
+  }
+
+  // Cmd/Ctrl+F：用 view scope 的 keymap 拦截（view scope 优先于全局 editor:open-search，
+  // DOM bubble/capture 监听都会被 Obsidian keymap 抢先 stopPropagation）。Mod 自动适配
+  // macOS Cmd / 其它平台 Ctrl；["Mod"]+"f" 只匹配 Mod+F，Mod+Shift+F 全局搜索不受影响。
+  // 编辑单元格时也抢焦点（失焦由 CellRenderer 现有 blur restore 处理）。
+  private handleSearchShortcut(event: KeyboardEvent): boolean {
+    if (this.isActiveView() && this.focusSearch()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return false; // 吃掉事件，阻止 editor:open-search
+    }
+    return true; // 非数据库视图上下文，放行默认
+  }
+
   private handleDatabaseKeydown(event: KeyboardEvent): void {
     if (!this.containerEl_?.isConnected) return;
     const active = window.activeDocument.activeElement;
@@ -1072,7 +1169,7 @@ export class DatabaseView extends FileView {
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        this.startEditAtCellSelectionFocus();
+        this.editAtCellSelection();
         return;
       }
     }
@@ -1114,6 +1211,20 @@ export class DatabaseView extends FileView {
     this.cellRenderer.startEdit(td, row, col);
   }
 
+  // Enter on a cell selection: single cell falls back to inline focus edit; multi-cell routes
+  // through the shared fill/bulk router (status bar is the popover anchor for bulk editing).
+  private editAtCellSelection(): void {
+    if (!this.cellSelection) return;
+    const addresses = this.getSelectedCellAddresses();
+    if (addresses.length <= 1) {
+      this.startEditAtCellSelectionFocus();
+      return;
+    }
+    // Multi-cell Enter uses the same path as the status-bar "fill value" action: single editable
+    // column → native editor; otherwise the text fill applies to every editable cell in the range.
+    this.openBulkEditOrFillForSelection(this.getStatusBarAnchor());
+  }
+
   private scrollCellIntoView(addr: CellAddress): void {
     if (!this.containerEl_) return;
     const td = this.containerEl_.querySelector<HTMLElement>(
@@ -1128,6 +1239,7 @@ export class DatabaseView extends FileView {
     if (!this.containerEl_ || this.getConfig()?.viewType !== "table") return;
     const address: CellAddress = { rowPath: row.file.path, colKey: col.key };
     if (!this.cellSelection) {
+      this.clearSelection();
       this.cellSelection = { anchor: address, focus: address };
       this.renderCellSelectionClasses();
       this.renderSelectionStatusBar();
@@ -1191,6 +1303,9 @@ export class DatabaseView extends FileView {
       moveView: (fromIndex, toIndex) => this.moveView(fromIndex, toIndex),
       renameDatabase: (name) => this.renameDatabase(name),
       updateDatabaseDescription: (description) => this.updateDatabaseDescription(description),
+      editDatabaseIcon: (anchor) => this.openDatabaseIconPicker(anchor),
+      showDatabaseIcon: getNoteDatabasePlugin(this.app)?.settings.showDatabaseIcon !== false,
+      toggleDatabaseIcon: () => { void this.toggleDatabaseIcon(); },
       setViewType: (value, viewIndex) => this.setViewType(value, viewIndex),
       setDisplayWidth: (value) => this.setDisplayWidth(value),
       setSearchText: (value) => {
@@ -1217,6 +1332,8 @@ export class DatabaseView extends FileView {
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(anchorEl),
       toggleCalendarOptions: (containerEl, anchor, config) => {
         this.calendarToolbarRenderer.togglePopover(containerEl, anchor, config, {
+          database: this.getActiveDb(),
+          createRecordIconField: () => this.openCreateRecordIconFieldModal("view"),
           onChange: (label) => {
             this.pendingUndoLabel = label || t("undo.viewTypeConfig");
             this.scheduleConfigSave();
@@ -1228,6 +1345,7 @@ export class DatabaseView extends FileView {
       },
       getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
       openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
+      createRecordIconField: () => this.openCreateRecordIconFieldModal("view"),
       updateViewConfig: (label) => this.updateToolbarViewConfig(label),
       updateTimelineScale: (scale, label) => this.updateTimelineScale(scale, label),
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover("filter", anchorEl),
@@ -2413,39 +2531,119 @@ export class DatabaseView extends FileView {
 
   private async createBlankEntry(defaults: Record<string, unknown> = {}, position?: CreateEntryPosition): Promise<void> {
     const config = this.getConfig();
-    if (!config) return;
+    const entry = this.getCurrentEntry();
+    if (!config || !entry) return;
+    const beforeConfig = this.cloneDatabaseConfig(entry.config);
+    let registeredGroupOption = false;
+    for (const [key, value] of Object.entries(defaults)) {
+      const col = config.schema.columns.find((candidate) => candidate.key === key);
+      if (!col) continue;
+      const optionPlan = planOptionRegistration(col, value);
+      if (optionPlan.addedOptions.length === 0) continue;
+      col.statusOptions = optionPlan.options;
+      if (optionPlan.clearPresetId) col.statusPresetId = undefined;
+      registeredGroupOption = true;
+    }
     const sourceConfig = this.getCreateContextConfig(config);
-    const frontmatter = this.mergeCreateDefaults(
+    // 上下文默认值（列默认 < 视图筛选/状态 < 用户/日历/分组 defaults）。来源规则由
+    // planCreateEntry 单独叠加为最高优先级，并统一计算文件名、文件夹与诊断。
+    // 显式 defaults 的 key 集合标记为用户意图：来源规则覆盖这些才记 conflictOverride；
+    // 列默认空值不在集合内，覆盖不记（避免把分组显式传入的 false/""/[] 误判为列默认）。
+    const explicitDefaults = this.mergeCreateDefaults(
       config,
-      this.getDefaultFrontmatterFromSourceRules(sourceConfig),
       this.getDefaultFrontmatterFromViewFilters(config),
       defaults
     );
+    const intentionalContextKeys = new Set(Object.keys(explicitDefaults));
+    const contextFrontmatter = { ...explicitDefaults };
     for (const col of config.schema.columns) {
       if (isFileFieldKey(col.key) || col.type === "computed") continue;
-      if (!Object.prototype.hasOwnProperty.call(frontmatter, col.key)) {
-        frontmatter[col.key] = this.getDefaultCellValue(col);
+      if (!Object.prototype.hasOwnProperty.call(contextFrontmatter, col.key)) {
+        contextFrontmatter[col.key] = this.getDefaultCellValue(col);
       }
     }
+    const plan = planCreateEntry({
+      sourceRuleTree: getSourceRuleTree(sourceConfig.sourceRuleTree, sourceConfig.sourceRules, sourceConfig.sourceLogic),
+      schema: config.schema,
+      sourceFolder: this.normalizeVaultFolder(sourceConfig.sourceFolder || ""),
+      newRecordFolder: sourceConfig.newRecordFolder ? this.normalizeVaultFolder(sourceConfig.newRecordFolder) : undefined,
+      fallbackFolder: this.databaseFolder || "",
+      contextFrontmatter,
+      intentionalContextKeys,
+      defaultFilename: t("defaults.untitledNote"),
+      normalizeFolder: (folder) => this.normalizeVaultFolder(folder),
+    });
+    const diagnostics = [...plan.diagnostics];
     try {
-      const file = await this.dataSource.createNote(this.getCreateFolder(sourceConfig), t("defaults.untitledNote"), frontmatter);
+      const file = await this.dataSource.createNote(plan.folder, plan.filename, plan.frontmatter);
+      // 精确文件名约束被自动序号化时规则失效，记录风险（不阻止创建）。
+      if (plan.hasExactFilenameRule && file.basename !== plan.filename) {
+        diagnostics.push({ reason: "filenameSuffix", detail: file.basename });
+      }
       this.pendingNewFilePath = file.path;
       this.suppressDataReload(1200);
       this.pendingNewRecord = {
         file,
-        frontmatter: { ...frontmatter },
+        frontmatter: { ...plan.frontmatter },
         expiresAt: Date.now() + 8000,
       };
       if (config.schema.computedFields.length > 0) {
-        void this.syncComputedForFile(file, frontmatter, undefined, config);
+        void this.syncComputedForFile(file, plan.frontmatter, undefined, config);
       }
       this.assignManualRankForNewEntry(config, file.path, position);
-      this.pushHistory({ type: "created", label: t("undo.createRow"), path: file.path });
-      new Notice(t("notice.createdRow", { name: file.basename }));
+      if (registeredGroupOption) {
+        try {
+          const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+          if (dbFile instanceof TFile) {
+            this.suppressDataReload(2500);
+            await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+          }
+          const after = this.cloneDatabaseConfig(entry.config);
+          this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
+          this.pushHistory({
+            type: "config",
+            label: t("undo.createRow"),
+            dbId: entry.config.id,
+            dbPath: entry.sourcePath,
+            viewId: config.id,
+            before: beforeConfig,
+            after,
+            createdPaths: [file.path],
+          });
+        } catch (err) {
+          this.replaceDatabaseConfig(entry.config, beforeConfig);
+          this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+          try {
+            await this.dataSource.trashNote(file);
+          } catch (rollbackErr) {
+            console.error("Note Database: failed to roll back created note after option config save failure", rollbackErr);
+          }
+          throw err;
+        }
+      } else {
+        this.pushHistory({ type: "created", label: t("undo.createRow"), path: file.path });
+      }
+      this.showCreateEntryNotice(file, diagnostics);
       await this.refreshAfterSave();
     } catch (err) {
+      if (registeredGroupOption) {
+        this.replaceDatabaseConfig(entry.config, beforeConfig);
+        this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+      }
       new Notice(t("errors.createFailed", { error: String(err) }));
     }
+  }
+
+  /** 创建成功通知显示最终 file.path；有诊断时说明可能不符合来源规则并给出原因概括。 */
+  private showCreateEntryNotice(file: TFile, diagnostics: CreateEntryDiagnostic[]): void {
+    if (diagnostics.length === 0) {
+      new Notice(t("notice.createdNote", { path: file.path }));
+      return;
+    }
+    const reasons = Array.from(new Set(diagnostics.map((d) => `createRuleRisk.${d.reason}`)))
+      .map((key) => t(key))
+      .join(t("common.enumerationJoin"));
+    new Notice(t("notice.createdNoteRuleRisk", { path: file.path, reasons }));
   }
 
   private async createCalendarTimelineEntry(
@@ -2655,27 +2853,28 @@ export class DatabaseView extends FileView {
   }
 
   private assignManualRankForNewEntry(config: ViewConfig, filePath: string, position?: CreateEntryPosition): void {
-    if (!config.manualOrder?.ranks || Object.keys(config.manualOrder.ranks).length === 0) return;
-    const ranks = config.manualOrder.ranks;
-    const lowerPath = position?.afterPath;
-    const upperPath = position?.beforePath;
-    const lowerRank = lowerPath ? ranks[lowerPath] : undefined;
-    const upperRank = upperPath ? ranks[upperPath] : undefined;
+    if (!config.manualOrder?.ranks || Object.keys(config.manualOrder.ranks).length === 0) {
+      if (!position?.beforePath && !position?.afterPath) return;
+      this.ensureManualRanks(config);
+    }
+    const manualOrder = config.manualOrder;
+    const ranks = manualOrder?.ranks;
+    if (!manualOrder || !ranks) return;
     const fallbackLastPath = this.rows.length > 0 ? this.rows[this.rows.length - 1].file.path : undefined;
-    const fallbackLastRank = fallbackLastPath ? ranks[fallbackLastPath] : undefined;
-    let newRank = rankBetween(lowerRank ?? fallbackLastRank, upperRank);
+    const bounds = resolveNewEntryRankBounds(ranks, position, fallbackLastPath);
+    let newRank = rankBetween(bounds.lower, bounds.upper);
 
     if (newRank === null) {
-      config.manualOrder.ranks = rebalanceRanks(ranks);
-      const rebalanced = config.manualOrder.ranks;
-      newRank = rankBetween(
-        lowerPath ? rebalanced[lowerPath] : fallbackLastPath ? rebalanced[fallbackLastPath] : undefined,
-        upperPath ? rebalanced[upperPath] : undefined
-      );
+      manualOrder.ranks = rebalanceRanks(ranks);
+      const rebalanced = manualOrder.ranks;
+      const rebalancedBounds = resolveNewEntryRankBounds(rebalanced, position, fallbackLastPath);
+      newRank = rankBetween(rebalancedBounds.lower, rebalancedBounds.upper);
     }
 
-    if (!newRank || !config.manualOrder.ranks) return;
-    config.manualOrder.ranks[filePath] = newRank;
+    if (!newRank) return;
+    const targetRanks = manualOrder.ranks;
+    if (!targetRanks) return;
+    targetRanks[filePath] = newRank;
     this.scheduleConfigSave({ skipHistory: true });
   }
 
@@ -2703,30 +2902,6 @@ export class DatabaseView extends FileView {
 
   private getDefaultStatusOptions(db: DatabaseConfig = this.getActiveDb(), view: ViewConfig = this.getActiveView()): StatusOptionDef[] {
     return getStatusPresetOptions(this.getAvailableStatusPresets(db, view), this.getDefaultStatusPresetId(db, view));
-  }
-
-  private getDefaultFrontmatterFromSourceRules(config: ViewConfig): Record<string, unknown> {
-    const frontmatter: Record<string, unknown> = {};
-    const tags = new Set<string>();
-    const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
-    for (const rule of getRequiredSourceRules(sourceRuleTree)) {
-      if ((rule.op === "eq" || rule.op === "strictEq") && rule.value != null && this.isWritableSourceRuleField(config, rule.field)) {
-        frontmatter[rule.field] = rule.op === "strictEq" || rule.valueType ? getSourceRuleTypedValue(rule) : rule.value;
-      }
-      if (rule.op === "hasProperty" && this.isWritableSourceRuleField(config, rule.field) && !Object.prototype.hasOwnProperty.call(frontmatter, rule.field)) {
-        frontmatter[rule.field] = "";
-      }
-      if (rule.op === "hasTag" && rule.value) {
-        tags.add(normalizeObsidianTagValue(rule.value));
-      }
-    }
-    if (tags.size > 0) frontmatter["tags"] = Array.from(tags);
-    return frontmatter;
-  }
-
-  private isWritableSourceRuleField(config: ViewConfig, field: string): boolean {
-    if (!field || field.startsWith("file.") || field.startsWith("formula.")) return false;
-    return config.schema.columns.find((column) => column.key === field)?.type !== "computed";
   }
 
   private mergeCreateDefaults(config: ViewConfig, ...sources: Record<string, unknown>[]): Record<string, unknown> {
@@ -2785,22 +2960,6 @@ export class DatabaseView extends FileView {
     };
   }
 
-  private getCreateFolder(config: ViewConfig): string {
-    if (config.newRecordFolder) return normalizePath(config.newRecordFolder);
-    const sourceFolder = this.normalizeVaultFolder(config.sourceFolder || "");
-    const sourceRuleTree = getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic);
-    const ruledFolders = getRequiredSourceRules(sourceRuleTree)
-      .filter((rule) => rule.op === "inFolder" && rule.value)
-      .map((rule) => this.normalizeVaultFolder(String(rule.value)))
-      .filter((folder) => !sourceFolder || !folder || folder === sourceFolder || folder.startsWith(`${sourceFolder}/`));
-    const mostSpecificFolder = ruledFolders.reduce(
-      (current, folder) => folder.length > current.length ? folder : current,
-      sourceFolder
-    );
-    if (mostSpecificFolder || config.sourceFolder) return normalizePath(mostSpecificFolder || "/");
-    return normalizePath(mostSpecificFolder || this.databaseFolder || "");
-  }
-
   /** Resolve legacy view-level source settings without widening a database query to the vault root. */
   private getEffectiveConfig(dbConfig: DatabaseConfig, viewConfig: ViewConfig = this.getConfig()): DatabaseConfig {
     return {
@@ -2837,6 +2996,8 @@ export class DatabaseView extends FileView {
   }
 
   private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
+    this.invalidateActiveBulkEditor();
+    if (this.cellSelection) this.clearCellSelection();
     const path = row.file.path;
     this.lastSelectedRowPath = applyRangeSelection({
       orderedIds: this.getOrderedSelectionRowPaths(),
@@ -2851,6 +3012,8 @@ export class DatabaseView extends FileView {
   }
 
   private toggleRowsSelected(rows: RowData[], selected: boolean): void {
+    this.invalidateActiveBulkEditor();
+    if (this.cellSelection) this.clearCellSelection();
     for (const row of rows) {
       if (selected) this.selectedRows.add(row.file.path);
       else this.selectedRows.delete(row.file.path);
@@ -2889,18 +3052,22 @@ export class DatabaseView extends FileView {
   }
 
   private clearSelection(): void {
+    this.invalidateActiveBulkEditor();
     if (this.selectedRows.size === 0 && this.lastSelectedRowPath == null) return;
     this.selectedRows.clear();
     this.lastSelectedRowPath = null;
+    this.bulkEditingColumnKey = undefined;
     this.renderSelectionStatusBar();
     this.syncSelectionControls();
   }
 
   private clearCellSelection(): void {
+    this.invalidateActiveBulkEditor();
     if (!this.cellSelection) return;
     this.cellSelection = null;
     this.isSelectingCells = false;
     this.showCellFillInput = false;
+    this.bulkEditingColumnKey = undefined;
     this.renderCellSelectionClasses();
     this.renderSelectionStatusBar();
   }
@@ -2910,6 +3077,7 @@ export class DatabaseView extends FileView {
     td.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       if (this.isInteractiveCellTarget(event.target)) return;
+      this.invalidateActiveBulkEditor();
       event.preventDefault();
       event.stopPropagation();
       const address = { rowPath: row.file.path, colKey: col.key };
@@ -2917,6 +3085,7 @@ export class DatabaseView extends FileView {
         if (this.cellSelection) {
           this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
         } else {
+          this.clearSelection();
           this.cellSelection = { anchor: address, focus: address };
         }
         this.isSelectingCells = false;
@@ -2927,6 +3096,7 @@ export class DatabaseView extends FileView {
       if (event.shiftKey && this.cellSelection) {
         this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
       } else {
+        this.clearSelection();
         this.cellSelection = { anchor: address, focus: address };
       }
       this.isSelectingCells = true;
@@ -3169,6 +3339,7 @@ export class DatabaseView extends FileView {
         this.updateStickyOffsets();
         this.refresh();
       },
+      createRecordIconField: (target) => this.openCreateRecordIconFieldModal(target),
       onComputedSyncModeChange: () => this.rerenderToolbar(),
       onComputedFrontmatterCleanup: () => this.showComputedFrontmatterCleanupModal(),
       statusPresets: this.getStatusPresetsForLevel("database", db),
@@ -3198,6 +3369,213 @@ export class DatabaseView extends FileView {
       },
       onManageViewStatusPresets: () => this.showViewStatusPresetManager(),
     }, this.getHeaderPopoverAnchor("view"));
+  }
+
+  private getRecentRecordIcons(): string[] {
+    return getNoteDatabasePlugin(this.app)?.settings.recentRecordIcons || [];
+  }
+
+  private async setRecentRecordIcons(recent: string[]): Promise<void> {
+    const plugin = getNoteDatabasePlugin(this.app);
+    if (!plugin) return;
+    plugin.settings.recentRecordIcons = recent;
+    await plugin.saveSettings();
+  }
+
+  private openDatabaseIconPicker(anchor: HTMLElement): void {
+    const database = this.getActiveDb();
+    if (!database) return;
+    openIconPickerPopover({
+      anchor,
+      current: database.icon,
+      recent: this.getRecentRecordIcons(),
+      onRecentChange: (recent) => this.setRecentRecordIcons(recent),
+      onSelect: async (value) => {
+        const db = this.getActiveDb();
+        if (!db) return;
+        db.icon = value || undefined;
+        this.pendingUndoLabel = t("recordIcon.icons");
+        await this.saveConfigImmediately();
+        this.rerenderToolbar();
+      },
+    });
+  }
+
+  private async toggleDatabaseIcon(): Promise<void> {
+    const plugin = getNoteDatabasePlugin(this.app);
+    if (!plugin) return;
+    plugin.settings.showDatabaseIcon = plugin.settings.showDatabaseIcon === false;
+    await plugin.saveSettings();
+    this.rerenderToolbar();
+  }
+
+  private getCreateEntryDefaultsForRow(row: RowData, context?: RowCreateContext): Record<string, unknown> {
+    const config = this.getConfig();
+    if (!config) return {};
+    const viewType = config.viewType;
+    if (viewType === "calendar" || viewType === "timeline" || viewType === "chart") return {};
+    if (context?.groups?.length) {
+      const defaults: Record<string, unknown> = {};
+      for (const group of context.groups) {
+        if (isFileFieldKey(group.field) || isComputedGroupField(config, group.field)) continue;
+        const groupDefaults = resolveGroupCreateDefaults(config, group.field, group.key);
+        for (const [key, value] of Object.entries(groupDefaults)) defaults[key] = value;
+      }
+      return defaults;
+    }
+    const groupField = this.getActiveGroupField(config);
+    if (!groupField || isFileFieldKey(groupField) || isComputedGroupField(config, groupField)) return {};
+    const col = config.schema.columns.find((c) => c.key === groupField);
+    if (!col) return {};
+    const defaults = this.resolveRowGroupDefaults(row, config, groupField, col);
+    if (viewType === "board" && config.boardSubgroupField && !isFileFieldKey(config.boardSubgroupField) && !isComputedGroupField(config, config.boardSubgroupField)) {
+      const subCol = config.schema.columns.find((c) => c.key === config.boardSubgroupField);
+      if (subCol) {
+        const subDefaults = this.resolveRowGroupDefaults(row, config, config.boardSubgroupField, subCol);
+        for (const [k, v] of Object.entries(subDefaults)) defaults[k] = v;
+      }
+    }
+    return defaults;
+  }
+
+  private resolveRowGroupDefaults(row: RowData, config: ViewConfig, field: string, col: ColumnDef): Record<string, unknown> {
+    const groups = this.queryEngine.groupBy([row], field, [], col, config);
+    const groupKey = groups.find((g) => g.rows.includes(row))?.key;
+    if (groupKey == null) return {};
+    return resolveGroupCreateDefaults(config, field, groupKey);
+  }
+
+  private renderRowRecordIcon(
+    parent: HTMLElement,
+    row: RowData,
+    config: ViewConfig,
+    compact = false,
+    readOnly = false,
+  ): HTMLElement | null {
+    if (config.showRecordIcon !== true) return null;
+    const database = this.getActiveDb();
+    if (!database) return null;
+    const field = resolveRecordIconField(database, config);
+    const token = field ? row.frontmatter[field] : undefined;
+    return renderRecordIcon(parent, token, {
+      compact,
+      editable: !readOnly,
+      tooltip: t("recordIcon.icons"),
+      onClick: (anchor) => this.openRecordIconPicker(anchor, row, config),
+    });
+  }
+
+  private openRecordIconPicker(anchor: HTMLElement, row: RowData, config: ViewConfig): void {
+    const database = this.getActiveDb();
+    if (!database) return;
+    const field = resolveRecordIconField(database, config);
+    if (!field) {
+      const columns = config.schema.columns.filter((column) => column.type === "text" && !column.key.startsWith("file."));
+      openDropdownMenu({
+        anchor,
+        label: t("recordIcon.selectField"),
+        value: "",
+        searchable: true,
+        options: [
+          ...this.orderRecordIconColumns(columns).map((column) => ({ value: column.key, text: column.label || column.key })),
+          { value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus" },
+        ],
+        onChange: (value) => {
+          if (value === "__create_record_icon_field__") {
+            this.openCreateRecordIconFieldModal("database", () => this.openRecordIconPicker(this.findRecordIconAnchor(row) || anchor, row, config));
+            return;
+          }
+          config.recordIconFieldOverrideEnabled = true;
+          config.recordIconField = value || undefined;
+          this.pendingUndoLabel = t("recordIcon.field");
+          void this.saveConfigImmediately().then(() => {
+            this.refresh();
+            window.setTimeout(() => {
+              const liveAnchor = this.findRecordIconAnchor(row) || anchor;
+              this.openRecordIconPicker(liveAnchor, row, config);
+            }, 0);
+          });
+        },
+      });
+      return;
+    }
+    const column = config.schema.columns.find((candidate) => candidate.key === field);
+    if (!column) return;
+    openIconPickerPopover({
+      anchor,
+      current: typeof row.frontmatter[field] === "string" ? row.frontmatter[field] : undefined,
+      recent: this.getRecentRecordIcons(),
+      onRecentChange: (recent) => this.setRecentRecordIcons(recent),
+      onSelect: async (value) => {
+        await this.saveCellValueWithHistory(row, column, value);
+      },
+    });
+  }
+
+  private orderRecordIconColumns(columns: ColumnDef[], current?: string): ColumnDef[] {
+    return [...columns].sort((a, b) => {
+      const rank = (column: ColumnDef) => column.key === "icon" ? 0 : column.key === current ? 1 : 2;
+      return rank(a) - rank(b) || (a.label || a.key).localeCompare(b.label || b.key);
+    });
+  }
+
+  private openCreateRecordIconFieldModal(target: "database" | "view", afterCreate?: () => void): void {
+    const database = this.getActiveDb();
+    const config = this.getConfig();
+    if (!database || !config) return;
+    new CreateRecordIconFieldModal(this.app, config.schema.columns, async (key, label) => {
+      const oldDatabaseField = database.recordIconField;
+      const oldOverrideEnabled = config.recordIconFieldOverrideEnabled;
+      const oldViewField = config.recordIconField;
+      const result = await this.columnOperations.appendNamedTextColumn(
+        key,
+        label,
+        () => {
+          if (target === "view") {
+            config.recordIconFieldOverrideEnabled = true;
+            config.recordIconField = key;
+          } else {
+            database.recordIconField = key;
+            config.recordIconFieldOverrideEnabled = undefined;
+            config.recordIconField = undefined;
+          }
+        },
+        () => {
+          database.recordIconField = oldDatabaseField;
+          config.recordIconFieldOverrideEnabled = oldOverrideEnabled;
+          config.recordIconField = oldViewField;
+        },
+      );
+      if (!result) return false;
+      this.refresh();
+      afterCreate?.();
+      return true;
+    }).open();
+  }
+
+  private findRecordIconAnchor(row: RowData): HTMLElement | null {
+    return this.containerEl_?.querySelector<HTMLElement>(
+      `[data-note-database-row-path="${CSS.escape(row.file.path)}"] .db-record-icon`
+    ) || null;
+  }
+
+  private toggleCurrentViewRecordIcon(anchor?: HTMLElement, row?: RowData): void {
+    const config = this.getConfig();
+    const database = this.getActiveDb();
+    if (!config || !database) return;
+    config.showRecordIcon = config.showRecordIcon === true ? undefined : true;
+    if (config.showRecordIcon && !resolveRecordIconField(database, config) && !database.recordIconField) {
+      config.recordIconFieldOverrideEnabled = true;
+    }
+    this.pendingUndoLabel = t("recordIcon.show");
+    this.scheduleConfigSave();
+    this.refresh();
+    if (config.showRecordIcon && !resolveRecordIconField(database, config) && anchor && row) {
+      window.setTimeout(() => {
+        const liveAnchor = this.findRecordIconAnchor(row);
+        this.openRecordIconPicker(liveAnchor || anchor, row, config);
+      }, 0);
+    }
   }
 
   private updateDatabaseChrome(): void {
@@ -3413,6 +3791,37 @@ export class DatabaseView extends FileView {
     );
   }
 
+  // Side-effect-free option mutation planning: normalize previous/next, infer renames and
+  // removed values, and build the frontmatter cleanup changes those imply. Shared by the
+  // single-cell and bulk option paths so rename/delete cleanup semantics stay identical.
+  private buildColumnOptionMutation(
+    col: ColumnDef,
+    previousOptions: StatusOptionDef[],
+    nextOptions: StatusOptionDef[],
+    options: { cleanupRemovedValues?: string[]; renameValues?: Array<{ from: string; to: string }> } = {}
+  ): { normalizedNext: StatusOptionDef[]; cleanupChanges: CellEditChange[] } {
+    const normalizedPrevious = this.normalizeOptionDefsForColumn(col, previousOptions);
+    const normalizedNext = this.normalizeOptionDefsForColumn(col, nextOptions);
+    const previousValues = new Set(normalizedPrevious.map((option) => option.value));
+    const nextValues = new Set(normalizedNext.map((option) => option.value));
+    const renameValues = (options.renameValues || this.inferOptionRenames(normalizedPrevious, normalizedNext))
+      .map((rename) => ({
+        from: normalizeOptionValueForKey(col.key, rename.from),
+        to: normalizeOptionValueForKey(col.key, rename.to),
+      }))
+      .filter((rename) => rename.from && rename.to && rename.from !== rename.to);
+    const renamedValues = new Set(renameValues.map((rename) => rename.from));
+    const inferredRemoved = Array.from(previousValues)
+      .filter((value) => !nextValues.has(value) && !renamedValues.has(value));
+    const removedValues = new Set(
+      (options.cleanupRemovedValues ?? inferredRemoved)
+        .map((value) => normalizeOptionValueForKey(col.key, value))
+        .filter(Boolean)
+    );
+    const cleanupChanges = this.mergeCellChanges(this.getOptionValueCellChanges(col, removedValues, renameValues));
+    return { normalizedNext, cleanupChanges };
+  }
+
   private async commitColumnOptionsTransaction(
     col: ColumnDef,
     previousOptions: StatusOptionDef[] = [],
@@ -3430,31 +3839,15 @@ export class DatabaseView extends FileView {
     if (!config) return;
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
-    const normalizedPrevious = this.normalizeOptionDefsForColumn(target, previousOptions);
-    const normalizedNext = this.normalizeOptionDefsForColumn(target, nextOptions);
-    const previousValues = new Set(normalizedPrevious.map((option) => option.value));
-    const nextValues = new Set(normalizedNext.map((option) => option.value));
-    const renameValues = (options.renameValues || this.inferOptionRenames(normalizedPrevious, normalizedNext))
-      .map((rename) => ({
-        from: normalizeOptionValueForKey(target.key, rename.from),
-        to: normalizeOptionValueForKey(target.key, rename.to),
-      }))
-      .filter((rename) => rename.from && rename.to && rename.from !== rename.to);
-    const renamedValues = new Set(renameValues.map((rename) => rename.from));
-    const inferredRemoved = Array.from(previousValues)
-      .filter((value) => !nextValues.has(value) && !renamedValues.has(value));
-    const removedValues = new Set(
-      (options.cleanupRemovedValues ?? inferredRemoved)
-        .map((value) => normalizeOptionValueForKey(target.key, value))
-        .filter(Boolean)
-    );
+    const { normalizedNext, cleanupChanges } = this.buildColumnOptionMutation(target, previousOptions, nextOptions, {
+      cleanupRemovedValues: options.cleanupRemovedValues,
+      renameValues: options.renameValues,
+    });
     const changes = this.mergeCellChanges([
-      ...this.getOptionValueCellChanges(target, removedValues, renameValues),
-      ...(
-        options.setValue && options.currentRow
-          ? [this.createCurrentCellChange(options.currentRow, target, options.value)]
-          : []
-      ),
+      ...cleanupChanges,
+      ...(options.setValue && options.currentRow
+        ? [this.createCurrentCellChange(options.currentRow, target, options.value)]
+        : []),
     ]);
     target.statusOptions = normalizedNext;
     target.statusPresetId = target.type === "status" ? options.presetId : undefined;
@@ -3476,6 +3869,62 @@ export class DatabaseView extends FileView {
       }
     }
     if (this.showColumnManager) this.renderColumnManager();
+  }
+
+  // Bulk adapter for option transactions from the native editor session. Combines option config
+  // (color/reorder/rename/delete cleanup) with selected-record value changes into one atomic,
+  // single-undo commit. Confirmation gates the value path; canceling or staleness aborts without
+  // persisting nextOptions (including any newly created option). file.tags never mutates
+  // statusOptions — its value path reuses the prepared bulk commit only.
+  private async commitBulkCellOptionTransaction(
+    paths: string[],
+    col: ColumnDef,
+    transaction: CellOptionTransaction
+  ): Promise<void> {
+    if (col.key === "file.tags") {
+      if (!transaction.setValue) return;
+      const request = resolveBulkEditorRequest(col, transaction.value);
+      const initial = await this.prepareBulkEdit(paths, request);
+      if (!initial) return;
+      const confirmed = await this.confirmBulkEdit(paths, request, initial);
+      if (!confirmed) return;
+      await this.commitPreparedBulkEdit(confirmed);
+      return;
+    }
+
+    const config = this.getConfig();
+    if (!config) return;
+    const target = config.schema.columns.find((candidate) => candidate.key === col.key);
+    if (!target) return;
+
+    const { normalizedNext, cleanupChanges } = this.buildColumnOptionMutation(
+      target,
+      transaction.previousOptions || target.statusOptions || [],
+      transaction.nextOptions || target.statusOptions || [],
+      { cleanupRemovedValues: transaction.cleanupRemovedValues, renameValues: transaction.renameValues }
+    );
+
+    let prepared: PreparedBulkEdit | null = null;
+    if (transaction.setValue) {
+      const request = resolveBulkEditorRequest(target, transaction.value);
+      prepared = await this.prepareBulkEdit(paths, request);
+      if (prepared) {
+        const confirmed = await this.confirmBulkEdit(paths, request, prepared);
+        if (!confirmed) return;
+        prepared = confirmed;
+      }
+    }
+
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    const before = this.cloneDatabaseConfig(entry.config);
+    target.statusOptions = normalizedNext;
+    target.statusPresetId = undefined;
+    const mergedChanges = this.mergeCellChanges([
+      ...cleanupChanges,
+      ...(prepared?.changes || []),
+    ]);
+    await this.commitConfigAndCellChanges(entry, before, mergedChanges, t("undo.bulkEdit"));
   }
 
   private normalizeOptionDefsForColumn(col: ColumnDef, options: StatusOptionDef[]): StatusOptionDef[] {
@@ -4566,11 +5015,356 @@ export class DatabaseView extends FileView {
     return `${dbName}-${config.name || "chart"}`.replace(/[\\/:*?"<>|]+/g, "-");
   }
 
+  // Status-bar element that anchors the native bulk editor popover. Re-queried on demand because
+  // renderSelectionStatusBar rebuilds the bar on every selection change.
+  private getStatusBarAnchor(): HTMLElement | null {
+    return this.containerEl_?.querySelector<HTMLElement>(":scope > .db-selection-status-bar") ?? null;
+  }
+
+  /** Selection changes invalidate the path snapshot captured by a native bulk editor session. */
+  private invalidateActiveBulkEditor(): void {
+    this.bulkEditingColumnKey = undefined;
+    this.cellRenderer.closeActiveBulkEditor();
+  }
+
+  // The editor popover horizontally aligns with the field chip's left edge (not the status bar's
+  // left edge). Falls back to the status bar when no chip is rendered yet.
+  private getBulkEditChipAnchor(): HTMLElement | null {
+    return this.containerEl_?.querySelector<HTMLElement>(":scope > .db-selection-status-bar .db-selection-chip") ?? null;
+  }
+
+  // Render the single "editing field" chip shown in the status bar while a native bulk editor is
+  // open. Re-resolves the column from the live config so a config swap mid-edit still matches.
+  private renderBulkEditingChip(bar: HTMLElement, col: ColumnDef, onClick?: () => void): void {
+    const chip = bar.createDiv({ cls: "db-selection-chip" + (onClick ? " is-clickable" : "") });
+    renderPropertyTypeIcon(chip, col, "db-property-icon");
+    chip.createSpan({ cls: "db-selection-chip-label", text: col.label || col.key });
+    if (onClick) {
+      chip.setAttr("role", "button");
+      chip.setAttr("tabindex", "0");
+      chip.setAttr("title", t("bulkEdit.editField"));
+      chip.onclick = onClick;
+      chip.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      };
+    }
+  }
+
+  // Close the current native bulk editor and reopen the field menu so the user can switch fields.
+  // Closing fires session.onClose which clears bulkEditingColumnKey and re-renders the status bar
+  // back to its button form before the field menu opens.
+  // Reopen the native bulk editor for the field currently shown in the chip (row selection).
+  // The chip persists after the editor closes, so the user can click it to re-edit the same field.
+  private openBulkEditNativeEditorForRows(): void {
+    const config = this.getConfig();
+    const paths = Array.from(this.selectedRows);
+    if (!config || paths.length === 0 || !this.bulkEditingColumnKey) return;
+    const column = config.schema.columns.find((candidate) => candidate.key === this.bulkEditingColumnKey);
+    if (!column) return;
+    const anchor = this.getStatusBarAnchor() ?? this.containerEl_!;
+    this.openBulkEditNativeEditor(anchor, paths, column);
+  }
+
+  // Fields that drive board/grouping layouts; changing them may move records between groups.
+  private collectBulkGroupingFields(): Set<string> {
+    const view = this.getConfig();
+    return new Set([
+      this.vs().groupByField,
+      view?.boardGroupField,
+      view?.boardSubgroupEnabled ? view?.boardSubgroupField : undefined,
+    ].filter((field): field is string => Boolean(field)));
+  }
+
+  // Fields referenced by any source rule (db-side always, view-side only when enabled). Editing a
+  // field used in a source filter can drop records out of the database/view, so it is gated like a
+  // grouping field.
+  private collectSourceRuleFields(): Set<string> {
+    const db = this.getActiveDb();
+    const view = this.getConfig();
+    if (!db) return new Set();
+    const viewEnabled = view?.viewSourceRulesEnabled === true;
+    const tree = mergeDbAndViewSourceRuleTrees(db, viewEnabled ? view : undefined);
+    return new Set(getAllSourceRules(tree).map((rule) => rule.field));
+  }
+
+  private openBulkEditForRows(anchor: HTMLElement): void {
+    const config = this.getConfig();
+    const paths = Array.from(this.selectedRows);
+    if (!config || paths.length === 0) return;
+    this.cellRenderer.closeActiveBulkEditor();
+    this.closeBulkEditPopover?.();
+    this.closeBulkEditPopover = openBulkEditFieldMenu({
+      anchor,
+      columns: config.schema.columns,
+      computedFields: config.schema.computedFields,
+      onSelect: (column) => window.setTimeout(() => this.openBulkEditNativeEditor(anchor, paths, column), 0),
+    });
+  }
+
+  private openBulkEditForSelectedCells(anchor: HTMLElement, columnKey: string): void {
+    const config = this.getConfig();
+    if (!config) return;
+    const column = config.schema.columns.find((candidate) => candidate.key === columnKey);
+    if (!column) return;
+    const paths = Array.from(new Set(this.getSelectedCellAddresses()
+      .filter((address) => address.colKey === columnKey)
+      .map((address) => address.rowPath)));
+    if (paths.length === 0) return;
+    this.openBulkEditNativeEditor(anchor, paths, column);
+  }
+
+  // Shared router for cell-range "fill" actions (fill button + Enter on multi-cell selection):
+  // single editable column → native bulk editor; otherwise toggle the plain text fill input.
+  private openBulkEditOrFillForSelection(anchor?: HTMLElement | null): void {
+    const columnKeys = new Set(this.getSelectedCellAddresses().map((address) => address.colKey));
+    if (columnKeys.size === 1) {
+      const config = this.getConfig();
+      const col = config?.schema.columns.find((c) => c.key === [...columnKeys][0]);
+      if (col && getBulkEditableColumns([col]).length && anchor) {
+        this.showCellFillInput = false;
+        this.openBulkEditForSelectedCells(anchor, [...columnKeys][0]);
+        return;
+      }
+    }
+    this.showCellFillInput = !this.showCellFillInput;
+    this.renderSelectionStatusBar();
+  }
+
+  // Second layer: open the native CellRenderer editor for one column across the selected paths.
+  // Re-reads records, skips missing, resolves common/mixed state, and routes every commit through
+  // prepare → confirm → commit (value) or commitBulkCellOptionTransaction (options).
+  private openBulkEditNativeEditor(anchor: HTMLElement, paths: string[], column: ColumnDef): void {
+    const db = this.getActiveDb();
+    const config = this.getConfig();
+    if (!db || !config) return;
+    const records = this.dataSource.getRecordsForDatabase(db);
+    const recordByPath = new Map(records.map((record) => [record.file.path, record]));
+    const existingPaths = paths.filter((path) => recordByPath.has(path));
+    if (existingPaths.length === 0) {
+      new Notice(t("bulkEdit.allMissing"));
+      return;
+    }
+    const representativeRecord = recordByPath.get(existingPaths[0])!;
+    const representative = this.rows.find((row) => row.file.path === existingPaths[0]) ?? {
+      file: representativeRecord.file,
+      frontmatter: representativeRecord.frontmatter,
+      computed: {},
+    };
+    const key = this.getFrontmatterWriteKey(column);
+    const values = existingPaths.map((path) => this.cloneFillValue(recordByPath.get(path)!.frontmatter[key]));
+    const initial = resolveBulkEditInitialValue(column, values);
+
+    // Close any still-open bulk editor first so its onClose clears the previous field before we
+    // set the new one. Prevents a stale chip if the user switches fields or selections mid-edit.
+    this.cellRenderer.closeActiveBulkEditor();
+    this.closeBulkEditPopover?.();
+    this.closeBulkEditPopover = undefined;
+
+    // Flip the status bar into chip mode (field capsule only) and re-query the anchor from the
+    // freshly rendered bar. The chip replaces the button group for the duration of the edit.
+    this.bulkEditingColumnKey = column.key;
+    this.renderSelectionStatusBar();
+    const editorAnchor = this.getStatusBarAnchor();
+    if (!editorAnchor) return;
+
+    const editablePaths = existingPaths;
+    const session: CellEditSession = {
+      mixed: initial.mixed,
+      // getter: the bar element is rebuilt on every renderSelectionStatusBar, so a captured
+      // reference would go stale. Re-querying keeps the popover anchored to the live element.
+      anchorEl: () => this.getBulkEditChipAnchor() ?? this.getStatusBarAnchor(),
+      commitValue: async (value) => {
+        const request = resolveBulkEditorRequest(column, value);
+        const prepared = await this.prepareBulkEdit(editablePaths, request);
+        if (!prepared) return;
+        const confirmed = await this.confirmBulkEdit(editablePaths, request, prepared);
+        if (!confirmed) return;
+        await this.commitPreparedBulkEdit(confirmed);
+      },
+      commitOptionTransaction: async (transaction) => {
+        await this.commitBulkCellOptionTransaction(editablePaths, column, transaction);
+      },
+      onClose: () => {
+        // Keep bulkEditingColumnKey so the chip persists after the editor closes — the user can
+        // click the chip to re-edit the same field. It is cleared when the row selection clears.
+        this.renderSelectionStatusBar();
+      },
+    };
+    this.cellRenderer.startEditSession(editorAnchor, representative, column, initial.value, session);
+  }
+
+  private async buildBulkEditContext(paths: string[], request: BulkEditorRequest): Promise<{
+    plan: ReturnType<typeof buildBulkEditPlan>;
+    impact: BulkEditImpact;
+  }> {
+    const db = this.getActiveDb();
+    const view = this.getConfig();
+    if (!db || !view) throw new Error("No active database");
+    const column = getBulkEditableColumns(view.schema.columns).find((candidate) => candidate.key === request.columnKey);
+    if (!column) throw new Error("Field is no longer editable");
+    const records = this.dataSource.getRecordsForDatabase(db);
+    const recordByPath = new Map(records.map((record) => [record.file.path, record]));
+    const missingPaths = paths.filter((path) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return !(file instanceof TFile) || !recordByPath.has(path);
+    });
+    const key = this.getFrontmatterWriteKey(column);
+    const targets = paths.flatMap((path) => {
+      const record = recordByPath.get(path);
+      if (!record) return [];
+      return [{
+        path,
+        oldValue: this.cloneFillValue(record.frontmatter[key]),
+        oldExists: Object.prototype.hasOwnProperty.call(record.frontmatter, key),
+      }];
+    });
+    const plan = buildBulkEditPlan(column, request.mode, request.value, targets);
+    const changeByPath = new Map(plan.changes.map((change) => [change.path, change]));
+    const candidateRecords = records.map((record) => {
+      const change = changeByPath.get(record.file.path);
+      if (!change) return record;
+      const frontmatter = { ...record.frontmatter };
+      if (change.newValue === null) delete frontmatter[key];
+      else frontmatter[key] = this.cloneFillValue(change.newValue);
+      return { file: record.file, frontmatter };
+    });
+    const dbAfter = candidateRecords.filter((record) => this.dataSource.matchesRecordForDatabase(record, db));
+    const effectiveConfig = this.getEffectiveConfig(db, view);
+    const activeSourceAfter = dbAfter.filter((record) => this.dataSource.matchesRecordForDatabase(record, effectiveConfig));
+    const resultAfter = this.rowPipeline.build(
+      activeSourceAfter,
+      this.withBaseThisContext(view),
+      this.vs(),
+      this.app
+    );
+    const groupingFields = this.collectBulkGroupingFields();
+    const impact = buildBulkEditImpact(plan, {
+      missingPaths,
+      databasePathsAfter: new Set(dbAfter.map((record) => record.file.path)),
+      viewPathsAfter: new Set(resultAfter.map((row) => row.file.path)),
+      isGroupingField: groupingFields.has(column.key),
+    });
+    return { plan, impact };
+  }
+
+  private async applyBulkEdit(paths: string[], request: BulkEditorRequest): Promise<void> {
+    const initial = await this.prepareBulkEdit(paths, request);
+    if (!initial) return;
+    const confirmed = await this.confirmBulkEdit(paths, request, initial);
+    if (!confirmed) return;
+    await this.commitPreparedBulkEdit(confirmed);
+  }
+
+  // Build impact + concrete frontmatter changes without any config/frontmatter mutation.
+  private async prepareBulkEdit(paths: string[], request: BulkEditorRequest): Promise<PreparedBulkEdit | null> {
+    const { plan, impact } = await this.buildBulkEditContext(paths, request);
+    if (impact.changed === 0) {
+      new Notice(t("bulkEdit.noChanges"));
+      return null;
+    }
+    const config = this.getConfig();
+    if (!config) return null;
+    const column = config.schema.columns.find((candidate) => candidate.key === plan.column.key);
+    if (!column) return null;
+    const key = this.getFrontmatterWriteKey(column);
+    const changes: CellEditChange[] = [];
+    for (const change of plan.changes) {
+      const file = this.app.vault.getAbstractFileByPath(change.path);
+      if (!(file instanceof TFile)) continue;
+      changes.push({
+        file,
+        path: change.path,
+        key,
+        oldValue: this.cloneFillValue(change.oldValue),
+        oldExists: change.oldExists,
+        newValue: this.cloneFillValue(change.newValue),
+      });
+    }
+    return { plan, impact, column, changes };
+  }
+
+  // Gate a prepared edit behind the confirmation modal, then re-prepare and reject if the
+  // impact drifted while the modal was open. No writes occur here.
+  private async confirmBulkEdit(paths: string[], request: BulkEditorRequest, prepared: PreparedBulkEdit): Promise<PreparedBulkEdit | null> {
+    if (!prepared.impact.requiresConfirmation) return prepared;
+    // Mobile native editors are high-z-index inline overlays. Close the active editor before
+    // opening the shared modal so the confirmation is visible and receives touch input.
+    if (Platform.isMobile || this.isPhoneLayout()) this.cellRenderer.closeActiveBulkEditor();
+    const parts = [t("bulkEdit.confirmChanged", { count: prepared.impact.changed })];
+    if (prepared.impact.leavesCurrentViewPaths.length) parts.push(t("bulkEdit.leavesView", { count: prepared.impact.leavesCurrentViewPaths.length }));
+    if (prepared.impact.leavesDatabasePaths.length) parts.push(t("bulkEdit.leavesDatabase", { count: prepared.impact.leavesDatabasePaths.length }));
+    if (prepared.impact.movesGroupPaths.length) parts.push(t("bulkEdit.movesGroup", { count: prepared.impact.movesGroupPaths.length }));
+    if (prepared.impact.missingPaths.length) parts.push(t("bulkEdit.missing", { count: prepared.impact.missingPaths.length }));
+    const confirmed = await confirmWithModal(this.app, {
+      title: t("bulkEdit.confirmTitle"),
+      message: parts.join("\n"),
+      confirmText: t("bulkEdit.apply"),
+      danger: prepared.plan.mode === "clear" || prepared.plan.mode === "remove",
+    });
+    if (confirmed !== true) return null;
+
+    const confirmedImpact = JSON.stringify({
+      changed: prepared.impact.changed,
+      leavesCurrentViewPaths: prepared.impact.leavesCurrentViewPaths,
+      leavesDatabasePaths: prepared.impact.leavesDatabasePaths,
+      movesGroupPaths: prepared.impact.movesGroupPaths,
+      missingPaths: prepared.impact.missingPaths,
+    });
+    const latest = await this.prepareBulkEdit(paths, request);
+    if (!latest) return null;
+    const latestImpact = JSON.stringify({
+      changed: latest.impact.changed,
+      leavesCurrentViewPaths: latest.impact.leavesCurrentViewPaths,
+      leavesDatabasePaths: latest.impact.leavesDatabasePaths,
+      movesGroupPaths: latest.impact.movesGroupPaths,
+      missingPaths: latest.impact.missingPaths,
+    });
+    if (confirmedImpact !== latestImpact) {
+      new Notice(t("bulkEdit.previewChanged"));
+      return null;
+    }
+    return latest;
+  }
+
+  private async commitPreparedBulkEdit(prepared: PreparedBulkEdit): Promise<void> {
+    const { plan, impact, column, changes } = prepared;
+    if (!changes.length) {
+      new Notice(t("bulkEdit.allMissing"));
+      return;
+    }
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    if (plan.optionPlan?.addedOptions.length) {
+      const before = this.cloneDatabaseConfig(entry.config);
+      column.statusOptions = plan.optionPlan.options;
+      if (plan.optionPlan.clearPresetId) column.statusPresetId = undefined;
+      await this.commitConfigAndCellChanges(entry, before, changes, t("undo.bulkEdit"));
+    } else {
+      await this.commitAtomicCellChanges(changes, t("undo.bulkEdit"));
+    }
+    const visiblePaths = new Set(this.rows.map((row) => row.file.path));
+    const selectedCountBeforeRefresh = this.selectedRows.size;
+    for (const path of Array.from(this.selectedRows)) if (!visiblePaths.has(path)) this.selectedRows.delete(path);
+    if (this.selectedRows.size !== selectedCountBeforeRefresh) this.invalidateActiveBulkEditor();
+    this.renderSelectionStatusBar();
+    this.syncSelectionControls();
+    const skipped = impact.missingPaths.length + (plan.changes.length - changes.length);
+    new Notice(skipped > 0
+      ? t("bulkEdit.completedSkipped", { count: changes.length, skipped })
+      : t("bulkEdit.completed", { count: changes.length }));
+  }
+
   private renderSelectionStatusBar(): void {
     if (!this.containerEl_) return;
+    this.closeBulkEditPopover?.();
     this.containerEl_.querySelector(":scope > .db-selection-status-bar")?.remove();
     const rowCount = this.selectedRows.size;
-    const cellCount = this.getSelectedCellAddresses().length;
+    const addresses = this.getSelectedCellAddresses();
+    const cellCount = addresses.length;
+    const config = this.getConfig();
     const hasSelection = rowCount > 0 || cellCount > 0;
     this.containerEl_.toggleClass("has-selection-status", hasSelection);
     if (!hasSelection) return;
@@ -4612,16 +5406,26 @@ export class DatabaseView extends FileView {
         attr: { type: "button" },
       });
       pasteBtn.onclick = () => { void this.pasteCellsFromClipboard(); };
-      const fillBtn = bar.createEl("button", {
-        cls: "db-selection-action",
-        text: t("selection.fillValue"),
-        attr: { type: "button" },
-      });
-      fillBtn.onclick = () => {
-        this.showCellFillInput = !this.showCellFillInput;
-        this.renderSelectionStatusBar();
-      };
-      if (this.showCellFillInput) this.renderCellFillInput(bar);
+      const columnKeys = new Set(addresses.map((address) => address.colKey));
+      let chipRendered = false;
+      if (columnKeys.size === 1) {
+        const col = config?.schema.columns.find((candidate) => candidate.key === [...columnKeys][0]);
+        if (col && getBulkEditableColumns([col]).length) {
+          this.renderBulkEditingChip(bar, col, () => this.openBulkEditForSelectedCells(this.getStatusBarAnchor() ?? this.containerEl_!, col.key));
+          chipRendered = true;
+        }
+      }
+      if (!chipRendered) {
+        const fillBtn = bar.createEl("button", {
+          cls: "db-selection-action",
+          text: t("selection.fillValue"),
+          attr: { type: "button" },
+        });
+        fillBtn.onclick = () => {
+          this.openBulkEditOrFillForSelection(fillBtn);
+        };
+        if (this.showCellFillInput) this.renderCellFillInput(bar);
+      }
       const clearBtn = bar.createEl("button", {
         cls: "db-selection-delete",
         text: t("selection.clearCells"),
@@ -4630,6 +5434,16 @@ export class DatabaseView extends FileView {
       clearBtn.onclick = () => { void this.clearSelectedCells(); };
     } else {
       bar.createSpan({ cls: "db-selection-count", text: t("toolbar.selectedCount", { count: rowCount }) });
+      const editBtn = bar.createEl("button", {
+        cls: "db-selection-action",
+        text: t("bulkEdit.editField"),
+        attr: { type: "button" },
+      });
+      editBtn.onclick = () => this.openBulkEditForRows(editBtn);
+      const editingCol = this.bulkEditingColumnKey ? config?.schema.columns.find((candidate) => candidate.key === this.bulkEditingColumnKey) : undefined;
+      if (editingCol) {
+        this.renderBulkEditingChip(bar, editingCol, () => this.openBulkEditNativeEditorForRows());
+      }
       const deleteBtn = bar.createEl("button", {
         cls: "db-selection-delete",
         text: t("common.delete"),
@@ -5104,8 +5918,8 @@ export class DatabaseView extends FileView {
     this.tableRenderer.renderTable(this.containerEl_, this.getStatefulConfig(config), this.rows);
   }
 
-  private setupRowInteractions(tr: HTMLElement, row: RowData): void {
-    this.rowMenu.attachToRow(tr, row);
+  private setupRowInteractions(tr: HTMLElement, row: RowData, context?: RowCreateContext): void {
+    this.rowMenu.attachToRow(tr, row, context);
   }
 
   private async deleteRow(row: RowData): Promise<void> {
@@ -5196,6 +6010,8 @@ export class DatabaseView extends FileView {
     if (config.boardSubgroupField === col.key) return false;
     if (config.titleField === col.key) return false;
     if (config.galleryImageField === col.key) return false;
+    const database = this.getActiveDb();
+    if (database && resolveRecordIconField(database, config) === col.key) return false;
     if (state.searchText.trim()) return false;
     if (state.sortColumn === col.key || state.sortRules.some((rule) => rule.field === col.key)) return false;
     if (getEffectiveFilterRules(state.filters).some((rule) => rule.field === col.key)) return false;
@@ -5540,7 +6356,22 @@ export class DatabaseView extends FileView {
       changes.push(this.createCellChange(target.row, target.col, this.normalizeBatchInputValue(target.col, input)));
     }
     if (changes.length === 0) return;
-    await this.applyCellChanges(changes, t("undo.fillCells"));
+    // Conservative gate for cross-column fills: large batches, grouping fields (may move records
+    // between board groups), or source-rule fields (may drop records out of the database/view).
+    const affectedColumns = new Set(plan.targets.map((target) => target.col.key));
+    const groupingFields = this.collectBulkGroupingFields();
+    const sourceRuleFields = this.collectSourceRuleFields();
+    const requiresConfirmation =
+      changes.length >= 20 ||
+      [...affectedColumns].some((k) => groupingFields.has(k)) ||
+      [...affectedColumns].some((k) => sourceRuleFields.has(k));
+    if (requiresConfirmation && !await confirmWithModal(this.app, {
+      title: t("bulkEdit.confirmTitle"),
+      message: t("bulkEdit.confirmChanged", { count: changes.length }),
+      confirmText: t("bulkEdit.apply"),
+      danger: true,
+    })) return;
+    await this.applyExplicitOptionCellChanges(changes, t("undo.fillCells"));
     this.showCellFillInput = false;
     this.showBatchNotice("filled", changes.length, skipped);
   }
@@ -5567,7 +6398,7 @@ export class DatabaseView extends FileView {
       changes.push(this.createCellChange(target.row, target.col, this.normalizeBatchInputValue(target.col, target.value)));
     }
     if (changes.length === 0) return;
-    await this.applyCellChanges(changes, t("undo.pasteCells"));
+    await this.applyExplicitOptionCellChanges(changes, t("undo.pasteCells"));
     this.showBatchNotice("pasted", changes.length, skipped);
   }
 
@@ -5695,6 +6526,134 @@ export class DatabaseView extends FileView {
     return value;
   }
 
+  /** Explicit UI input adopts new option values; mechanical propagation keeps using applyCellChanges. */
+  private async applyExplicitOptionCellChanges(changes: CellEditChange[], label: string): Promise<void> {
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    const before = this.cloneDatabaseConfig(entry.config);
+    let added = false;
+    for (const change of changes) {
+      const col = entry.config.schema.columns.find((candidate) => this.getFrontmatterWriteKey(candidate) === change.key);
+      if (!col) continue;
+      const plan = planOptionRegistration(col, change.newValue);
+      if (!plan.participates) continue;
+      change.newValue = this.cloneFillValue(plan.value);
+      if (plan.addedOptions.length === 0) continue;
+      col.statusOptions = plan.options;
+      if (plan.clearPresetId) col.statusPresetId = undefined;
+      added = true;
+    }
+    if (!added) {
+      await this.commitAtomicCellChanges(changes, label);
+      return;
+    }
+    await this.commitConfigAndCellChanges(entry, before, changes, label);
+  }
+
+  private async commitAtomicCellChanges(changes: CellEditChange[], label: string): Promise<void> {
+    const effective = changes.filter((change) => change.key !== "file.name" && !isReadonlyFileField(change.key));
+    if (effective.length === 0) return;
+    const applied: CellEditChange[] = [];
+    try {
+      const byPath = new Map<string, CellEditChange[]>();
+      for (const change of effective) {
+        const list = byPath.get(change.path) || [];
+        list.push(change);
+        byPath.set(change.path, list);
+      }
+      for (const pathChanges of byPath.values()) {
+        const file = this.app.vault.getAbstractFileByPath(pathChanges[0].path);
+        if (!(file instanceof TFile)) continue;
+        const updates: Record<string, unknown> = {};
+        for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
+        await this.dataSource.updateFrontmatter(file, updates);
+        applied.push(...pathChanges);
+      }
+    } catch (err) {
+      if (applied.length) await this.applyFrontmatterChanges(applied, "old");
+      throw err;
+    }
+    if (!applied.length) return;
+    this.pushHistory({ type: "cells", label, changes: applied.map((change) => this.cloneCellChange(change)) });
+    await this.syncComputedForCellChanges(applied);
+    this.clearCellSelection();
+    await this.refreshAfterSave();
+    this.rerenderToolbar();
+  }
+
+  private async syncComputedForCellChanges(changes: CellEditChange[]): Promise<void> {
+    const config = this.getConfig();
+    if (!config?.schema.computedFields.length) return;
+    const affectedFields = changes.map((change) => change.key);
+    const updatesByPath = new Map<string, Record<string, unknown>>();
+    for (const change of changes) {
+      const updates = updatesByPath.get(change.path) || {};
+      updates[change.key] = change.newValue;
+      updatesByPath.set(change.path, updates);
+    }
+    for (const [path, updates] of updatesByPath) {
+      const row = this.rows.find((candidate) => candidate.file.path === path);
+      if (row) await this.syncComputedForFile(row.file, { ...row.frontmatter, ...updates }, affectedFields);
+    }
+  }
+
+  private async commitConfigAndCellChanges(
+    entry: ViewEntry,
+    before: DatabaseConfig,
+    changes: CellEditChange[],
+    label: string
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    const applied: CellEditChange[] = [];
+    let configSaved = false;
+    try {
+      if (file instanceof TFile) {
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(file, entry.config, this.getCurrentMutationTarget());
+      }
+      configSaved = true;
+      const byPath = new Map<string, CellEditChange[]>();
+      for (const change of changes) {
+        const list = byPath.get(change.path) || [];
+        list.push(change);
+        byPath.set(change.path, list);
+      }
+      for (const pathChanges of byPath.values()) {
+        const target = this.app.vault.getAbstractFileByPath(pathChanges[0].path);
+        if (!(target instanceof TFile)) continue;
+        const updates: Record<string, unknown> = {};
+        for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
+        await this.dataSource.updateFrontmatter(target, updates);
+        applied.push(...pathChanges);
+      }
+    } catch (err) {
+      if (applied.length > 0) await this.applyFrontmatterChanges(applied, "old");
+      this.replaceDatabaseConfig(entry.config, before);
+      if (configSaved && file instanceof TFile) {
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(file, entry.config, this.getCurrentMutationTarget());
+      }
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+      throw err;
+    }
+    const after = this.cloneDatabaseConfig(entry.config);
+    this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
+    this.pushHistory({
+      type: "config",
+      label,
+      dbId: entry.config.id,
+      dbPath: entry.sourcePath,
+      viewId: this.getConfig()?.id,
+      before,
+      after,
+      cellChanges: changes.map((change) => this.cloneCellChange(change)),
+    });
+    await this.syncComputedForCellChanges(changes);
+    this.clearCellSelection();
+    await this.refreshAfterSave();
+    this.rerenderToolbar();
+  }
+
   private async applyCellChanges(
     changes: CellEditChange[],
     label: string,
@@ -5702,6 +6661,7 @@ export class DatabaseView extends FileView {
   ): Promise<void> {
     const effectiveChanges = changes.filter((change) => change.key !== "file.name" && !isReadonlyFileField(change.key));
     if (effectiveChanges.length === 0) return;
+    this.suppressDataReload(1200);
     const updatesByPath = new Map<string, { file: TFile; updates: Record<string, unknown> }>();
     for (const change of effectiveChanges) {
       const entry = updatesByPath.get(change.path) || { file: change.file, updates: {} };
@@ -5843,6 +6803,14 @@ export class DatabaseView extends FileView {
       await this.applyFrontmatterChanges(entry.cellChanges, "old");
       await this.refreshAfterSave();
     }
+    if (entry.createdPaths?.length) {
+      for (const path of entry.createdPaths) {
+        const created = this.app.vault.getAbstractFileByPath(path);
+        if (created instanceof TFile) await this.dataSource.trashNote(created);
+        if (this.pendingNewFilePath === path) this.clearPendingNewRow();
+      }
+      await this.refreshAfterSave();
+    }
     // Undo swaps the view objects inside the database config (the snapshot is
     // deep-cloned), so any open toolbar config popover (calendar / chart /
     // timeline) now holds a detached pre-undo view reference — its edits would
@@ -5853,7 +6821,7 @@ export class DatabaseView extends FileView {
     this.chartToolbarRenderer.closePopover();
     this.calendarToolbarRenderer.closePopover();
     this.rerenderToolbar();
-    if (!entry.cellChanges?.length) this.refresh();
+    if (!entry.cellChanges?.length && !entry.createdPaths?.length) this.refresh();
     this.renderViewConfigPanel();
   }
 
@@ -6235,13 +7203,25 @@ export class DatabaseView extends FileView {
 
   private async updateBoardGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void> {
     try {
-      const col = this.getConfig()?.schema.columns.find((candidate) => candidate.key === field);
+      const config = this.getConfig();
+      const entry = this.getCurrentEntry();
+      const col = config?.schema.columns.find((candidate) => candidate.key === field);
+      if (!entry || !col) return;
+      const before = this.cloneDatabaseConfig(entry.config);
       const rows = this.getRowsForGroupMove(row);
+      const changes: CellEditChange[] = [];
       for (const targetRow of rows) {
         const nextValue = this.getMovedGroupValue(targetRow, field, col, fromValue, value);
-        await this.dataSource.updateFrontmatter(targetRow.file, { [field]: nextValue });
+        changes.push(this.createCurrentCellChange(targetRow, col, nextValue));
       }
-      await this.refreshAfterSave();
+      const registration = isEmptyGroupId(value) ? undefined : planOptionRegistration(col, value);
+      if (registration?.addedOptions.length) {
+        col.statusOptions = registration.options;
+        if (registration.clearPresetId) col.statusPresetId = undefined;
+        await this.commitConfigAndCellChanges(entry, before, changes, t("undo.editCell"));
+      } else {
+        await this.applyCellChanges(changes, t("undo.editCell"));
+      }
     } catch (err) {
       new Notice(t("errors.updateFailed", { error: String(err) }));
     }
@@ -6270,10 +7250,11 @@ export class DatabaseView extends FileView {
     afterPath?: string
   ): Promise<void> {
     const config = this.getConfig();
-    if (!config) return;
+    const entry = this.getCurrentEntry();
+    if (!config || !entry) return;
+    const before = this.cloneDatabaseConfig(entry.config);
     try {
       this.setManualRank(config, row.file.path, beforePath, afterPath);
-      this.pendingUndoLabel = t("undo.cardOrderConfig");
 
       const rows = this.getRowsForGroupMove(row);
       const cellChanges: CellEditChange[] = [];
@@ -6294,13 +7275,18 @@ export class DatabaseView extends FileView {
           const col = config.schema.columns.find((candidate) => candidate.key === field);
           if (col) cellChanges.push(this.createCurrentCellChange(targetRow, col, frontmatterUpdates[field]));
         }
-        await this.dataSource.updateFrontmatter(targetRow.file, frontmatterUpdates);
       }
-      this.pendingConfigCellChanges = cellChanges.length > 0 ? cellChanges : null;
-      // 即时保存：把上面捕获的分组字段改动随 rank 一起写进同一条撤销记录（避免 debounce 期间被别的保存消费）。
-      await this.saveCurrentViewConfig();
-      await this.refreshAfterSave();
+      for (const update of updates) {
+        const col = config.schema.columns.find((candidate) => candidate.key === update.field);
+        if (!col || isEmptyGroupId(update.toGroupKey)) continue;
+        const plan = planOptionRegistration(col, update.toGroupKey);
+        if (plan.addedOptions.length === 0) continue;
+        col.statusOptions = plan.options;
+        if (plan.clearPresetId) col.statusPresetId = undefined;
+      }
+      await this.commitConfigAndCellChanges(entry, before, cellChanges, t("undo.cardOrderConfig"));
     } catch (err) {
+      this.replaceDatabaseConfig(entry.config, before);
       new Notice(t("errors.updateFailed", { error: String(err) }));
     }
   }
@@ -6502,7 +7488,12 @@ export class DatabaseView extends FileView {
   }
 
   private calculateAutoColumnWidth(col: ColumnDef, rows: RowData[]): number {
-    return estimateAutoColumnWidth(col, rows, (row, column) => this.getColumnDisplayText(row, column));
+    return estimateAutoColumnWidth(
+      col,
+      rows,
+      (row, column) => this.getColumnDisplayText(row, column),
+      createRenderedTextWidthMeasurer,
+    );
   }
 
   private getColumnDisplayText(row: RowData, col: ColumnDef): string {
@@ -6680,9 +7671,10 @@ export class DatabaseView extends FileView {
       app: this.app,
       actions: {
         editCell: (target, r, col, event) => this.cellRenderer.startEdit(target, r, col, event),
-        editFileName: (target, r, currentName, restore) => this.cellRenderer.editFileName(target, r, currentName, restore),
+        editFileName: (target, r, currentName) => this.cellRenderer.editFileName(target, r, currentName),
         showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
         openRow: (r) => this.dataSource.openNote(r.file),
+        renderRecordIcon: (parent, r, view, compact) => this.renderRowRecordIcon(parent, r, view, compact),
         isReadOnly: false,
       },
     });

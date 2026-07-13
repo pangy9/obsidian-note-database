@@ -14,6 +14,7 @@ import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "../data/GroupVisibility";
 import { getDateGroupMode } from "../data/GroupDisplay";
 import { isHTMLElement } from "./DomGuards";
+import { renderRecordIcon } from "./RecordIconRenderer";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -37,6 +38,9 @@ export interface ToolbarActions {
   moveView?(fromIndex: number, toIndex: number): void;
   renameDatabase?(name: string): void;
   updateDatabaseDescription?(description: string): void;
+  editDatabaseIcon?(anchor: HTMLElement): void;
+  showDatabaseIcon?: boolean;
+  toggleDatabaseIcon?(): void;
   addDatabase(): void;
   deleteDatabase(): void;
   copyCurrentDatabase?(): void;
@@ -83,6 +87,7 @@ export interface ToolbarActions {
   getTimelineInvalidEventCount?(): number | Promise<number>;
   /** Open the modal to review/fix negative-interval timeline events. */
   openTimelineInvalidEvents?(): void;
+  createRecordIconField?(): void;
 }
 
 export class ToolbarRenderer {
@@ -142,6 +147,14 @@ export class ToolbarRenderer {
     // Row 0: Database name heading
     if (actions.showDatabaseChrome) {
       const headingRow = header.createDiv({ cls: "db-heading-row" });
+      if (currentDb && actions.showDatabaseIcon !== false) {
+        renderRecordIcon(headingRow, currentDb.icon, {
+          editable: Boolean(actions.editDatabaseIcon && !actions.hideDatabaseActions),
+          defaultIcon: "database",
+          tooltip: currentDb.name,
+          onClick: (anchor) => actions.editDatabaseIcon?.(anchor),
+        }).addClass("db-database-icon");
+      }
       const heading = actions.hideDatabaseActions
         ? headingRow.createDiv({
           cls: "db-heading",
@@ -256,7 +269,7 @@ export class ToolbarRenderer {
     if (actions.showDatabaseChrome && !actions.hideDatabaseActions && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
     if (isChartView && actions.toggleChartOptions && actions.showChartOptions === true) this.renderChartOptionsButton(right, actions);
     if (isCalendarTimelineView && currentView && actions.updateViewConfig) {
-      this.renderCalendarTimelineOptionsButton(right, currentView, actions);
+      this.renderCalendarTimelineOptionsButton(right, currentView, currentDb, actions);
     }
     if (!phoneLayout && !isChartView) this.renderSearch(right, state, actions);
     if (!actions.isReadOnly && !isChartView) this.renderNewButton(right, actions);
@@ -273,7 +286,7 @@ export class ToolbarRenderer {
     btn.onclick = () => actions.syncComputedFields?.();
   }
 
-  private renderCalendarTimelineOptionsButton(toolbar: HTMLElement, config: ViewConfig, actions: ToolbarActions): void {
+  private renderCalendarTimelineOptionsButton(toolbar: HTMLElement, config: ViewConfig, database: DatabaseConfig, actions: ToolbarActions): void {
     const label = config.viewType === "timeline" ? t("timeline.options") : t("calendar.options");
     const btn = this.createIconButton(toolbar, "", label);
     btn.addClass("db-calendar-timeline-options-toolbar-btn");
@@ -291,14 +304,16 @@ export class ToolbarRenderer {
         const container = toolbar.closest(".note-database-container") as HTMLElement || toolbar;
         actions.toggleCalendarOptions(container, btn, config);
       } else {
-        this.toggleCalendarTimelineOptions(toolbar, btn, config, actions);
+        this.toggleCalendarTimelineOptions(toolbar, btn, config, database, actions);
       }
     };
   }
 
-  private toggleCalendarTimelineOptions(toolbar: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: ToolbarActions): void {
+  private toggleCalendarTimelineOptions(toolbar: HTMLElement, anchor: HTMLElement, config: ViewConfig, database: DatabaseConfig, actions: ToolbarActions): void {
     this.calendarTimelineToolbarRenderer.togglePopover(toolbar.closest(".note-database-container") as HTMLElement || toolbar, anchor, config, {
       onChange: (label) => actions.updateViewConfig?.(label),
+      database,
+      createRecordIconField: actions.createRecordIconField ? () => actions.createRecordIconField?.() : undefined,
       updateTimelineScale: (scale, label) => actions.updateTimelineScale?.(scale, label),
       getInvalidEventCount: actions.getTimelineInvalidEventCount
         ? () => actions.getTimelineInvalidEventCount?.() ?? 0
@@ -381,8 +396,8 @@ export class ToolbarRenderer {
       attr: { type: "button" },
     });
     row.createSpan({ cls: "db-database-popover-drag", text: canMove && actions.moveDatabase ? "⋮⋮" : "" });
+    const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
     if (canMove && actions.moveDatabase) {
-      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
       const sameSourceIndexes = viewEntries
         .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
         .map(({ candidateIndex }) => candidateIndex);
@@ -411,6 +426,7 @@ export class ToolbarRenderer {
       };
     }
     const label = entry.config.name || t("common.untitled");
+    renderRecordIcon(row, entry.config.icon, { compact: true, defaultIcon: "database" }).addClass("db-database-popover-icon");
     row.createSpan({ cls: "db-database-popover-label", text: label });
     if (index === currentDbIndex) setIcon(row.createSpan({ cls: "db-database-popover-check" }), "check");
     row.onclick = () => {
@@ -520,6 +536,9 @@ export class ToolbarRenderer {
       this.renderTitleActionsPopoverRow(panel, t("toolbar.copyCurrentDatabase"), "copy", () => actions.copyCurrentDatabase?.());
     }
     this.renderTitleActionsPopoverRow(panel, t("toolbar.addDatabase"), "plus", () => actions.addDatabase());
+    if (actions.toggleDatabaseIcon) {
+      this.renderTitleActionsPopoverRow(panel, t("toolbar.toggleDatabaseIcon"), actions.showDatabaseIcon === false ? "circle-off" : "circle-check", () => actions.toggleDatabaseIcon?.());
+    }
     this.renderTitleActionsPopoverRow(panel, t("toolbar.deleteDatabase"), "trash", () => actions.deleteDatabase(), "is-danger");
 
     positionToolbarPopover(panel, anchorEl);

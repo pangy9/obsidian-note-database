@@ -311,3 +311,34 @@ export function parseInlineMarkdown(value: unknown): InlineMarkdownNode[] | null
   if (!value || !value.trim()) return null;
   return new InlineParser(value).parse();
 }
+
+/** Reduce a parsed inline-markdown token tree to its plain display text — what
+ *  `renderInlineMarkdown` would visibly show (markers and link syntax stripped).
+ *  Used by auto-fit column width to measure the *rendered* width, not the raw
+ *  value, so `**bold**` / `[label](url)` don't over-estimate the column. */
+export function inlineMarkdownToPlainText(nodes: InlineMarkdownNode[]): string {
+  return nodes.map(inlineMarkdownNodeToText).join("");
+}
+
+function inlineMarkdownNodeToText(node: InlineMarkdownNode): string {
+  switch (node.type) {
+    case "text":
+      return node.text;
+    case "bold":
+    case "italic":
+    case "strike":
+    case "highlight":
+      return node.children.map(inlineMarkdownNodeToText).join("");
+    case "code":
+    case "math":
+      return node.text;
+    case "link":
+      return node.label.map(inlineMarkdownNodeToText).join("");
+    case "wikilink":
+      return node.label;
+    case "image":
+      return node.alt;
+    case "br":
+      return " ";
+  }
+}

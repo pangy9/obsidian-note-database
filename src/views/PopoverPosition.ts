@@ -151,3 +151,22 @@ export function clamp(value: number, min: number, max: number): number {
   if (max < min) return min;
   return Math.min(Math.max(value, min), max);
 }
+
+// Bulk editor popovers anchor under the selection status bar (not over the representative
+// cell). Pure data-in/data-out so it can be unit-tested in Node and shared by the text/date
+// editors. Prefer "below anchor" (top = anchor.bottom + gap); flip above only when below can't
+// fit and above has more room. clamp keeps the result inside bounds (margin-respected); when the
+// popover is taller than the visible area, clamp falls back to the top edge (stable).
+export function resolveAnchoredPopoverTop(
+  anchor: { top: number; bottom: number },
+  bounds: { top: number; bottom: number },
+  height: number,
+  gap: number,
+  margin: number,
+): { top: number; useAbove: boolean } {
+  const below = bounds.bottom - anchor.bottom - gap;
+  const above = anchor.top - bounds.top - gap;
+  const useAbove = above > below && below < height;
+  const raw = useAbove ? anchor.top - gap - height : anchor.bottom + gap;
+  return { top: clamp(raw, bounds.top + margin, bounds.bottom - height - margin), useAbove };
+}

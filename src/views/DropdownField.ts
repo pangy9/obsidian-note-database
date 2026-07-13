@@ -10,6 +10,8 @@ export interface DropdownOption {
   disabledReason?: string;
   icon?: string;
   swatches?: string[];
+  /** Action row that invokes onChange without replacing the field's current displayed value. */
+  preserveValueOnSelect?: boolean;
 }
 
 export interface DropdownFieldOptions {
@@ -48,6 +50,7 @@ export interface DropdownMenuOptions {
   searchPlaceholder?: string;
   closeOnSelect?: boolean;
   renderIcon?(parent: HTMLElement, icon: string): void;
+  onClose?: () => void;
 }
 
 export function createDropdownField(options: DropdownFieldOptions): DropdownFieldHandle {
@@ -95,8 +98,11 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
       ...options,
       value: currentValue,
       onChange: (value) => {
-        currentValue = value;
-        renderButtonIcon(currentValue);
+        const action = options.options.find((option) => option.value === value)?.preserveValueOnSelect === true;
+        if (!action) {
+          currentValue = value;
+          renderButtonIcon(currentValue);
+        }
         options.onChange(value);
       },
     }, valueEl, close);
@@ -108,10 +114,14 @@ export function createDropdownField(options: DropdownFieldOptions): DropdownFiel
 export function openDropdownMenu(options: DropdownMenuOptions): () => void {
   const doc = options.anchor.ownerDocument;
   const valueEl = doc.createElement("span");
+  let closed = false;
   let cleanup: (() => void) | undefined;
   const close = () => {
+    if (closed) return;
+    closed = true;
     cleanup?.();
     cleanup = undefined;
+    options.onClose?.();
   };
   cleanup = openDropdownPopover(options.anchor, {
     parent: options.anchor,
@@ -181,8 +191,10 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     }
     row.onclick = () => {
       if (row.disabled) return;
-      syncDropdownSelection(sectionRows, option.value);
-      valueEl.setText(option.text);
+      if (!option.preserveValueOnSelect) {
+        syncDropdownSelection(sectionRows, option.value);
+        valueEl.setText(option.text);
+      }
       options.onChange(option.value);
       if (options.closeOnSelect !== false) close();
     };

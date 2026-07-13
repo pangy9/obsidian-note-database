@@ -12,6 +12,7 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
 import { getPropertyDropdownIcon, isPropertyDropdownIcon, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
 
@@ -208,6 +209,7 @@ export interface ViewConfigPanelActions {
   onChange(label?: string): void;
   onViewTypeChange?(viewType: DatabaseViewType): void;
   onDatabaseChange?(label?: string): void;
+  createRecordIconField?(target: "database" | "view"): void;
   onComputedSyncModeChange?(): void;
   onComputedFrontmatterCleanup?(): void;
   database?: DatabaseConfig;
@@ -254,6 +256,9 @@ export class ViewConfigPanelRenderer {
     this.renderSectionTitle(panel, t("viewConfig.viewSection"));
     this.renderViewType(panel, config, actions);
     this.renderViewSourceRulesSection(panel, config, actions);
+    if (["board", "gallery", "list", "calendar", "timeline"].includes(config.viewType || "table") && actions.database) {
+      this.renderRecordIconSettings(panel, actions.database, config, actions);
+    }
     const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
     if (showViewStatusPresets) {
       this.renderStatusPresetSettings(panel, {
@@ -398,6 +403,21 @@ export class ViewConfigPanelRenderer {
 
   private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
     this.renderDatabaseGlobals(panel, database, actions);
+    const iconFields = getOrderedRecordIconColumns(database.views[0] || { ...database, name: database.name }, database.recordIconField);
+    if (actions.isDatabaseReadOnly) {
+      const column = database.schema.columns.find((candidate) => candidate.key === database.recordIconField);
+      this.renderText(panel, t("recordIcon.field"), column?.label || column?.key || "", "", () => {}, true);
+    } else {
+      this.renderSelect(panel, t("recordIcon.field"), [
+        { value: "", text: t("common.notSet") },
+        ...iconFields.map((column) => ({ value: column.key, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, database.views[0]?.schema.computedFields ?? [])) })),
+        ...(actions.createRecordIconField ? [{ value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus", preserveValueOnSelect: true }] : []),
+      ], database.recordIconField || "", (value) => {
+        if (value === "__create_record_icon_field__") { actions.createRecordIconField?.("database"); return; }
+        database.recordIconField = value || undefined;
+        actions.onDatabaseChange?.(t("recordIcon.field"));
+      }, true);
+    }
     this.renderComputedSyncMode(panel, database, actions, actions.isDatabaseReadOnly);
     this.renderStatusPresetSettings(panel, {
       presets: actions.statusPresets || [],
@@ -407,6 +427,42 @@ export class ViewConfigPanelRenderer {
       onDefaultPresetChange: (presetId) => actions.onDefaultStatusPresetChange?.(presetId),
       onManagePresets: () => actions.onManageStatusPresets?.(),
     }, actions.isDatabaseReadOnly);
+  }
+
+  private renderRecordIconSettings(
+    panel: HTMLElement,
+    database: DatabaseConfig,
+    config: ViewConfig,
+    actions: ViewConfigPanelActions,
+  ): void {
+    this.renderSwitch(panel, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
+      config.showRecordIcon = value || undefined;
+      if (value && !resolveRecordIconField(database, config) && !database.recordIconField) {
+        config.recordIconFieldOverrideEnabled = true;
+      }
+      actions.onChange(t("recordIcon.show"));
+    });
+    if (config.showRecordIcon !== true) return;
+    this.renderSwitch(panel, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
+      config.recordIconFieldOverrideEnabled = value || undefined;
+      actions.onChange(t("recordIcon.override"));
+    });
+    if (config.recordIconFieldOverrideEnabled !== true) {
+      const fieldKey = database.recordIconField || "";
+      const column = fieldKey ? config.schema.columns.find((c) => c.key === fieldKey) : undefined;
+      this.renderSelect(panel, t("recordIcon.field"), [{ value: fieldKey, text: getRecordIconFieldLabel(database, config) || t("common.notSet"), icon: column ? getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)) : undefined }], fieldKey, () => {}, false, true);
+      return;
+    }
+    const fields = getOrderedRecordIconColumns(config, config.recordIconField);
+    this.renderSelect(panel, t("recordIcon.field"), [
+      { value: "", text: t("common.notSet") },
+      ...fields.map((column) => this.toFieldDropdownOption(config, column)),
+      ...(actions.createRecordIconField ? [{ value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus", preserveValueOnSelect: true }] : []),
+    ], config.recordIconField || "", (value) => {
+      if (value === "__create_record_icon_field__") { actions.createRecordIconField?.("view"); return; }
+      config.recordIconField = value || undefined;
+      actions.onChange(t("recordIcon.field"));
+    }, true);
   }
 
   private renderSourceRules(
@@ -1210,7 +1266,8 @@ export class ViewConfigPanelRenderer {
     options: DropdownOption[],
     value: string,
     onChange: (value: string) => void,
-    searchable = false
+    searchable = false,
+    disabled = false
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
     row.createDiv({ cls: "db-view-config-label", text: label });
@@ -1227,7 +1284,10 @@ export class ViewConfigPanelRenderer {
       placeholder: t("common.notSet"),
       hideLabel: true,
       searchable,
-      renderIcon: hasPropertyIcons ? renderDropdownPropertyTypeIcon : undefined,
+      disabled,
+      renderIcon: hasPropertyIcons ? (parent, icon) => {
+        if (!renderDropdownPropertyTypeIcon(parent, icon)) setIcon(parent, icon);
+      } : undefined,
     });
   }
 

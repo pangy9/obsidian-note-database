@@ -114,6 +114,7 @@ export interface CalendarTimelineRendererActions {
   openRow(row: RowData): void;
   openRecordDetail?(anchorEl: HTMLElement, row: RowData): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   createEntryForDate?(config: ViewConfig, dateKey: string, options?: CalendarTimelineCreateOptions): void;
   updateEventDates?(
     row: RowData,
@@ -410,6 +411,7 @@ export class CalendarTimelineRenderer {
     this.applyTimelineAbsolutePosition(button, range.renderStart, range.renderEnd, range.visible.startMinutes, model.unit);
     this.applyCalendarEventColor(button, event.color);
     const content = button.createSpan({ cls: "db-timeline-event-content" });
+    this.actions.renderRecordIcon?.(content, event.row, config, true);
     content.createSpan({ cls: `db-timeline-event-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
     content.createSpan({ cls: "db-timeline-event-meta", text: dateText });
     button.onclick = (mouseEvent: MouseEvent) => {

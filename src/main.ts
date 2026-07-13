@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, loadMathJax, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
@@ -90,6 +90,9 @@ export default class NoteDatabasePlugin extends Plugin {
       if (isRecord(loaded)) {
         const rawSettings = Object.assign(createDefaultSettings(), loaded as Partial<PluginSettings>);
         const rawSettingsRecord = rawSettings as unknown as Record<string, unknown>;
+        rawSettings.recentRecordIcons = Array.isArray(rawSettings.recentRecordIcons)
+          ? rawSettings.recentRecordIcons.filter((value): value is string => typeof value === "string").slice(0, 16)
+          : [];
 
         // Migrate old format: settings.views[] → settings.databases[]
         const rawViews = loaded["views"];
@@ -249,6 +252,7 @@ export default class NoteDatabasePlugin extends Plugin {
       if (!this.settings.databasesMigrated && legacyDatabases.length > 0) {
         void this.migrateDatabasesToFiles();
       }
+      void this.maybeShowChangelog();
     });
 
     // Register database view
@@ -366,6 +370,19 @@ export default class NoteDatabasePlugin extends Plugin {
       ));
     });
     window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
+  }
+
+  private async maybeShowChangelog(): Promise<void> {
+    if (this.settings.lastChangelogVersion === this.manifest.version) return;
+    this.settings.lastChangelogVersion = this.manifest.version;
+    await this.saveSettings();
+    const modal = new Modal(this.app);
+    modal.titleEl.setText(`Note Database ${this.manifest.version}`);
+    modal.contentEl.addClass("note-database-changelog");
+    const component = new Component();
+    modal.onClose = () => component.unload();
+    modal.open();
+    void MarkdownRenderer.render(this.app, t("changelog.releaseNotes"), modal.contentEl, "", component);
   }
 
   /**
@@ -650,13 +667,20 @@ export default class NoteDatabasePlugin extends Plugin {
 
   /** Notify the database view and status bar that settings have changed */
   notifyViewSettingsChanged(): void {
-    const dbView = this.getActiveDbView();
-    if (dbView) {
-      dbView.updateConfigs(
-        this.settings.databaseFileOrder || [],
-        this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-        this.settings.defaultStatusPresetId
-      );
+    const order = this.settings.databaseFileOrder || [];
+    const presets = this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets;
+    const defaultPresetId = this.settings.defaultStatusPresetId;
+    const databaseFolder = this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder;
+    // 通知所有已打开的 dashboard 与 database-file 视图，不只活跃的那个；
+    // databaseFolder 等设置变更必须同步到每个已打开视图，否则需关闭重开才生效。
+    const leaves = [
+      ...this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE),
+      ...this.app.workspace.getLeavesOfType(DATABASE_FILE_VIEW_TYPE),
+    ];
+    for (const leaf of leaves) {
+      if (leaf.view instanceof DatabaseView) {
+        leaf.view.updateConfigs(order, presets, defaultPresetId, databaseFolder);
+      }
     }
   }
 
@@ -2664,7 +2688,8 @@ export default class NoteDatabasePlugin extends Plugin {
         dbView.updateConfigs(
           this.settings.databaseFileOrder || [],
           this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets,
-          this.settings.defaultStatusPresetId
+          this.settings.defaultStatusPresetId,
+          this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
         );
       }
     }

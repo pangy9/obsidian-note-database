@@ -4,10 +4,10 @@ import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
 import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
-import { formatGroupKeyDisplay } from "../data/GroupDisplay";
+import { formatGroupKeyDisplay, isComputedGroupField } from "../data/GroupDisplay";
 import { isExternalUrl, parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
-import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -39,6 +39,7 @@ export interface GalleryRendererActions {
   areAllRowsSelected(rows: RowData[]): boolean;
   toggleRowsSelected(rows: RowData[], selected: boolean): void;
   editCell(target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent): void;
+  editFileName?(target: HTMLElement, row: RowData, currentName: string): void;
   getColumns(config: ViewConfig): ColumnDef[];
   updateCardSize(width: number): void;
   moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void;
@@ -54,9 +55,10 @@ export interface GalleryRendererActions {
   isGroupCollapsed?(field: string, key: string): boolean;
   toggleGroupCollapsed?(field: string, key: string): void;
   expandGroup?(field: string, key: string, count: number): void;
-  showRowMenu?(event: MouseEvent, row: RowData): void;
+  showRowMenu?(event: MouseEvent, row: RowData, context?: RowCreateContext): void;
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
 }
@@ -76,7 +78,8 @@ interface ParsedImage {
 }
 
 export class GalleryRenderer {
-  private resizeState?: { startX: number; startWidth: number; gallery: HTMLElement };
+  private resizeState?: { startX: number; startWidth: number };
+  private container: HTMLElement | null = null;
   private rowByPath = new Map<string, RowData>();
   private draggingPath: string | undefined;
   private rowDropFeedback = new DragDropFeedbackState();
@@ -85,6 +88,8 @@ export class GalleryRenderer {
 
   render(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
     this.clear(container);
+    this.container = container;
+    container.style.setProperty("--db-gallery-card-width", `${this.getCardSize(config)}px`);
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
     this.renderTotalHeader(container, rows);
     const gallery = this.createGallery(container, config);
@@ -94,6 +99,8 @@ export class GalleryRenderer {
 
   renderGrouped(container: HTMLElement, config: ViewConfig, groups: GalleryGroup[], groupField: string): void {
     this.clear(container);
+    this.container = container;
+    container.style.setProperty("--db-gallery-card-width", `${this.getCardSize(config)}px`);
     this.rowByPath = new Map(groups.flatMap((group) => group.rows.map((row) => [row.file.path, row] as const)));
     const grouped = container.createDiv({ cls: "db-gallery-grouped" });
     for (const group of groups) {
@@ -121,7 +128,8 @@ export class GalleryRenderer {
       const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
       for (const row of group.rows.slice(0, visibleCount)) this.renderCard(gallery, config, row, groupField, group.key, groups, group.rows);
       renderGroupExpandControls(gallery, config, groupField, group.key, group.rows.length, this.actions);
-      this.renderNewCard(gallery, { [groupField]: group.key || "" }, group.rows);
+      const computedGroup = isComputedGroupField(config, groupField);
+      this.renderNewCard(gallery, computedGroup ? undefined : { [groupField]: group.key || "" }, group.rows, computedGroup);
     }
   }
 
@@ -143,7 +151,8 @@ export class GalleryRenderer {
 
   private createGallery(container: HTMLElement, config: ViewConfig): HTMLElement {
     const gallery = container.createDiv({ cls: "db-gallery" });
-    gallery.style.setProperty("--db-gallery-card-width", `${this.getCardSize(config)}px`);
+    // --db-gallery-card-width 由 container 级设置，所有分组 gallery inherit，
+    // 拖动调整时联动更新（对齐 Board 的容器级 --db-board-column-width）。
     gallery.style.setProperty("--db-gallery-cover-ratio", String(this.getCoverRatio(config)));
     return gallery;
   }
@@ -153,14 +162,17 @@ export class GalleryRenderer {
       cls: "db-gallery-card",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
-    this.attachRowContextMenu(card, row);
+    this.attachRowContextMenu(card, row, {
+      visibleRows: allRows,
+      groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+    });
     if (allRows) {
       if (this.canManualReorder(config)) this.setupReorderDrag(card, config, row, allRows, groupField, groupKey);
       else this.setupGroupedCardDrag(card, row, groupField, groupKey);
     }
     if (!this.isPhoneLayout()) {
       const resizeHandle = card.createDiv({ cls: "db-gallery-card-resize-handle" });
-      resizeHandle.addEventListener("mousedown", (event) => this.startCardResize(event, gallery, config));
+      resizeHandle.addEventListener("mousedown", (event) => this.startCardResize(event, config));
       resizeHandle.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -196,12 +208,22 @@ export class GalleryRenderer {
     const titleField = this.getTitleField(config);
     const title = titleField ? resolveTitleFieldDisplay(row, config, titleField) : undefined;
     if (title && !title.isHidden) {
-      const titleEl = body.createDiv({
+      const titleLine = body.createDiv({ cls: "db-record-title-line" });
+      this.actions.renderRecordIcon?.(titleLine, row, config);
+      const titleEl = titleLine.createDiv({
         cls: "db-gallery-card-title",
         attr: { title: title.isFileTitle ? row.file.path : title.isEmpty ? "" : title.text },
       });
       if (title.isFileTitle) {
         renderStackedFileTitle(titleEl, getFileTitleDisplay(row, Array.from(this.rowByPath.values())), true);
+        if (!this.actions.isReadOnly && this.actions.editFileName) {
+          titleEl.addClass("db-editable-cell");
+          setFieldTooltip(titleEl, row.file.path, t("cell.doubleClickRename"));
+          titleEl.addEventListener("dblclick", (event) => {
+            event.stopPropagation();
+            this.actions.editFileName?.(titleEl, row, row.file.basename);
+          });
+        }
       } else {
         titleEl.textContent = title.text;
         if (title.isEmpty) titleEl.addClass("is-empty-title");
@@ -228,10 +250,10 @@ export class GalleryRenderer {
     }
   }
 
-  private attachRowContextMenu(el: HTMLElement, row: RowData): void {
+  private attachRowContextMenu(el: HTMLElement, row: RowData, context?: RowCreateContext): void {
     el.addEventListener("contextmenu", (event) => {
       if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
-      this.actions.showRowMenu?.(event, row);
+      this.actions.showRowMenu?.(event, row, context);
     });
   }
 
@@ -430,8 +452,12 @@ export class GalleryRenderer {
     button.createEl("img", { attr: { src: image.src, alt: image.alt } });
   }
 
-  private renderNewCard(gallery: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
+  private renderNewCard(gallery: HTMLElement, defaults?: Record<string, unknown>, rows: RowData[] = [], computedGroup = false): void {
     if (this.actions.isReadOnly || this.actions.hideCreateEntry) return;
+    if (computedGroup) {
+      gallery.createEl("button", { cls: "db-gallery-new-card is-disabled", text: t("group.computedCreateDisabled"), attr: { disabled: "true" } });
+      return;
+    }
     const button = gallery.createEl("button", { cls: "db-gallery-new-card", text: `+ ${t("toolbar.new")}` });
     button.onclick = () => this.createEntryNearEnd(defaults, rows);
   }
@@ -668,13 +694,12 @@ export class GalleryRenderer {
     return Math.max(160, Math.min(420, Math.round(config.galleryCardSize || 250)));
   }
 
-  private startCardResize(event: MouseEvent, gallery: HTMLElement, config: ViewConfig): void {
+  private startCardResize(event: MouseEvent, config: ViewConfig): void {
     event.preventDefault();
     event.stopPropagation();
     this.resizeState = {
       startX: event.clientX,
       startWidth: this.getCardSize(config),
-      gallery,
     };
     window.activeDocument.addEventListener("mousemove", this.handleCardResize);
     window.activeDocument.addEventListener("mouseup", this.finishCardResize);
@@ -685,7 +710,8 @@ export class GalleryRenderer {
     event.preventDefault();
     event.stopPropagation();
     const width = this.clampCardSize(this.resizeState.startWidth + event.clientX - this.resizeState.startX);
-    this.resizeState.gallery.style.setProperty("--db-gallery-card-width", `${width}px`);
+    // 设 container 级变量，所有分组 gallery 联动更新（而非仅当前 gallery）。
+    this.container?.style.setProperty("--db-gallery-card-width", `${width}px`);
   };
 
   private readonly finishCardResize = (event: MouseEvent): void => {

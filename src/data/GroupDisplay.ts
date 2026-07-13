@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import { getColumnDisplayType } from "./ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "./DateTimeFormat";
 import { stringifyValue } from "./Stringify";
+import { toBooleanValue } from "./ColumnTypes";
 import { DateGroupMode, ViewConfig } from "./types";
 
 export interface GroupDisplayOptions {
@@ -33,4 +34,21 @@ export function formatGroupKeyDisplay(
     return formatDateTimeValueDisplay(key, { mode: "full", showTimeWhenMissing: true });
   }
   return key;
+}
+
+/** Build create-entry defaults for a group key, matching the query/groupBy口径. */
+export function resolveGroupCreateDefaults(config: ViewConfig, groupField: string, groupKey: string): Record<string, unknown> {
+  if (groupKey === t("common.uncategorized")) return { [groupField]: "" };
+  const col = config.schema.columns.find((candidate) => candidate.key === groupField);
+  if (col?.type === "multi-select") return { [groupField]: [groupKey] };
+  if (col?.type === "checkbox") return { [groupField]: toBooleanValue(groupKey) };
+  return { [groupField]: groupKey };
+}
+
+/** Whether the group field is formula-driven (computed) and thus not directly writable. */
+export function isComputedGroupField(config: ViewConfig, field: string | undefined): boolean {
+  if (!field) return false;
+  if (field.startsWith("formula.")) return true;
+  const col = config.schema.columns.find((candidate) => candidate.key === field);
+  return col?.type === "computed";
 }

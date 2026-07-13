@@ -1,8 +1,7 @@
 import { Menu } from "obsidian";
-import { ColumnDef, CreateEntryPosition, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, RowCreateContext, RowData, ViewConfig } from "../data/types";
 import { isExplicitlySorted } from "../data/ManualOrder";
-import { formatGroupKeyDisplay } from "../data/GroupDisplay";
-import { toBooleanValue } from "../data/ColumnTypes";
+import { formatGroupKeyDisplay, isComputedGroupField, resolveGroupCreateDefaults } from "../data/GroupDisplay";
 import { t } from "../i18n";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
@@ -27,7 +26,7 @@ export interface TableRendererActions {
   areAllRowsSelected(rows: RowData[]): boolean;
   toggleRowsSelected(rows: RowData[], selected: boolean): void;
   setupColumnHeader(th: HTMLElement, col: ColumnDef): void;
-  setupRow(tr: HTMLElement, row: RowData): void;
+  setupRow(tr: HTMLElement, row: RowData, context?: RowCreateContext): void;
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void;
   setupFillHandle?(td: HTMLElement, row: RowData, col: ColumnDef): void;
   moveRowToPosition?(movedPath: string, beforePath?: string, afterPath?: string): void;
@@ -141,8 +140,9 @@ export class TableRenderer {
       const visibleCount = groupField ? getGroupVisibleCount(config, groupField, group.key, group.rows.length) : group.rows.length;
       this.renderRows(tbody, config, group.rows.slice(0, visibleCount), visibleColumns, groupField, group.key, groups);
       if (!this.actions.hideCreateEntry) {
-        const defaults = groupField ? this.getGroupDefaults(config, groupField, group.key) : undefined;
-        this.renderNewRow(tbody, visibleColumns.length + 1, defaults, group.rows);
+        const computedGroup = Boolean(groupField) && isComputedGroupField(config, groupField);
+        const defaults = (!computedGroup && groupField) ? this.getGroupDefaults(config, groupField, group.key) : undefined;
+        this.renderNewRow(tbody, visibleColumns.length + 1, defaults, group.rows, computedGroup);
       }
       if (groupField) renderGroupExpandControls(tableWrap, config, groupField, group.key, group.rows.length, this.actions);
     }
@@ -268,7 +268,10 @@ export class TableRenderer {
       const tr = tbody.createEl("tr", {
         attr: { "data-note-database-row-path": row.file.path },
       });
-      this.actions.setupRow(tr, row);
+      this.actions.setupRow(tr, row, {
+        visibleRows: rows,
+        groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+      });
       let selectTd: HTMLElement | undefined;
       if (!this.actions.isReadOnly) {
         selectTd = tr.createEl("td", { cls: "db-select-col" });
@@ -359,9 +362,13 @@ export class TableRenderer {
     menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
   }
 
-  private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>, rows: RowData[] = []): void {
+  private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>, rows: RowData[] = [], computedGroup = false): void {
     const tr = tbody.createEl("tr", { cls: "db-new-row" });
     const td = tr.createEl("td", { attr: { colspan: String(Math.max(colspan, 1)) } });
+    if (computedGroup) {
+      td.createEl("button", { cls: "db-new-row-button is-disabled", text: t("group.computedCreateDisabled"), attr: { disabled: "true" } });
+      return;
+    }
     const btn = td.createEl("button", { cls: "db-new-row-button", text: `+ ${t("toolbar.new")}` });
     btn.onclick = () => this.createEntryNearEnd(defaults, rows);
   }
@@ -550,11 +557,7 @@ export class TableRenderer {
   }
 
   private getGroupDefaults(config: ViewConfig, groupField: string, groupKey: string): Record<string, unknown> {
-    if (groupKey === t("common.uncategorized")) return { [groupField]: "" };
-    const col = config.schema.columns.find((candidate) => candidate.key === groupField);
-    if (col?.type === "multi-select") return { [groupField]: [groupKey] };
-    if (col?.type === "checkbox") return { [groupField]: toBooleanValue(groupKey) };
-    return { [groupField]: groupKey };
+    return resolveGroupCreateDefaults(config, groupField, groupKey);
   }
 
 }

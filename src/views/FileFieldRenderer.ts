@@ -82,7 +82,7 @@ export function renderFileLinkList(
   }
 }
 
-/** Render file.file/file.path/file.basename as a link that opens the row's own file. */
+/** Render file.file/file.path as a link that opens the row's own file. */
 export function renderFileSelfLink(
   parent: HTMLElement,
   app: App | undefined,

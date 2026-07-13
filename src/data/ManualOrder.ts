@@ -53,6 +53,19 @@ export function rankBetween(a?: string, b?: string): string | null {
 	return rank && a < rank && rank < b ? rank : null;
 }
 
+export function resolveNewEntryRankBounds(
+  ranks: Record<string, string>,
+  position: { beforePath?: string; afterPath?: string } | undefined,
+  fallbackLastPath?: string,
+): { lower?: string; upper?: string } {
+  const lower = position?.afterPath ? ranks[position.afterPath] : undefined;
+  const upper = position?.beforePath ? ranks[position.beforePath] : undefined;
+  return {
+    lower: lower ?? (upper ? undefined : fallbackLastPath ? ranks[fallbackLastPath] : undefined),
+    upper,
+  };
+}
+
 /** Generate a non-empty rank before `b`, or request a rebalance at the absolute lower edge. */
 function rankBefore(b: string): string | null {
 	let prefix = "";

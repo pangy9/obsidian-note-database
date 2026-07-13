@@ -26,6 +26,9 @@ export const DEFAULT_SETTINGS = {
   databaseFilesPreventDuplicateTabs: true,
   statusPresets: getBuiltinStatusPresets(),
   defaultStatusPresetId: DEFAULT_STATUS_PRESET_ID,
+  recentRecordIcons: [] as string[],
+  showDatabaseIcon: true,
+  lastChangelogVersion: "",
   language: "system" as LocaleCode,
 };
 
@@ -38,6 +41,9 @@ export function createDefaultSettings(): PluginSettings {
     databaseFilesPreventDuplicateTabs: DEFAULT_SETTINGS.databaseFilesPreventDuplicateTabs,
     statusPresets: getBuiltinStatusPresets(),
     defaultStatusPresetId: DEFAULT_SETTINGS.defaultStatusPresetId,
+    recentRecordIcons: [],
+    showDatabaseIcon: DEFAULT_SETTINGS.showDatabaseIcon,
+    lastChangelogVersion: DEFAULT_SETTINGS.lastChangelogVersion,
     language: DEFAULT_SETTINGS.language,
   };
 }
@@ -113,6 +119,18 @@ export class SettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.databaseFilesPreventDuplicateTabs = value;
             await this.plugin.saveSettings();
+          })
+      );
+    new Setting(general)
+      .setName(t("settings.showDatabaseIcon.name"))
+      .setDesc(t("settings.showDatabaseIcon.desc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showDatabaseIcon !== false)
+          .onChange(async (value) => {
+            this.plugin.settings.showDatabaseIcon = value;
+            await this.plugin.saveSettings();
+            this.app.workspace.trigger("database-icon-visibility-change");
           })
       );
 

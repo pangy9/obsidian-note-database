@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { getColumnOptionValues, isOptionColumnType } from "./ColumnTypes";
+import { getColumnOptionValues, isOptionColumnType, toBooleanValue } from "./ColumnTypes";
 import { isDateLikeColumnType } from "./DateTimeFormat";
 import { stringifyValue } from "./Stringify";
 import { ChartAggregation as ChartAggregationType, ChartDateBucket, ChartNumberBucket, ColumnDef, ComputedFieldDef, RowData } from "./types";
@@ -79,6 +79,8 @@ export function isChartCompatibleColumn(type: ColumnDef["type"]): boolean {
 }
 
 export function isChartGroupColumn(column: ColumnDef, computedFields: ComputedFieldDef[] = []): boolean {
+  if (column.type === "rollup") return true;
+  if (column.type === "relation") return true;
   if (column.type === "computed") {
     const computedKey = getChartComputedKey(column);
     const field = computedFields.find((item) => item.key === computedKey);
@@ -96,6 +98,11 @@ export function isChartDateGroupColumn(column: ColumnDef, computedFields: Comput
 
 export function isChartNumberGroupColumn(column: ColumnDef, computedFields: ComputedFieldDef[] = []): boolean {
   if (column.type === "number" || column.type === "currency") return true;
+  if (column.type === "rollup") {
+    return column.rollupConfig?.aggregation === "count" ||
+      column.rollupConfig?.aggregation === "sum" ||
+      column.rollupConfig?.aggregation === "avg";
+  }
   if (column.type !== "computed") return false;
   const computedKey = getChartComputedKey(column);
   return computedFields.some((field) => field.key === computedKey && field.type === "number");
@@ -109,7 +116,7 @@ export function isChartCheckboxGroupColumn(column: ColumnDef, computedFields: Co
 }
 
 export function isChartStackColumn(type: ColumnDef["type"]): boolean {
-  return type === "select" || type === "status" || type === "multi-select" || type === "checkbox";
+  return type === "select" || type === "status" || type === "multi-select" || type === "relation" || type === "checkbox";
 }
 
 export function isChartSeriesColumn(column: ColumnDef, computedFields: ComputedFieldDef[] = []): boolean {
@@ -120,6 +127,11 @@ export function isChartSeriesColumn(column: ColumnDef, computedFields: ComputedF
 
 export function isChartValueColumn(column: ColumnDef, computedFields: ComputedFieldDef[] = []): boolean {
   if (column.type === "number" || column.type === "currency") return true;
+  if (column.type === "rollup") {
+    return column.rollupConfig?.aggregation === "count" ||
+      column.rollupConfig?.aggregation === "sum" ||
+      column.rollupConfig?.aggregation === "avg";
+  }
   if (column.type !== "computed") return false;
   const computedKey = getChartComputedKey(column);
   return computedFields.some((field) => field.key === computedKey && field.type === "number");
@@ -190,6 +202,8 @@ function getChartFieldValue(row: RowData, fieldKey: string, column?: ColumnDef):
   if (fileValue !== undefined) return fileValue;
   const computedKey = column?.type === "computed"
     ? getChartComputedKey(column)
+    : column?.type === "rollup"
+      ? column.key
     : fieldKey.startsWith("formula.")
       ? fieldKey.slice("formula.".length)
       : undefined;
@@ -292,10 +306,8 @@ function toDateBucket(value: unknown, bucket: ChartDateBucket, uncategorizedLabe
   return { key, label: key, rank: year * 10000 + month * 100 + day };
 }
 
-function getCheckboxGroupKey(value: unknown, uncategorizedLabel: string): string {
-  if (value === true) return t("common.true");
-  if (value === false) return t("common.false");
-  return uncategorizedLabel;
+function getCheckboxGroupKey(value: unknown): string {
+  return toBooleanValue(value) ? t("common.true") : t("common.false");
 }
 
 export interface ChartNumberBucketRange {
@@ -449,7 +461,7 @@ export function aggregateChart(
       : numberBucketContext
       ? [toNumberBucket(raw, numberBucketContext, uncategorizedLabel).key]
       : isChartCheckboxGroupColumn(column, computedFields)
-      ? [getCheckboxGroupKey(raw, uncategorizedLabel)]
+      ? [getCheckboxGroupKey(raw)]
       : toGroupKeys(raw, uncategorizedLabel, column);
     if (dateBucket) {
       const bucket = toDateBucket(raw, dateBucket, uncategorizedLabel);
@@ -472,7 +484,7 @@ export function aggregateChart(
   const optionOrder = isOptionColumnType(column.type)
     ? getColumnOptionValues(column)
     : isChartCheckboxGroupColumn(column, computedFields)
-      ? [t("common.false"), t("common.true"), uncategorizedLabel]
+      ? [t("common.false"), t("common.true")]
       : [];
   const sorted = Array.from(stats.entries()).sort(([leftKey, leftStat], [rightKey, rightStat]) => {
     if (dateBucket || numberBucketContext) {
@@ -699,7 +711,7 @@ function getGroupEntries(
   if (dateBucket) return [toDateBucket(raw, dateBucket, uncategorizedLabel)];
   if (numberBucketContext) return [toNumberBucket(raw, numberBucketContext, uncategorizedLabel)];
   const keys = isChartCheckboxGroupColumn(column, computedFields)
-    ? [getCheckboxGroupKey(raw, uncategorizedLabel)]
+    ? [getCheckboxGroupKey(raw)]
     : toGroupKeys(raw, uncategorizedLabel, column);
   return keys.map((key) => ({ key, label: key, rank: Number.POSITIVE_INFINITY }));
 }

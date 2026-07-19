@@ -91,7 +91,7 @@ function applyPropertyTypeToConfig(
     return true;
   }
   const col = config.schema.columns.find((candidate) => candidate.key === change.key);
-  if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed") return false;
+  if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed" || col.type === "rollup") return false;
   return applyColumnTypeToColumn(col, change.type, options);
 }
 
@@ -100,7 +100,7 @@ function applyColumnTypeToColumn(
   type: ColumnDef["type"],
   options: NewDatabaseConflictOptions
 ): boolean {
-  if (col.type === type || col.type === "computed") return false;
+  if (col.type === type || col.type === "computed" || col.type === "rollup") return false;
   col.type = type;
   if (isOptionColumnType(type)) {
     if (!col.statusOptions?.length) {

@@ -1,9 +1,12 @@
 import { App, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, setIcon, setTooltip, TFile } from "obsidian";
 import { t } from "../i18n";
-import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
+import { DataChangeBatch, DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
+import { RefreshCoordinator } from "../data/RefreshCoordinator";
+import { isRefreshBlockedByDrag } from "../data/RefreshBlockers";
 import { ensureColumnOrder, getColumnsInOrder, getVisibleColumns } from "../data/ColumnConfig";
 import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
+import { buildRelationRollups } from "../data/RelationRollup";
 import { ColumnDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId, NumberDisplayStyle } from "../data/types";
 import { ComputedFieldEngine } from "../data/ComputedField";
 import { setDateDisplayMode } from "../data/DateTimeFormat";
@@ -34,6 +37,7 @@ import { resolveRecordIconField } from "../data/RecordIcon";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { SortPanelRenderer } from "./SortPanelRenderer";
 import { SummaryRenderer } from "./SummaryRenderer";
+import { applyConditionalFormat } from "../data/ConditionalFormatting";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
 import { ChartRenderer } from "./ChartRenderer";
@@ -49,7 +53,12 @@ import {
 } from "../data/CalendarTimelineSearchResults";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
 import { CalendarRenderer } from "./CalendarRenderer";
-import { closeRecordDetailPanel, openRecordDetailPanel } from "./RecordDetailPanel";
+import {
+  closeRecordDetailPanel,
+  getOpenRecordDetailPath,
+  openRecordDetailPanel,
+  refreshRecordDetailPanel,
+} from "./RecordDetailPanel";
 import { CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
@@ -91,6 +100,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private queryEngine = new QueryEngine();
   private rowPipeline = new RowPipeline();
   private rows: RowData[] = [];
+  private relationTargetPaths = new Set<string>();
+  private relationTargetDatabases: DatabaseConfig[] = [];
+  private relationTargetDatabasePaths = new Set<string>();
   private timelineInvalidRowsVersion = 0;
   private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
   private calendarTimelineSearchResultsEl: HTMLElement | null = null;
@@ -123,6 +135,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     getCalendarInvalidEventCount: () => this.getEmbeddedInvalidEventCount(),
     openCalendarInvalidEvents: () => this.openEmbeddedInvalidEvents(),
     renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+    applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.currentDbConfig),
   });
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
@@ -142,6 +155,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     getTimelineInvalidEventCount: () => this.getEmbeddedInvalidEventCount(),
     openTimelineInvalidEvents: () => this.openEmbeddedInvalidEvents(),
     renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+    renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
+    applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.currentDbConfig),
   });
   /** 嵌入式展开：只读预览（嵌入式 record mutation 只读，字段不可编辑，仅展示 + 打开笔记）。 */
   private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
@@ -159,6 +174,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         editCell: () => {},
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
+        applyConditionalFormat: (element, r, view, targetField) =>
+          applyConditionalFormat(element, r, view, this.currentDbConfig, targetField),
         isReadOnly: true,
       },
     });
@@ -207,6 +224,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private configHistoryStack: DatabaseConfig[] = [];
   private headerChromeHiddenOverride: boolean | null = null;
   private embedCodeBlockHosts: HTMLElement[] = [];
+  private refreshCoordinator: RefreshCoordinator;
+  private pendingSourceReload = false;
 
   constructor(
     private app: App,
@@ -235,7 +254,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       undefined,
       (row) => this.getFileTitleInfo(row),
       () => this.config?.schema.computedFields || [],
-      this.app
+      this.app,
+      undefined,
+      undefined,
+      this.instanceId
     );
     this.rowMenu = new RowMenu({
       app: this.app,
@@ -266,6 +288,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         td.toggleClass("db-cell-range-selected", this.isEmbedCellSelected(row.file.path, col.key));
         this.setupEmbedCellSelection(td, row, col);
       },
+      renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
@@ -294,6 +319,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
       isReadOnly: isCodeBlock,
       canReorderGroups: true,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
@@ -315,6 +342,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
       isReadOnly: isCodeBlock,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
@@ -334,8 +363,38 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       showRowMenu: (event, row) => this.rowMenu.show(event, row),
       showColumnMenu: (event, col, anchorEl) => this.showColumnContextMenu(event, col, anchorEl, false),
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
       isReadOnly: isCodeBlock,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
+    });
+    this.refreshCoordinator = new RefreshCoordinator({
+      isBlocked: () => this.cellRenderer.hasActiveEditor(this.containerEl) ||
+        isRefreshBlockedByDrag(this.containerEl) ||
+        this.syncingComputed ||
+        Date.now() < this.suppressDataReloadUntil,
+      isEligible: () => this.containerEl.isConnected && (!this.hasObservedVisibility || this.isIntersecting),
+      onRefresh: (request) => {
+        const forceReload = request.manual;
+        if (forceReload) this.dataSource.invalidateRecordCache();
+        const reloadSource = this.pendingSourceReload || forceReload;
+        if (!reloadSource && !request.unknown) {
+          if (this.tryUpdateChangedChartData(request.paths)) return;
+          if (this.tryPatchChangedTableRows(request.paths)) return;
+        }
+        this.refreshChangedData(reloadSource);
+        this.pendingSourceReload = false;
+      },
+      onStateChange: (state) => this.updateRefreshIndicator(state),
+      onError: (error) => {
+        console.error("Note Database: embedded refresh failed", error);
+        new Notice(t("errors.refreshFailed"));
+      },
+      // IntersectionObserver pokes immediately when the embed becomes visible.
+      // Keep only a low-frequency fallback for missed browser notifications.
+      eligibilityRetryMs: 10_000,
+      setTimer: (callback, delay) => this.getRefreshWindow().setTimeout(callback, delay),
+      clearTimer: (timer) => this.getRefreshWindow().clearTimeout(timer),
     });
   }
 
@@ -352,11 +411,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.containerEl.addClass("note-database-container");
     this.containerEl.addClass("note-database-embed");
     this.markEmbedCodeBlockHost();
-    this.unsubscribe = this.dataSource.onDataChanged(() => this.handleDataChanged());
+    this.unsubscribe = this.dataSource.onDataChanged((batch) => this.handleDataChanged(batch));
     this.unsubscribeViewConfig = this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation));
-    window.activeDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
-    window.activeDocument.addEventListener("mouseup", this.handleMouseUpBound);
-    window.addEventListener("focus", this.handleWindowFocusBound);
+    this.containerEl.ownerDocument.addEventListener("mousedown", this.handleOutsideClickBound, true);
+    this.containerEl.ownerDocument.addEventListener("mouseup", this.handleMouseUpBound);
+    this.getRefreshWindow().addEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.addEventListener("keydown", this.handleEmbedKeydownBound);
     this.registerEvent(this.app.workspace.on("css-change", () => this.chartRenderer.refreshTheme()));
     this.observeVisibility();
@@ -364,6 +423,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   onunload(): void {
+    this.refreshCoordinator.destroy();
     this.chartRenderer.destroy();
     this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免卸载后泄漏
@@ -375,9 +435,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.closeGroupOrderPopover();
     this.unsubscribe?.();
     this.unsubscribeViewConfig?.();
-    window.activeDocument.removeEventListener("mousedown", this.handleOutsideClickBound, true);
-    window.activeDocument.removeEventListener("mouseup", this.handleMouseUpBound);
-    window.removeEventListener("focus", this.handleWindowFocusBound);
+    this.containerEl.ownerDocument.removeEventListener("mousedown", this.handleOutsideClickBound, true);
+    this.containerEl.ownerDocument.removeEventListener("mouseup", this.handleMouseUpBound);
+    this.getRefreshWindow().removeEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.removeEventListener("keydown", this.handleEmbedKeydownBound);
     this.intersectionObserver?.disconnect();
     this.clearFileViewWidthClass();
@@ -407,27 +467,36 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private observeVisibility(): void {
-    if (typeof IntersectionObserver === "undefined") return;
-    this.intersectionObserver = new IntersectionObserver((entries) => {
+    const ownerWindow = this.getRefreshWindow() as Window & {
+      IntersectionObserver?: typeof IntersectionObserver;
+    };
+    const Observer = ownerWindow.IntersectionObserver;
+    if (!Observer) return;
+    const observer = new Observer((entries: IntersectionObserverEntry[]) => {
       const visible = entries.some((entry) => entry.isIntersecting);
       this.hasObservedVisibility = true;
       if (visible && this.pendingRefreshWhileHidden) {
         this.pendingRefreshWhileHidden = false;
-        this.refreshOnActivation();
+        this.refreshCoordinator.poke();
       }
       this.isIntersecting = visible;
+      if (visible) this.refreshCoordinator.poke();
     });
-    this.intersectionObserver.observe(this.containerEl);
+    this.intersectionObserver = observer;
+    observer.observe(this.containerEl);
   }
 
   private handleWindowFocus(): void {
-    if (this.deferRefreshUntilVisible()) return;
-    this.refreshOnActivation();
+    this.refreshCoordinator.poke();
+  }
+
+  private getRefreshWindow(): Window {
+    return this.containerEl.ownerDocument.defaultView || window;
   }
 
   private refreshOnActivation(): void {
     if (!this.containerEl.isConnected) return;
-    this.hardRefreshFromSource();
+    this.refreshCoordinator.poke();
   }
 
   private hardRefreshFromSource(): void {
@@ -509,34 +578,222 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     window.requestAnimationFrame(() => restoreEmbeddedHostViewport(snapshot));
   }
 
-  private handleDataChanged(): void {
-    if (this.syncingComputed) {
-      this.pendingDataChange = true;
+  private handleDataChanged(batch: DataChangeBatch): void {
+    this.deferRefreshUntilVisible();
+    const observable = batch.changes.filter((change) => change.sourceInstanceId !== this.instanceId);
+    if (observable.length === 0) return;
+    const rowPaths = new Set(this.rows.map((row) => row.file.path));
+    const database = this.currentDbConfig;
+    const relevant = observable.filter((change) => {
+      const sourceConfigEcho = change.origin === "plugin" &&
+        Boolean(change.sourceInstanceId) &&
+        (change.path === this.currentSourcePath || change.oldPath === this.currentSourcePath);
+      if (sourceConfigEcho) return false;
+      return change.path === this.currentSourcePath ||
+        change.oldPath === this.currentSourcePath ||
+        rowPaths.has(change.path) ||
+        (change.oldPath ? rowPaths.has(change.oldPath) : false) ||
+        this.relationTargetPaths.has(change.path) ||
+        (change.oldPath ? this.relationTargetPaths.has(change.oldPath) : false) ||
+        this.relationTargetDatabasePaths.has(change.path) ||
+        (change.oldPath ? this.relationTargetDatabasePaths.has(change.oldPath) : false) ||
+        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+          this.relationTargetDatabases.some((targetDatabase) => {
+            const record = this.dataSource.getRecordSnapshot(change.path);
+            return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
+          })) ||
+        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+          database != null &&
+          (() => {
+            const record = this.dataSource.getRecordSnapshot(change.path);
+            return record != null && this.dataSource.matchesRecordForDatabase(record, database);
+          })());
+    });
+    if (relevant.length === 0) return;
+    if (relevant.some((change) => change.path === this.currentSourcePath || change.oldPath === this.currentSourcePath)) {
+      this.pendingSourceReload = true;
+    }
+    this.refreshCoordinator.mark(relevant.map((change) => change.path));
+  }
+
+  private refreshChangedData(reloadSource: boolean): void {
+    if (reloadSource) {
+      this.config = undefined;
+      this.currentDbConfig = undefined;
+      this.render();
       return;
     }
-    if (this.config && Date.now() < this.suppressDataReloadUntil) {
-      return;
-    }
-    if (this.deferRefreshUntilVisible()) return;
-    if (this.config && this.shouldPreserveChrome()) {
+    if (this.config) {
       this.renderResults(this.config);
       return;
     }
     this.render();
   }
 
+  /** Keep the connected Chart.js canvas alive for ordinary data refreshes. */
+  private tryUpdateChangedChartData(paths: string[]): boolean {
+    const config = this.config;
+    if (!config || config.viewType !== "chart") return false;
+    const records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(config));
+    const pipelineConfig = { ...config, manualOrder: undefined };
+    this.rows = this.buildRowsWithRelations(
+      records,
+      pipelineConfig,
+      this.vs(config),
+      this.currentDbConfig,
+      true,
+    );
+    this.timelineInvalidRowsVersion += 1;
+    this.scheduleComputedSync(
+      config,
+      this.getIncrementalComputedSyncRows(config, this.rows, new Set(paths))
+    );
+    this.chartRenderer.render(
+      this.containerEl,
+      this.getStatefulConfig(config),
+      this.rows,
+      config.schema.columns,
+      {
+        onFilter: (rules) => this.applyChartFilters(config, rules),
+        onConfigChange: () => {
+          this.persistEmbeddedConfigLocally(config);
+          this.renderChartOnly(config);
+          this.saveEmbeddedConfigInBackground();
+        },
+      }
+    );
+    this.summaryRenderer.render(this.containerEl, this.rows, config, this.currentDbConfig, {
+      placement: "after-chart",
+      onChange: () => {
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config);
+        this.saveEmbeddedConfigInBackground();
+      },
+    });
+    return true;
+  }
+
+  private getIncrementalComputedSyncRows(
+    config: ViewConfig,
+    rows: RowData[],
+    changedPaths: ReadonlySet<string>
+  ): RowData[] {
+    if ((config.schema.computedFields || []).some((definition) =>
+      /\bbacklinks\b/i.test(definition.expression)
+    )) {
+      return rows;
+    }
+    return rows.filter((row) => changedPaths.has(row.file.path));
+  }
+
+  /**
+   * Keep small embedded-table refreshes local to the changed rows. As with the
+   * full database view, the row pipeline remains authoritative and the patch is
+   * accepted only when the complete rendered structure still matches.
+   */
+  private tryPatchChangedTableRows(paths: string[]): boolean {
+    const config = this.config;
+    if (!config || paths.length === 0 || config.viewType !== "table") return false;
+    const state = this.vs(config);
+    if (state.searchText.trim()) return false;
+    if (config.schema.columns.some((column) => column.type === "rollup")) return false;
+
+    const visibleColumns = getVisibleColumns(config, this.rows, state, this.pendingShowColumns);
+    const backlinkComputedKeys = new Set(
+      (config.schema.computedFields || [])
+        .filter((definition) => /\bbacklinks\b/i.test(definition.expression))
+        .map((definition) => definition.key)
+    );
+    if (visibleColumns.some((column) =>
+      column.key === "file.backlinks" ||
+      (column.type === "computed" &&
+        backlinkComputedKeys.has(column.computedKey || column.key.replace(/^formula\./, "")))
+    )) {
+      return false;
+    }
+
+    const changedPaths = new Set(paths);
+    const affectedVisibleCount = this.rows.reduce(
+      (count, row) => count + (changedPaths.has(row.file.path) ? 1 : 0),
+      0
+    );
+    const patchLimit = Math.max(12, Math.ceil(this.rows.length / 4));
+    if (affectedVisibleCount > patchLimit) return false;
+
+    const records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(config));
+    const nextRows = this.buildRowsWithRelations(
+      records,
+      config,
+      state,
+      this.currentDbConfig,
+    );
+    const renderConfig = this.getStatefulConfig(config);
+    const patched = state.groupByField
+      ? (() => {
+          const field = state.groupByField;
+          const groups = withEmptyOptionGroups(
+            config,
+            field,
+            this.queryEngine.groupBy(
+              nextRows,
+              field,
+              [],
+              config.schema.columns.find((column) => column.key === field),
+              config
+            )
+          );
+          const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
+          return this.tableRenderer.patchGroupedRows(
+            this.containerEl,
+            renderConfig,
+            nextRows,
+            this.queryEngine.sortGroups(groups, order),
+            field,
+            changedPaths
+          );
+        })()
+      : this.tableRenderer.patchUngroupedRows(
+          this.containerEl,
+          renderConfig,
+          nextRows,
+          changedPaths
+        );
+    if (!patched) return false;
+
+    this.rows = nextRows;
+    this.timelineInvalidRowsVersion += 1;
+    this.scheduleComputedSync(
+      config,
+      this.getIncrementalComputedSyncRows(config, this.rows, changedPaths)
+    );
+    this.summaryRenderer.render(this.containerEl, this.rows, config, this.currentDbConfig, {
+      onChange: () => {
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config);
+        this.saveEmbeddedConfigInBackground();
+      },
+    });
+    const summary = this.containerEl.querySelector<HTMLElement>(":scope > .db-summary");
+    const tableRoot = this.containerEl.querySelector<HTMLElement>(
+      ":scope > .db-table-wrap, :scope > .db-grouped-table"
+    );
+    if (summary && tableRoot) this.containerEl.insertBefore(summary, tableRoot);
+    this.renderEmbedCellSelectionClasses();
+    this.renderEmbedSelectionStatusBar();
+
+    const openDetailPath = getOpenRecordDetailPath();
+    if (openDetailPath) {
+      const nextRow = this.rows.find((row) => row.file.path === openDetailPath);
+      if (nextRow) refreshRecordDetailPanel(nextRow);
+      else closeRecordDetailPanel();
+    }
+    return true;
+  }
+
   private deferRefreshUntilVisible(): boolean {
     if (!this.hasObservedVisibility || this.isIntersecting) return false;
     this.pendingRefreshWhileHidden = true;
     return true;
-  }
-
-  private shouldPreserveChrome(): boolean {
-    return this.showFilterPanel ||
-      this.showSortPanel ||
-      this.showColumnManager ||
-      this.showViewConfigPanel ||
-      this.containerEl.contains(window.activeDocument.activeElement);
   }
 
   private handleOutsideClick(event: MouseEvent): void {
@@ -626,6 +883,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         sourcePath: mutation.dbPath || this.currentSourcePath,
       };
     }
+    if (this.hasObservedVisibility && !this.isIntersecting) {
+      this.pendingSourceReload = true;
+      this.pendingRefreshWhileHidden = true;
+      this.refreshCoordinator.mark([mutation.dbPath || this.currentSourcePath]);
+      return;
+    }
     this.suppressDataReload(1000);
     this.hardRefreshFromSource();
   }
@@ -677,7 +940,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
 
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
-    this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(config), this.app);
+    this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(config), this.currentDbConfig, true);
     this.timelineInvalidRowsVersion += 1;
     this.scheduleComputedSync(config, this.rows);
     if (config.viewType !== "chart") {
@@ -1071,6 +1334,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       syncComputedFields: this.persistMode === "codeblock"
         ? undefined
         : () => { this.syncComputedFieldsInBackground(config, this.rows, true, true); },
+      refreshDatabase: () => this.refreshCoordinator.refreshNow(),
+      pendingRefreshCount: this.refreshCoordinator.getState().pendingCount,
+      pendingRefreshUnknown: this.refreshCoordinator.getState().pendingUnknown,
+      isRefreshingDatabase: this.refreshCoordinator.getState().refreshing,
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover(config, "filter", anchorEl),
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover(config, "columns", anchorEl),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover(config, "view", anchorEl),
@@ -1130,6 +1397,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.containerEl.querySelector(":scope > .db-header")?.remove();
     this.renderToolbar(config);
     this.renderHeaderChromeToggle(config);
+  }
+
+  private updateRefreshIndicator(state = this.refreshCoordinator.getState()): void {
+    const button = this.containerEl.querySelector<HTMLElement>(".db-database-refresh-button");
+    if (!button) return;
+    this.toolbarRenderer.updateDatabaseRefreshButton(button, {
+      pendingRefreshCount: state.pendingCount,
+      pendingRefreshUnknown: state.pendingUnknown,
+      isRefreshingDatabase: state.refreshing,
+    });
   }
 
   private updateStickyOffsets(): void {
@@ -1769,8 +2046,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (col.key === "file.name") return this.getFileDisplayName(row);
     const value = isFileFieldKey(col.key)
       ? getRowFileFieldValue(row, col.key)
-      : col.type === "computed" && col.computedKey
-        ? row.computed[col.computedKey]
+      : col.type === "computed" || col.type === "rollup"
+        ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
         : row.frontmatter[col.key];
     if (value == null) return "";
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
@@ -2304,7 +2581,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private isWritableSourceRuleField(config: ViewConfig, field: string): boolean {
     if (!field || field.startsWith("file.") || field.startsWith("formula.")) return false;
-    return config.schema.columns.find((column) => column.key === field)?.type !== "computed";
+    const type = config.schema.columns.find((column) => column.key === field)?.type;
+    return type !== "computed" && type !== "rollup";
   }
 
   private getCreateFolder(config: ViewConfig): string {
@@ -2433,8 +2711,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
     this.clearComputedSyncTimer();
+    if (this.persistMode === "codeblock") return;
     if (!this.isAutomaticComputedSync() || config.schema.computedFields.length === 0) return;
-    this.computedSyncTimer = window.setTimeout(() => {
+    this.computedSyncTimer = this.getRefreshWindow().setTimeout(() => {
       this.computedSyncTimer = null;
       this.syncComputedFieldsInBackground(config, rows);
     }, 5000);
@@ -2442,7 +2721,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private clearComputedSyncTimer(): void {
     if (this.computedSyncTimer === null) return;
-    window.clearTimeout(this.computedSyncTimer);
+    this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
     this.computedSyncTimer = null;
   }
 
@@ -2482,7 +2761,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
 
     if (Object.keys(updates).length > 0) {
-      await this.dataSource.updateFrontmatter(file, updates);
+      await this.dataSource.updateFrontmatter(file, updates, { sourceInstanceId: this.instanceId });
     }
   }
 
@@ -2505,7 +2784,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           if (safeString(row.frontmatter[key]) !== safeString(next)) updates[key] = next;
         }
         if (Object.keys(updates).length > 0) {
-          await this.dataSource.updateFrontmatter(row.file, updates);
+          await this.dataSource.updateFrontmatter(row.file, updates, { sourceInstanceId: this.instanceId });
           changed += 1;
         }
       }
@@ -2679,6 +2958,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const lines = content.split("\n");
     lines.splice(section.lineStart, section.lineEnd - section.lineStart + 1, replacement);
     this.suppressDataReload(2500);
+    this.dataSource.markPluginWrite(file.path, this.instanceId);
     await this.app.vault.modify(file, lines.join("\n"));
   }
 
@@ -2732,8 +3012,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const getCellValue = (row: RowData, col: ColumnDef): string => {
       const value = isFileFieldKey(col.key)
         ? getRowFileFieldValue(row, col.key)
-        : col.type === "computed" && col.computedKey
-          ? row.computed[col.computedKey]
+        : col.type === "computed" || col.type === "rollup"
+          ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
           : row.frontmatter[col.key];
       if (value == null || value === "") return "";
       if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
@@ -2779,8 +3059,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const getExportCellValue = (row: RowData, col: ColumnDef): string => {
       const value = isFileFieldKey(col.key)
         ? getRowFileFieldValue(row, col.key)
-        : col.type === "computed" && col.computedKey
-          ? row.computed[col.computedKey]
+        : col.type === "computed" || col.type === "rollup"
+          ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
           : row.frontmatter[col.key];
       if (value == null || value === "") return "";
       if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
@@ -2806,12 +3086,59 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   /** Build the correct filtered and sorted row set for each CSV included in an embedded ZIP export. */
+  private buildRowsWithRelations(
+    records: NoteRecord[],
+    view: ViewConfig,
+    state: DatabaseViewState,
+    database: DatabaseConfig | null | undefined,
+    cacheTargets = false,
+  ): RowData[] {
+    let derived: Map<string, Record<string, unknown>> | undefined;
+    if (database?.schema.columns.some((column) => column.type === "rollup")) {
+      const entries = this.getDatabaseEntries();
+      const databases = entries.map((entry) => entry.config);
+      if (!databases.some((candidate) => candidate.id === database.id)) databases.push(database);
+      const result = buildRelationRollups({
+        app: this.app,
+        sourceRecords: records,
+        sourceDatabase: database,
+        databases,
+        getRecordsForDatabase: (target) => this.dataSource.getRecordsForDatabase(target),
+      });
+      derived = result.valuesByPath;
+      if (cacheTargets) {
+        this.relationTargetPaths = result.targetPaths;
+        const targetIds = new Set(
+          database.schema.columns
+            .filter((column) => column.type === "relation")
+            .map((column) => column.relationConfig?.targetDatabaseId)
+            .filter((id): id is string => Boolean(id))
+        );
+        this.relationTargetDatabases = databases.filter((candidate) => targetIds.has(candidate.id));
+        this.relationTargetDatabasePaths = new Set(
+          entries.filter((entry) => targetIds.has(entry.config.id)).map((entry) => entry.sourcePath)
+        );
+      }
+    } else if (cacheTargets) {
+      this.relationTargetPaths.clear();
+      this.relationTargetDatabases = [];
+      this.relationTargetDatabasePaths.clear();
+    }
+    return this.rowPipeline.build(
+      records,
+      this.withBaseThisContext(view),
+      state,
+      this.app,
+      derived,
+    );
+  }
+
   private getRowsForExportView(dbConfig: DatabaseConfig, viewIndex: number): RowData[] {
     const sourceView = dbConfig.views[viewIndex];
     if (!sourceView) return [];
     const view = this.cloneConfig(sourceView);
     const records = this.dataSource.getRecordsForConfig(this.getEffectiveConfig(view));
-    return this.rowPipeline.build(records, this.withBaseThisContext(view), this.stateStore.get(0, viewIndex, view), this.app);
+    return this.buildRowsWithRelations(records, view, this.stateStore.get(0, viewIndex, view), dbConfig);
   }
 
   private moveView(fromIndex: number, toIndex: number): void {

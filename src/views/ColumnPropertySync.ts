@@ -20,7 +20,7 @@ export class ColumnPropertySync {
   ) {}
 
   rename(config: ViewConfig, col: ColumnDef, oldKey: string, newKey: string, force = false): Promise<RenameResult> | null {
-    if (oldKey === newKey || oldKey === "file.name" || col.type === "computed") return null;
+    if (oldKey === newKey || oldKey === "file.name" || col.type === "computed" || col.type === "rollup") return null;
     return this.propertyService.renameKey(
       this.getFilesForConfig(config),
       oldKey,

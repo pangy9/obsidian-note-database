@@ -300,7 +300,7 @@ function applyRequiredRule(ctx: RuleApplyContext, rule: SourceRule): void {
     return;
   }
   // computed 列的值由公式求值产生，不能在创建时写入。
-  if (col.type === "computed") {
+  if (col.type === "computed" || col.type === "rollup") {
     plan.diagnostics.push({ reason: "unconstructable", field, op });
     return;
   }
@@ -317,7 +317,7 @@ function applyHasProperty(ctx: RuleApplyContext, rule: SourceRule): void {
     return;
   }
   const col = ctx.schema.columns.find((candidate) => candidate.key === field);
-  if (col?.type === "computed") {
+  if (col?.type === "computed" || col?.type === "rollup") {
     plan.diagnostics.push({ reason: "unconstructable", field, op });
     return;
   }
@@ -384,18 +384,19 @@ function applyPropertyRule(
     case "eq":
     case "strictEq": {
       if (rule.value == null) return;
-      if (op === "strictEq" && (displayType === "multi-select" || isObsidianTagsKey(col.key))) {
+      if (op === "strictEq" && (displayType === "multi-select" || displayType === "relation" || isObsidianTagsKey(col.key))) {
         // 数组字段（multi-select/tags/aliases）值是数组，strictEq 对数组恒 false，不可构造。
         plan.diagnostics.push({ reason: "unconstructable", field, op });
         return;
       }
       const value = coerceValueForColumn(rule, col, displayType);
-      setScalarFromRule(ctx, field, value, op);
+      if (displayType === "relation") mergeListInto(plan, field, value);
+      else setScalarFromRule(ctx, field, value, op);
       return;
     }
     case "contains": {
       if (rule.value == null || String(rule.value) === "") return;
-      if (displayType === "multi-select" || isObsidianTagsKey(field)) {
+      if (displayType === "multi-select" || displayType === "relation" || isObsidianTagsKey(field)) {
         mergeListInto(plan, field, rule.value);
       } else {
         // 文本 contains：写入规则值即满足"包含"。
@@ -540,7 +541,7 @@ function coerceValueForColumn(rule: SourceRule, col: ColumnDef, displayType: Col
   }
   if (displayType === "number" || displayType === "currency") return Number(getSourceRuleTypedValue(rule));
   if (displayType === "checkbox") return toBooleanValue(rule.value);
-  if (displayType === "multi-select" || isObsidianTagsKey(col.key)) {
+  if (displayType === "multi-select" || displayType === "relation" || isObsidianTagsKey(col.key)) {
     // 单值 eq 落成单元素列表（contains 路径走 mergeListInto）。
     return toMultiSelectValuesForKey(col.key, rule.value);
   }
@@ -553,7 +554,7 @@ function constructForIsType(rule: SourceRule, col: ColumnDef, displayType: Colum
   if ((type === "boolean" || type === "bool" || type === "checkbox") && displayType === "checkbox") return true;
   if (type === "number" && (displayType === "number" || displayType === "currency")) return 0;
   if ((type === "string" || type === "text") && displayType === "text") return "";
-  if ((type === "list" || type === "array") && (displayType === "multi-select" || isObsidianTagsKey(col.key))) {
+  if ((type === "list" || type === "array") && (displayType === "multi-select" || displayType === "relation" || isObsidianTagsKey(col.key))) {
     return [];
   }
   // date/datetime 的 isType 没有可靠的最小值（today 不保证落在期望范围），不构造。

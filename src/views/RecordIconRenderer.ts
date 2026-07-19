@@ -1,7 +1,9 @@
 import { getIconIds, setIcon, setTooltip } from "obsidian";
 import { parseRecordIconToken } from "../data/RecordIcon";
+import type { DatabaseConfig } from "../data/types";
 
 let validIconIds: Set<string> | undefined;
+const DATABASE_DROPDOWN_ICON_PREFIX = "note-database-icon:";
 
 function getValidIconIdSet(): Set<string> {
   if (validIconIds) return validIconIds;
@@ -50,4 +52,16 @@ export function renderRecordIcon(
 
 export function getValidRecordIconIds(): string[] {
   return Array.from(getValidIconIdSet()).sort((a, b) => a.localeCompare(b));
+}
+
+export function getDatabaseDropdownIcon(database: DatabaseConfig, enabled = true): string | undefined {
+  return enabled ? `${DATABASE_DROPDOWN_ICON_PREFIX}${database.icon || ""}` : undefined;
+}
+
+export function renderDatabaseDropdownIcon(parent: HTMLElement, icon: string): boolean {
+  if (!icon.startsWith(DATABASE_DROPDOWN_ICON_PREFIX)) return false;
+  const token = icon.slice(DATABASE_DROPDOWN_ICON_PREFIX.length);
+  renderRecordIcon(parent, token, { compact: true, defaultIcon: "database" })
+    .addClass("db-database-dropdown-icon");
+  return true;
 }

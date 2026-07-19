@@ -115,6 +115,8 @@ export interface CalendarTimelineRendererActions {
   openRecordDetail?(anchorEl: HTMLElement, row: RowData): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig): void;
   createEntryForDate?(config: ViewConfig, dateKey: string, options?: CalendarTimelineCreateOptions): void;
   updateEventDates?(
     row: RowData,
@@ -252,6 +254,12 @@ export class CalendarTimelineRenderer {
     this.observeTimelineViewport(container, config, rows);
     wrap.style.setProperty("--db-timeline-units", String(Math.max(1, model.totalUnits)));
     wrap.style.setProperty("--db-timeline-unit-width", `${unitWidth}px`);
+    wrap.style.setProperty(
+      "--db-timeline-group-width",
+      config.summaryRules && config.summaryRules.length > 0
+        ? "min(240px, 42vw)"
+        : "min(160px, 32vw)"
+    );
     this.timelineFlashWindow = {
       startDateKey: model.startDateKey,
       totalUnits: model.totalUnits,
@@ -358,6 +366,7 @@ export class CalendarTimelineRenderer {
       }
       this.renderTimelineCreateRow(groupEl, config, model, lane.key);
     }
+    if (hasGroupField) this.fitTimelineGroupHeaderWidth(wrap, container);
     if (todayPosition) {
       for (const [property, value] of Object.entries(todayPosition.cssProps)) {
         body.style.setProperty(property, value);
@@ -372,6 +381,31 @@ export class CalendarTimelineRenderer {
         this.flashTimelineDate(key);
       });
     }
+  }
+
+  private fitTimelineGroupHeaderWidth(wrap: HTMLElement, container: HTMLElement): void {
+    const apply = () => {
+      if (!wrap.isConnected) return;
+      const labels = Array.from(wrap.querySelectorAll<HTMLElement>(".db-timeline-group-header-label"));
+      if (labels.length === 0) return;
+      const contentWidth = labels.reduce((max, label) => {
+        const toggle = label.querySelector<HTMLElement>(".db-timeline-group-toggle");
+        const tag = label.querySelector<HTMLElement>(".db-timeline-group-tag");
+        const summaries = Array.from(label.querySelectorAll<HTMLElement>(".db-group-summary-item"));
+        const itemCount = [toggle, tag, ...summaries].filter(Boolean).length;
+        const naturalWidth = (toggle?.offsetWidth || 0) +
+          (tag?.scrollWidth || 0) +
+          summaries.reduce((sum, item) => sum + item.scrollWidth, 0) +
+          Math.max(0, itemCount - 1) * 4 +
+          8;
+        return Math.max(max, naturalWidth);
+      }, 0);
+      const viewportWidth = Math.max(320, container.clientWidth || container.getBoundingClientRect().width || 0);
+      const width = Math.max(160, Math.min(Math.ceil(contentWidth), Math.max(160, viewportWidth - 96)));
+      wrap.style.setProperty("--db-timeline-group-width", `${width}px`);
+    };
+    apply();
+    (container.ownerDocument.defaultView || window).requestAnimationFrame(apply);
   }
 
   private renderTimelineTickLabel(tickEl: HTMLElement, label: string, scale: TimelineScale): void {
@@ -410,6 +444,7 @@ export class CalendarTimelineRenderer {
     // 统一绝对刻度定位（可见窗口夹取后的 [renderStart, renderEnd]）；所有事件同一路径，不再 is-timed 双轨。
     this.applyTimelineAbsolutePosition(button, range.renderStart, range.renderEnd, range.visible.startMinutes, model.unit);
     this.applyCalendarEventColor(button, event.color);
+    this.actions.applyConditionalFormat?.(button, event.row, config);
     const content = button.createSpan({ cls: "db-timeline-event-content" });
     this.actions.renderRecordIcon?.(content, event.row, config, true);
     content.createSpan({ cls: `db-timeline-event-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
@@ -516,6 +551,7 @@ export class CalendarTimelineRenderer {
       this.actions.toggleGroupCollapsed?.(collapseField, lane.key);
     };
     this.renderTimelineGroupTag(headerLabel, lane);
+    this.actions.renderGroupSummaries?.(headerLabel, lane.events.map((event) => event.row), config);
     header.createDiv({ cls: "db-timeline-group-header-grid" });
     return collapsed;
   }
@@ -2067,7 +2103,7 @@ export class CalendarTimelineRenderer {
   private canMoveTimelineAcrossLane(config: ViewConfig): boolean {
     if (!this.actions.moveTimelineEventToGroup || !config.timelineGroupField) return false;
     const col = config.schema.columns.find((candidate) => candidate.key === config.timelineGroupField);
-    if (!col || col.type === "computed" || col.key.startsWith("file.")) return false;
+    if (!col || col.type === "computed" || col.type === "rollup" || col.key.startsWith("file.")) return false;
     return col.type !== "multi-select";
   }
 

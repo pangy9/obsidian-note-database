@@ -68,7 +68,10 @@ export function mapColumnTypeToObservablePropertyType(
     case "checkbox":
       return "checkbox";
     case "computed":
+    case "rollup":
       return null;
+    case "relation":
+      return "multitext";
     default:
       return null;
   }
@@ -92,7 +95,7 @@ export function getPropertyWriters(entries: PropertyTypeConflictEntry[]): Proper
     const computedFields = entry.config.schema?.computedFields || [];
 
     for (const col of columns) {
-      if (!col.key || col.type === "computed" || isFileFieldKey(col.key)) continue;
+      if (!col.key || col.type === "computed" || col.type === "rollup" || isFileFieldKey(col.key)) continue;
       const observableType = mapColumnTypeToObservablePropertyType(col.type);
       if (!observableType) continue;
       writers.push({

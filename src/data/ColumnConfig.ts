@@ -84,7 +84,7 @@ export function getVisibleColumns(
   const allCols = getColumnsInOrder(config);
   for (const col of allCols) {
     if (rows.length === 0) continue;
-    if (col.type === "computed" || col.key === "file.name" || isOptionColumnType(col.type) || col.type === "checkbox") continue;
+    if (col.type === "computed" || col.type === "rollup" || col.key === "file.name" || isOptionColumnType(col.type) || col.type === "checkbox") continue;
     if (pendingShowColumns.has(col.key)) continue;
     if (explicitlyOrderedKeys.has(col.key)) continue;
     const hasValue = rows.some((row) => {
@@ -203,10 +203,11 @@ export function updateColumnKeyReferences(
     delete config.boardCardOrders[oldKey];
     changed = true;
   }
-  if (config.summaryRules?.[oldKey]) {
-    config.summaryRules[newKey] = config.summaryRules[oldKey];
-    delete config.summaryRules[oldKey];
-    changed = true;
+  for (const rule of config.summaryRules || []) {
+    if (rule.field === oldKey) {
+      rule.field = newKey;
+      changed = true;
+    }
   }
   for (const viewState of Object.values(config.viewStates || {})) {
     if (!viewState) continue;

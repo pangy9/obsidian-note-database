@@ -4,6 +4,7 @@ import { formatDateTimeValueDisplay, formatDateValueDisplay } from "./DateTimeFo
 import { stringifyValue } from "./Stringify";
 import { toBooleanValue } from "./ColumnTypes";
 import { DateGroupMode, ViewConfig } from "./types";
+import { parseRelationLink } from "./RelationLinks";
 
 export interface GroupDisplayOptions {
   uncategorizedLabel?: string;
@@ -33,6 +34,11 @@ export function formatGroupKeyDisplay(
     if (getDateGroupMode(config, groupField) === "date") return formatDateValueDisplay(key);
     return formatDateTimeValueDisplay(key, { mode: "full", showTimeWhenMissing: true });
   }
+  if (displayType === "checkbox") return toBooleanValue(key) ? t("common.true") : t("common.false");
+  if (displayType === "relation") {
+    const link = parseRelationLink(key);
+    return link?.alias || link?.target.split("/").pop() || key;
+  }
   return key;
 }
 
@@ -40,7 +46,7 @@ export function formatGroupKeyDisplay(
 export function resolveGroupCreateDefaults(config: ViewConfig, groupField: string, groupKey: string): Record<string, unknown> {
   if (groupKey === t("common.uncategorized")) return { [groupField]: "" };
   const col = config.schema.columns.find((candidate) => candidate.key === groupField);
-  if (col?.type === "multi-select") return { [groupField]: [groupKey] };
+  if (col?.type === "multi-select" || col?.type === "relation") return { [groupField]: [groupKey] };
   if (col?.type === "checkbox") return { [groupField]: toBooleanValue(groupKey) };
   return { [groupField]: groupKey };
 }
@@ -50,5 +56,5 @@ export function isComputedGroupField(config: ViewConfig, field: string | undefin
   if (!field) return false;
   if (field.startsWith("formula.")) return true;
   const col = config.schema.columns.find((candidate) => candidate.key === field);
-  return col?.type === "computed";
+  return col?.type === "computed" || col?.type === "rollup";
 }

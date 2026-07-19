@@ -31,10 +31,23 @@ export interface NumberDisplayConfig {
   color?: StatusColor;
 }
 
+export interface RelationConfig {
+  /** Stable id of the database whose records may be selected. */
+  targetDatabaseId: string;
+}
+
+export interface RollupConfig {
+  /** Key of a relation column in the same source database. */
+  relationField: string;
+  /** Field read from each valid related record in the target database. */
+  targetField: string;
+  aggregation: "count" | "sum" | "avg" | "list";
+}
+
 export interface ColumnDef {
   key: string;
   label: string;
-  type: "text" | "number" | "date" | "datetime" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed";
+  type: "text" | "number" | "date" | "datetime" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed" | "relation" | "rollup";
   width?: number;
   urgency?: { enabled: boolean; thresholdDays: number };
   dateFormat?: string;
@@ -51,6 +64,10 @@ export interface ColumnDef {
   numberDisplayStyle?: NumberDisplayStyle;
   /** Per-column tuning for the number display style (icon/max/divisor/showValue/color). */
   numberDisplayConfig?: NumberDisplayConfig;
+  /** Relation values are stored as native Obsidian wikilinks in frontmatter. */
+  relationConfig?: RelationConfig;
+  /** Rollups are display-only derived values and are never written to frontmatter. */
+  rollupConfig?: RollupConfig;
 }
 
 export type StatusColor =
@@ -121,6 +138,22 @@ export interface FilterRule {
   field: string;
   op: FilterOperator;
   value?: string;
+}
+
+export interface ConditionalFormatRule {
+  id: string;
+  condition: FilterRule;
+  /** Resolve the comparison value dynamically at render time. */
+  valueSource?: "literal" | "today";
+  target: "record" | "field";
+  /** @deprecated Field targets now always use condition.field. Kept only for legacy reads. */
+  targetField?: string;
+  color: StatusColor;
+}
+
+export interface NewRecordTemplateConfig {
+  path: string;
+  engine: "markdown" | "core" | "templater";
 }
 
 export interface SortRule {
@@ -225,6 +258,10 @@ export interface DatabaseConfig {
   name: string;
   /** Database title icon token: an emoji grapheme or lucide:<id>@<color>. */
   icon?: string;
+  /** Vault-relative image path rendered as the database-level cover in full views. */
+  coverImage?: string;
+  /** Vertical cover focal point from 0 (top) to 100 (bottom). */
+  coverImagePositionY?: number;
   description?: string;
   sourceFolder: string;
   sourceRules?: SourceRule[];
@@ -236,6 +273,10 @@ export interface DatabaseConfig {
   newRecordFolder?: string;
   /** Default writable text property used for per-record icon tokens. */
   recordIconField?: string;
+  /** @deprecated Legacy database-level rules are migrated into views on read. */
+  conditionalFormats?: ConditionalFormatRule[];
+  /** Optional vault Markdown template used by every record creation entry point. */
+  newRecordTemplate?: NewRecordTemplateConfig;
   schema: RecordSchema;
   /** Database-specific status presets. Global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
@@ -352,8 +393,10 @@ export interface ViewConfig {
   filters?: FilterRule[];
   /** Optional maximum number of rows shown by this view, imported from Obsidian Bases limit. */
   resultLimit?: number;
-  /** Property -> summary name mapping imported from Obsidian Bases view summaries. */
-  summaryRules?: Record<string, string>;
+  /** Ordered summary rules. The same property may appear more than once with different aggregations. */
+  summaryRules?: SummaryRuleDef[];
+  /** Ordered conditional formatting rules scoped to this view. */
+  conditionalFormats?: ConditionalFormatRule[];
   /** Chart type for chart views. */
   chartType?: ChartType;
   /** Field key used to group rows before chart aggregation. */
@@ -488,6 +531,11 @@ export interface ViewConfig {
   timelineCustomUnitWidth?: number;
   /** Per-renderer state so table and board can keep independent visible columns, filters, and sorting. */
   viewStates?: Partial<Record<DatabaseViewType, ViewModeStateDef>>;
+}
+
+export interface SummaryRuleDef {
+  field: string;
+  summary: string;
 }
 
 export interface PluginSettings {

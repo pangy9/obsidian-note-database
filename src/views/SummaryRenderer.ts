@@ -72,6 +72,11 @@ function getSummaryKindLabel(kind: SummaryKind): string {
 
 function isNumericSummaryColumn(config: ViewConfig, col: ColumnDef): boolean {
   if (col.type === "number" || col.type === "currency") return true;
+  if (col.type === "rollup") {
+    return col.rollupConfig?.aggregation === "count" ||
+      col.rollupConfig?.aggregation === "sum" ||
+      col.rollupConfig?.aggregation === "avg";
+  }
   if (col.type !== "computed") return false;
   const computedKey = col.computedKey || col.key;
   return config.schema.computedFields.find((field) => field.key === computedKey)?.type === "number";
@@ -109,14 +114,53 @@ function getSummaryAggregationOptions(config: ViewConfig, field: string, include
   ];
 }
 
-function setSummaryRule(config: ViewConfig, previousField: string | undefined, field: string | undefined, kind: SummaryKind | undefined): void {
-  const next = { ...(config.summaryRules || {}) };
-  if (previousField) delete next[previousField];
-  if (field && kind) next[field] = kind;
-  config.summaryRules = Object.keys(next).length > 0 ? next : undefined;
+function setSummaryRule(
+  config: ViewConfig,
+  ruleIndex: number | undefined,
+  field: string | undefined,
+  kind: SummaryKind | undefined,
+): void {
+  const next = [...(config.summaryRules || [])];
+  if (ruleIndex != null) {
+    if (field && kind) next[ruleIndex] = { field, summary: kind };
+    else next.splice(ruleIndex, 1);
+  } else if (field && kind) {
+    next.push({ field, summary: kind });
+  }
+  config.summaryRules = next.length > 0 ? next : undefined;
 }
 
 export class SummaryRenderer {
+  renderGroupItems(
+    parent: HTMLElement,
+    rows: RowData[],
+    config: ViewConfig,
+    database?: DatabaseConfig,
+  ): void {
+    parent.querySelectorAll(":scope > .db-group-summary-item").forEach((element) => element.remove());
+    if (!config.summaryRules) return;
+    for (const { field, summary: summaryName } of config.summaryRules) {
+      const col = config.schema.columns.find((candidate) => candidate.key === field);
+      const values = rows.map((row) => this.getRowValue(row, field, col));
+      const result = this.calculateSummary(values, summaryName, database?.summaryFormulas?.[summaryName]);
+      if (result == null || result === "") continue;
+      const kind = normalizeSummaryKind(summaryName);
+      const label = col?.label || field;
+      const item = parent.createSpan({
+        cls: "db-group-summary-item",
+        attr: { title: `${label} ${kind ? getSummaryKindLabel(kind) : summaryName}: ${this.formatSummaryValue(result)}` },
+      });
+      item.createSpan({
+        cls: "db-group-summary-label",
+        text: `${label} ${kind ? getSummaryKindLabel(kind) : summaryName}`,
+      });
+      item.createSpan({
+        cls: "db-group-summary-value",
+        text: this.formatSummaryValue(result),
+      });
+    }
+  }
+
   render(
     containerEl: HTMLElement,
     rows: RowData[],
@@ -126,34 +170,36 @@ export class SummaryRenderer {
   ): void {
     const existing = containerEl.querySelector(".db-summary");
     if (existing) existing.remove();
-    if (config?.viewType === "calendar" || config?.viewType === "timeline") return;
-
+    if (config?.viewType === "calendar") return;
     const summary = containerEl.createDiv({ cls: "db-summary" });
     if (options?.placement === "after-chart") this.placeAfterChart(containerEl, summary);
-    const addItem = (label: string, value: string, style?: string) => {
+    const addItem = (label: string, value: string, style?: string): HTMLElement => {
       const div = summary.createDiv({ cls: "db-summary-item" });
       div.createDiv({ cls: "label", text: label });
       div.createSpan({ text: value, cls: "value", attr: style ? { style } : {} });
+      return div;
     };
 
-    addItem(t("common.total"), String(rows.length));
+    addItem(
+      config?.viewType === "timeline" ? t("common.databaseTotal") : t("common.total"),
+      String(rows.length)
+    );
 
     if (config?.summaryRules) {
-      for (const [field, summaryName] of Object.entries(config.summaryRules)) {
+      config.summaryRules.forEach(({ field, summary: summaryName }, ruleIndex) => {
         const col = config.schema.columns.find((candidate) => candidate.key === field);
         const values = rows.map((row) => this.getRowValue(row, field, col));
         const result = this.calculateSummary(values, summaryName, database?.summaryFormulas?.[summaryName]);
-        if (result == null || result === "") continue;
+        if (result == null || result === "") return;
         const label = col?.label || field;
         const kind = normalizeSummaryKind(summaryName);
 
-        /* 内置汇总项可点击，触发字段 + 聚合选择菜单。 */
-        if (kind && options?.onChange) {
-          this.addClickableSummaryItem(summary, field, label, kind, this.formatSummaryValue(result), config, options.onChange);
-        } else {
-          addItem(`${label} ${kind ? getSummaryKindLabel(kind) : summaryName}`, this.formatSummaryValue(result));
-        }
-      }
+        const item = kind && options?.onChange
+          ? this.addClickableSummaryItem(summary, ruleIndex, field, label, kind, this.formatSummaryValue(result), config, options.onChange)
+          : addItem(`${label} ${kind ? getSummaryKindLabel(kind) : summaryName}`, this.formatSummaryValue(result));
+        if (options?.onChange) this.makeSummaryItemDraggable(item, ruleIndex);
+      });
+      if (options?.onChange) this.installSummaryReorderSurface(summary, config, options.onChange);
     }
 
     /* 显示淡色入口，用于新增或移除一条字段汇总。 */
@@ -165,17 +211,131 @@ export class SummaryRenderer {
   /** 渲染可点击的内置汇总值，点击弹出字段 + 聚合选择菜单。 */
   private addClickableSummaryItem(
     summary: HTMLElement,
+    ruleIndex: number,
     field: string,
     fieldLabel: string,
     kind: SummaryKind,
     value: string,
     config: ViewConfig,
     onChange: () => void
-  ): void {
+  ): HTMLElement {
     const div = summary.createDiv({ cls: "db-summary-item db-summary-sum-item" });
     div.createDiv({ cls: "label", text: `${fieldLabel} ${getSummaryKindLabel(kind)}` });
     div.createSpan({ text: value, cls: "value" });
-    div.onclick = (e: MouseEvent) => this.openSummaryAggregationMenu(e, config, onChange, field, field, kind, true);
+    div.onclick = (e: MouseEvent) => {
+      if (div.dataset.summaryDragActive === "true") return;
+      this.openSummaryAggregationMenu(e, config, onChange, field, ruleIndex, kind, true);
+    };
+    return div;
+  }
+
+  private makeSummaryItemDraggable(
+    item: HTMLElement,
+    ruleIndex: number,
+  ): void {
+    item.addClass("db-summary-draggable");
+    item.draggable = true;
+    item.setAttribute("data-summary-rule-index", String(ruleIndex));
+    item.addEventListener("dragstart", (event) => {
+      item.addClass("is-dragging");
+      item.dataset.summaryDragActive = "true";
+      event.dataTransfer?.setData("text/plain", String(ruleIndex));
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    item.addEventListener("dragend", () => {
+      const summary = item.parentElement;
+      summary?.querySelectorAll(".db-summary-draggable").forEach((candidate) => {
+        candidate.removeClass("is-dragging");
+        candidate.removeClass("is-drop-before");
+        candidate.removeClass("is-drop-after");
+      });
+      if (summary) {
+        delete summary.dataset.summaryDragSource;
+        delete summary.dataset.summaryDropTarget;
+        delete summary.dataset.summaryDropAfter;
+      }
+      (item.ownerDocument.defaultView || window).setTimeout(() => {
+        delete item.dataset.summaryDragActive;
+      }, 0);
+    });
+  }
+
+  private installSummaryReorderSurface(
+    summary: HTMLElement,
+    config: ViewConfig,
+    onChange: () => void,
+  ): void {
+    const clearTarget = () => {
+      summary.querySelectorAll(".db-summary-draggable").forEach((candidate) => {
+        candidate.removeClass("is-drop-before");
+        candidate.removeClass("is-drop-after");
+      });
+      delete summary.dataset.summaryDropTarget;
+      delete summary.dataset.summaryDropAfter;
+    };
+    summary.addEventListener("dragstart", (event) => {
+      const item = event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>(".db-summary-draggable")
+        : null;
+      if (item?.dataset.summaryRuleIndex) {
+        summary.dataset.summaryDragSource = item.dataset.summaryRuleIndex;
+      }
+    });
+    summary.addEventListener("dragover", (event) => {
+      const sourceIndex = Number(summary.dataset.summaryDragSource);
+      if (!Number.isInteger(sourceIndex)) return;
+      const items = Array.from(summary.querySelectorAll<HTMLElement>(".db-summary-draggable:not(.is-dragging)"));
+      if (items.length === 0) return;
+      event.preventDefault();
+      clearTarget();
+      const rows = new Map<number, HTMLElement[]>();
+      for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        const rowKey = Math.round(rect.top / 4) * 4;
+        const row = rows.get(rowKey) || [];
+        row.push(item);
+        rows.set(rowKey, row);
+      }
+      const orderedRows = Array.from(rows.entries()).sort(([a], [b]) => a - b);
+      const selectedRow = orderedRows.find(([, row]) => event.clientY <= Math.max(...row.map((item) => item.getBoundingClientRect().bottom)))
+        || orderedRows.at(-1);
+      if (!selectedRow) return;
+      const rowItems = selectedRow[1].sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+      const target = rowItems.find((item) => {
+        const rect = item.getBoundingClientRect();
+        return event.clientX < rect.left + rect.width / 2;
+      });
+      const targetItem = target || rowItems.at(-1);
+      if (!targetItem) return;
+      const after = !target;
+      targetItem.toggleClass("is-drop-before", !after);
+      targetItem.toggleClass("is-drop-after", after);
+      summary.dataset.summaryDropTarget = targetItem.dataset.summaryRuleIndex || "";
+      summary.dataset.summaryDropAfter = after ? "true" : "false";
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    });
+    summary.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceIndex = Number(summary.dataset.summaryDragSource);
+      const targetIndex = Number(summary.dataset.summaryDropTarget);
+      const rules = config.summaryRules;
+      if (!rules || !Number.isInteger(sourceIndex) || !Number.isInteger(targetIndex) || sourceIndex === targetIndex) {
+        clearTarget();
+        return;
+      }
+      const sourceRule = rules[sourceIndex];
+      const targetRule = rules[targetIndex];
+      if (!sourceRule || !targetRule) {
+        clearTarget();
+        return;
+      }
+      const next = rules.filter((rule) => rule !== sourceRule);
+      const nextTargetIndex = next.indexOf(targetRule);
+      next.splice(nextTargetIndex + (summary.dataset.summaryDropAfter === "true" ? 1 : 0), 0, sourceRule);
+      config.summaryRules = next;
+      clearTarget();
+      onChange();
+    });
   }
 
   /** 渲染淡色汇总新增入口。 */
@@ -190,6 +350,7 @@ export class SummaryRenderer {
     e: MouseEvent,
     config: ViewConfig,
     onChange: () => void,
+    ruleIndex?: number,
     currentField?: string,
     currentKind?: SummaryKind,
   ): void {
@@ -205,12 +366,12 @@ export class SummaryRenderer {
       renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (field) => {
         if (!field) {
-          if (!currentField) return;
-          setSummaryRule(config, currentField, undefined, undefined);
+          if (ruleIndex == null) return;
+          setSummaryRule(config, ruleIndex, undefined, undefined);
           onChange();
           return;
         }
-        window.setTimeout(() => this.openSummaryAggregationMenu(anchor, config, onChange, field, currentField, currentKind), 0);
+        window.setTimeout(() => this.openSummaryAggregationMenu(anchor, config, onChange, field, ruleIndex, currentKind), 0);
       },
     });
   }
@@ -221,7 +382,7 @@ export class SummaryRenderer {
     config: ViewConfig,
     onChange: () => void,
     field: string,
-    previousField?: string,
+    ruleIndex?: number,
     currentKind?: SummaryKind,
     includeRemove = false,
   ): void {
@@ -244,8 +405,9 @@ export class SummaryRenderer {
       onChange: (value) => {
         const kind = normalizeSummaryKind(value);
         if (!kind && !includeRemove) return;
-        if (field === previousField && kind === currentKind) return;
-        setSummaryRule(config, previousField, kind ? field : undefined, kind || undefined);
+        const currentRule = ruleIndex == null ? undefined : config.summaryRules?.[ruleIndex];
+        if (currentRule?.field === field && kind === currentKind) return;
+        setSummaryRule(config, ruleIndex, kind ? field : undefined, kind || undefined);
         onChange();
       },
     });
@@ -257,7 +419,9 @@ export class SummaryRenderer {
   }
 
   private getRowValue(row: RowData, field: string, col?: ColumnDef): unknown {
-    if (col?.type === "computed") return row.computed[col.computedKey || col.key] ?? row.computed[field];
+    if (col?.type === "computed" || col?.type === "rollup") {
+      return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key] ?? row.computed[field];
+    }
     if (field.startsWith("formula.")) return row.computed[field.slice("formula.".length)];
     if (isBaseFileField(field)) return getRowFileFieldValue(row, field);
     return row.frontmatter[field];

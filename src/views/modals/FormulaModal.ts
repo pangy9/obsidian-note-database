@@ -141,7 +141,8 @@ export class FormulaModal extends Modal {
     private onSave: (result: FormulaSaveResult) => Promise<void | boolean>,
     private baseThisFile?: RowData["file"],
     private baseThisFrontmatter?: Record<string, unknown>,
-    private initialResultType?: ComputedFieldDef["type"]
+    private initialResultType?: ComputedFieldDef["type"],
+    private onClosed?: () => void
   ) {
     super(app);
   }
@@ -1541,5 +1542,6 @@ export class FormulaModal extends Modal {
     this.closeConfirmed = false;
     this.modalEl.removeClass("formula-workbench-modal-host");
     this.contentEl.empty();
+    this.onClosed?.();
   }
 }

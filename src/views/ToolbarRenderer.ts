@@ -1,6 +1,7 @@
 import { setIcon, setTooltip } from "obsidian";
 import { ColumnDef, DatabaseConfig, DatabaseViewType, DateGroupMode, GroupOrderMode, TimelineScale, ViewConfig } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { t } from "../i18n";
 import { DatabaseViewState } from "./ViewStateStore";
 import { positionToolbarPopover } from "./PopoverPosition";
@@ -68,6 +69,10 @@ export interface ToolbarActions {
   updateViewConfig?(label?: string): void;
   updateTimelineScale?(scale: TimelineScale, label?: string): boolean | Promise<boolean> | void;
   syncComputedFields?(): void;
+  refreshDatabase?(): void;
+  readonly pendingRefreshCount?: number;
+  readonly pendingRefreshUnknown?: boolean;
+  readonly isRefreshingDatabase?: boolean;
   toggleFilterPanel(anchorEl: HTMLElement): void;
   toggleColumnManager(anchorEl: HTMLElement): void;
   closeToolbarPopovers?(): void;
@@ -265,6 +270,7 @@ export class ToolbarRenderer {
     if (!actions.isReadOnly && normalizeComputedSyncMode(currentDb?.computedSyncMode) === "manual") {
       this.renderComputedSyncButton(right, actions);
     }
+    this.renderDatabaseRefreshButton(right, actions);
     this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && !actions.hideDatabaseActions && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
     if (isChartView && actions.toggleChartOptions && actions.showChartOptions === true) this.renderChartOptionsButton(right, actions);
@@ -284,6 +290,38 @@ export class ToolbarRenderer {
     const btn = this.createIconButton(toolbar, "", t("viewConfig.saveComputedResults"));
     appendSvg(btn, ToolbarRenderer.ICONS.refresh_fx);
     btn.onclick = () => actions.syncComputedFields?.();
+  }
+
+  private renderDatabaseRefreshButton(toolbar: HTMLElement, actions: ToolbarActions): void {
+    if (!actions.refreshDatabase) return;
+    const btn = this.createIconButton(toolbar, "", t("toolbar.refreshDatabase"), "db-database-refresh-button");
+    setIcon(btn, "refresh-cw");
+    btn.onclick = () => actions.refreshDatabase?.();
+    this.updateDatabaseRefreshButton(btn, actions);
+  }
+
+  updateDatabaseRefreshButton(button: HTMLElement, state: Pick<ToolbarActions,
+    "pendingRefreshCount" | "pendingRefreshUnknown" | "isRefreshingDatabase">): void {
+    const pending = state.pendingRefreshCount || 0;
+    const unknown = state.pendingRefreshUnknown === true;
+    const refreshing = state.isRefreshingDatabase === true;
+    button.toggleClass("is-refreshing", refreshing);
+    button.querySelector(".db-database-refresh-badge")?.remove();
+    if (pending > 0 || unknown) {
+      button.createSpan({
+        cls: "db-database-refresh-badge",
+        text: pending > 99 ? "99+" : pending > 0 ? String(pending) : "!",
+      });
+    }
+    const label = refreshing
+      ? t("toolbar.refreshingDatabase")
+      : pending > 0
+        ? t("toolbar.pendingRefreshFiles", { count: pending })
+        : unknown
+          ? t("toolbar.pendingRefreshUnknown")
+          : t("toolbar.refreshDatabase");
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
   }
 
   private renderCalendarTimelineOptionsButton(toolbar: HTMLElement, config: ViewConfig, database: DatabaseConfig, actions: ToolbarActions): void {
@@ -426,7 +464,10 @@ export class ToolbarRenderer {
       };
     }
     const label = entry.config.name || t("common.untitled");
-    renderRecordIcon(row, entry.config.icon, { compact: true, defaultIcon: "database" }).addClass("db-database-popover-icon");
+    if (actions.showDatabaseIcon !== false) {
+      renderRecordIcon(row, entry.config.icon, { compact: true, defaultIcon: "database" })
+        .addClass("db-database-popover-icon");
+    }
     row.createSpan({ cls: "db-database-popover-label", text: label });
     if (index === currentDbIndex) setIcon(row.createSpan({ cls: "db-database-popover-check" }), "check");
     row.onclick = () => {
@@ -1442,6 +1483,7 @@ export class ToolbarRenderer {
   }
 
   private getEffectiveGroupOrderType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
+    if (col.type === "rollup") return getColumnDisplayType(col, config.schema.computedFields);
     if (col.type !== "computed") return col.type;
     const computedKey = col.computedKey || col.key;
     const computedDef = config.schema.computedFields.find((field) => field.key === computedKey);

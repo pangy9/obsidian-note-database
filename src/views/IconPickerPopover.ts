@@ -11,6 +11,7 @@ export interface IconPickerOptions {
   current?: string;
   recent?: string[];
   onRecentChange?(recent: string[]): void | Promise<void>;
+  onConfigureField?(): void;
   onSelect(value: string | null): void | Promise<void>;
 }
 
@@ -27,6 +28,7 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
   let category = tab === "emoji" ? "people" : "common";
   let color: RecordIconColor = (options.current?.match(/^lucide:[^@]+@([a-z]+)$/)?.[1] as RecordIconColor) || "gray";
   let current = options.current ?? null;
+  let recent = [...(options.recent || [])];
   let closed = false;
 
   let removeAutoClose: (() => void) | undefined;
@@ -42,7 +44,10 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
     try {
       await options.onSelect(value);
       current = value;
-      if (value) await options.onRecentChange?.([value, ...(options.recent || []).filter((item) => item !== value)].slice(0, 16));
+      if (value) {
+        recent = [value, ...recent.filter((item) => item !== value)].slice(0, 16);
+        await options.onRecentChange?.(recent);
+      }
       render(true);
     } catch (error) {
       new Notice(t("errors.updateFailed", { error: String(error) }));
@@ -66,6 +71,20 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
     remove.onclick = () => { void commit(null); };
     const random = header.createEl("button", { cls: "db-icon-picker-random", attr: { type: "button", title: t("recordIcon.random"), "aria-label": t("recordIcon.random") } });
     setIcon(random, "shuffle");
+    if (options.onConfigureField) {
+      const settings = header.createEl("button", {
+        cls: "db-icon-picker-settings",
+        attr: { type: "button", title: t("recordIcon.configureField"), "aria-label": t("recordIcon.configureField") },
+      });
+      setIcon(settings, "settings-2");
+      setTooltip(settings, t("recordIcon.configureField"), { delay: 150 });
+      settings.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        options.onConfigureField?.();
+      };
+    }
 
     if (tab === "lucide") {
       const colors = panel.createDiv({ cls: "db-icon-picker-colors" });
@@ -79,7 +98,7 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
     }
 
     const computeValues = () => {
-      const recentValues = (options.recent || []).filter((value) => tab === "lucide" ? value.startsWith("lucide:") : !value.startsWith("lucide:"));
+      const recentValues = recent.filter((value) => tab === "lucide" ? value.startsWith("lucide:") : !value.startsWith("lucide:"));
       const allLucide = getValidRecordIconIds();
       let values: string[];
       let sectionLabel: string;

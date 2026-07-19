@@ -1,4 +1,5 @@
-import { getColumnOptionValues, hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, normalizeObsidianTagValue, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
+import { getColumnOptionValues, hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, normalizeObsidianTagValue, toBooleanValue, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
+import { getColumnDisplayType } from "./ColumnDisplay";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
 import { getDateGroupMode } from "./GroupDisplay";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
@@ -139,7 +140,7 @@ export class QueryEngine {
     const groups = new Map<string, RowData[]>();
     for (const row of rows) {
       const raw = this.getFieldValue(row, field);
-      const keys = this.getGroupKeys(raw, column, dateGroupMode);
+      const keys = this.getGroupKeys(raw, column, dateGroupMode, config);
       for (const key of keys) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(row);
@@ -246,7 +247,18 @@ export class QueryEngine {
     return [stringifyValue(value)];
   }
 
-  private getGroupKeys(value: unknown, column?: ColumnDef, dateGroupMode?: DateGroupMode): string[] {
+  private getGroupKeys(
+    value: unknown,
+    column?: ColumnDef,
+    dateGroupMode?: DateGroupMode,
+    config?: ViewConfig,
+  ): string[] {
+    const displayType = column && config?.schema
+      ? getColumnDisplayType(column, config.schema.computedFields || [])
+      : column?.type;
+    // Checkbox is semantically binary even when the frontmatter key is absent. All falsy,
+    // empty, or missing values belong to the unchecked group instead of "Uncategorized".
+    if (displayType === "checkbox") return [toBooleanValue(value) ? "true" : "false"];
     // date 列总按 dateKey 归一化；datetime 列在 "date" 模式也按 dateKey（忽略时刻），清理"同日不同
     // 时间/带时间脏值"造成的分裂分组。归一化必须对原始值做（parseDateTimeParts 已支持毫秒 number），
     // 不能在 getComparableValues(stringify) 之后做，否则 number 会被当年份解析。

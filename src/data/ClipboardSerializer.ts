@@ -200,8 +200,8 @@ export function getCellDisplayText(row: RowData, col: ColumnDef): string {
   const value =
     isBaseFileField(col.key)
       ? getRowFileFieldValue(row, col.key)
-      : col.type === "computed" && col.computedKey
-      ? row.computed[col.computedKey]
+      : col.type === "computed" || col.type === "rollup"
+      ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
       : row.frontmatter[col.key];
   if (value == null) return "";
   if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");

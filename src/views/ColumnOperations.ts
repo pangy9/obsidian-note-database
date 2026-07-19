@@ -44,6 +44,7 @@ export interface ColumnOperationsDeps {
   propertyService: PropertyService;
   viewStateStore: ViewStateStore;
   getConfig(): ViewConfig | undefined;
+  getMutableConfig(): ViewConfig | undefined;
   getActiveDb(): DatabaseConfig;
   getState(): DatabaseViewState;
   getFilesForConfig(config: ViewConfig): TFile[];
@@ -74,7 +75,7 @@ export class ColumnOperations {
   }
 
   setColumnVisible(col: ColumnDef, visible: boolean): void {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     const state = this.deps.getState();
     if (visible) {
@@ -89,7 +90,7 @@ export class ColumnOperations {
   }
 
   async renameColumn(col: ColumnDef, result: ColumnRenameResult): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
 
     const db = this.deps.getActiveDb();
@@ -112,6 +113,7 @@ export class ColumnOperations {
     }
 
     const isComputed = targetCol.type === "computed";
+    const isRollup = targetCol.type === "rollup";
     const oldIsFileField = isFileFieldKey(oldKey);
     const newIsFileField = isFileFieldKey(newKey);
     if (newIsFileField && !isSupportedFileField(newKey)) {
@@ -130,7 +132,7 @@ export class ColumnOperations {
       new Notice(t("fileField.migrationIgnored", { key: newKey }));
     }
     const convertingToFileField = !oldIsFileField && newIsFileField;
-    const useFrontmatterMigration = !oldIsFileField && !newIsFileField;
+    const useFrontmatterMigration = !oldIsFileField && !newIsFileField && !isRollup;
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
       ? !!await confirmWithModal(this.deps.app, {
@@ -155,7 +157,7 @@ export class ColumnOperations {
           true
         );
         migrationNotice = t("column.migratedFiles", { count: migration.moved });
-      } else if (useFrontmatterMigration && !isComputed && result.migrateValues) {
+      } else if (useFrontmatterMigration && !isComputed && !isRollup && result.migrateValues) {
         const migration = await this.propertySync.rename(config, targetCol, oldKey, newKey, true);
         if (migration) {
           migrationNotice = t("column.migratedFiles", { count: migration.moved });
@@ -163,7 +165,7 @@ export class ColumnOperations {
             migrationNotice += t("column.cleanedOldProps", { count: migration.deletedStale });
           }
         }
-      } else if (useFrontmatterMigration && !isComputed && oldKey !== newKey) {
+      } else if (useFrontmatterMigration && !isComputed && !isRollup && oldKey !== newKey) {
         await this.propertySync.delete(config, targetCol);
       } else if (convertingToFileField && !isComputed) {
         await this.propertySync.delete(config, targetCol);
@@ -187,6 +189,26 @@ export class ColumnOperations {
       updateSourceRuleTreeKeyReferences(db.sourceRuleTree, oldKey, newKey);
       updateDatabaseRecordIconFieldReference(db, oldKey, newKey);
       updateSummaryFormulaReferences(db, oldKey, newKey, oldLabel, newLabel);
+      for (const view of db.views || [config]) {
+        for (const rule of view.conditionalFormats || []) {
+          if (rule.condition.field === oldKey) rule.condition.field = newKey;
+        }
+      }
+      for (const schema of new Set([db.schema, ...(db.views || []).map((view) => view.schema)])) {
+        for (const candidate of schema?.columns || []) {
+          if (candidate.rollupConfig?.relationField === oldKey) {
+            candidate.rollupConfig.relationField = newKey;
+          }
+          if (
+            candidate.type === "rollup" &&
+            candidate.rollupConfig?.targetField === oldKey &&
+            config.schema.columns.find((column) => column.key === candidate.rollupConfig?.relationField)
+              ?.relationConfig?.targetDatabaseId === db.id
+          ) {
+            candidate.rollupConfig.targetField = newKey;
+          }
+        }
+      }
       if (activeStateChanged) {
         this.deps.viewStateStore.persist(config, state);
       }
@@ -214,6 +236,9 @@ export class ColumnOperations {
       this.deps.setPendingUndoLabel(t("undo.columnRenameConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveCurrentViewConfig();
+      if (oldKey !== newKey) {
+        await this.updateDependentRollupTargetReferences(db.id, oldKey, newKey);
+      }
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
       new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
@@ -224,7 +249,7 @@ export class ColumnOperations {
   }
 
   moveColumn(key: string, offset: -1 | 1): void {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     ensureColumnOrder(config);
     const index = config.columnOrder!.indexOf(key);
@@ -238,7 +263,7 @@ export class ColumnOperations {
   }
 
   moveColumnTo(key: string, targetKey: string, placement: "before" | "after"): void {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config || key === targetKey) return;
     ensureColumnOrder(config);
     const order = config.columnOrder!;
@@ -255,7 +280,7 @@ export class ColumnOperations {
   }
 
   hideColumn(col: ColumnDef): void {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     const state = this.deps.getState();
     state.hiddenColumns.add(col.key);
     if (config) {
@@ -269,12 +294,13 @@ export class ColumnOperations {
 
   async deleteColumn(col: ColumnDef): Promise<void> {
     if (col.key === "file.name") return;
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     const db = this.deps.getActiveDb();
     linkDatabaseSchema(db);
     const targetCol = this.resolveColumn(config, col, col.key);
     const isComputed = targetCol.type === "computed";
+    const isRollup = targetCol.type === "rollup";
     const isFileField = isFileFieldKey(targetCol.key);
     const isVirtualField = isFileField || targetCol.key === "aliases";
     const propertyKey = getComputedStorageKey(targetCol);
@@ -286,6 +312,14 @@ export class ColumnOperations {
         confirmText: t("common.delete"),
         danger: true,
       })) return;
+    } else if (isRollup) {
+      if (!await confirmWithModal(this.deps.app, {
+        title: t("common.delete"),
+        message: t("column.confirmDeleteRollup", { label: targetCol.label }),
+        confirmText: t("common.delete"),
+        danger: true,
+      })) return;
+      this.deleteColumnOnly = true;
     } else if (isVirtualField) {
       if (!await confirmWithModal(this.deps.app, {
         title: t("common.delete"),
@@ -315,18 +349,30 @@ export class ColumnOperations {
         danger: true,
       })
       : false;
-    const shouldDeleteFrontmatter = !isFileField && !this.deleteColumnOnly && (!isComputed || cleanupSavedComputedProperty);
+    const shouldDeleteFrontmatter = !isFileField && !isRollup && !this.deleteColumnOnly && (!isComputed || cleanupSavedComputedProperty);
     const frontmatterChanges = shouldDeleteFrontmatter
       ? this.getDeleteKeyChanges(config, isComputed ? propertyKey : targetCol.key)
       : [];
     const keysToRemove = this.getColumnReferenceKeys(targetCol);
     this.removeColumnFromSchemas(db, config, targetCol);
+    if (targetCol.type === "relation") {
+      for (const schema of new Set([db.schema, ...(db.views || []).map((view) => view.schema)])) {
+        for (const candidate of schema?.columns || []) {
+          if (candidate.rollupConfig?.relationField === targetCol.key) {
+            candidate.rollupConfig.relationField = "";
+          }
+        }
+      }
+    }
     for (const key of keysToRemove) {
       this.removeSourceRuleReferences(db.sourceRules, key);
       db.sourceRuleTree = removeSourceRuleTreeReferences(db.sourceRuleTree, key);
     }
     const state = this.deps.getState();
     for (const view of db.views || [config]) {
+      view.conditionalFormats = (view.conditionalFormats || []).filter(
+        (rule) => !keysToRemove.has(rule.condition.field)
+      );
       for (const key of keysToRemove) this.removeColumnReferences(view, key);
       normalizeColumnOrder(view);
     }
@@ -339,6 +385,7 @@ export class ColumnOperations {
       this.deps.setPendingUndoLabel(t("undo.deleteColumnConfig"));
       this.deps.setPendingConfigCellChanges(frontmatterChanges);
       await this.deps.saveConfigImmediately();
+      await this.updateDependentRollupTargetReferences(db.id, targetCol.key);
       const result = shouldDeleteFrontmatter
         ? isComputed
           ? await this.deps.propertyService.deleteKey(files, propertyKey)
@@ -368,6 +415,42 @@ export class ColumnOperations {
       view.schema = db.schema;
     }
     for (const key of referenceKeys) removeDatabaseRecordIconFieldReference(db, key);
+  }
+
+  private async updateDependentRollupTargetReferences(
+    targetDatabaseId: string,
+    oldKey: string,
+    newKey?: string,
+  ): Promise<void> {
+    const getViewDefFiles = (this.deps.dataSource as DataSource & {
+      getViewDefFiles?: DataSource["getViewDefFiles"];
+    }).getViewDefFiles;
+    if (typeof getViewDefFiles !== "function") return;
+    const entries = getViewDefFiles.call(this.deps.dataSource);
+    for (const entry of entries) {
+      if (entry.config.id === targetDatabaseId) continue;
+      const relationKeys = new Set(
+        entry.config.schema.columns
+          .filter((column) =>
+            column.type === "relation" &&
+            column.relationConfig?.targetDatabaseId === targetDatabaseId
+          )
+          .map((column) => column.key)
+      );
+      if (relationKeys.size === 0) continue;
+      let changed = false;
+      for (const column of entry.config.schema.columns) {
+        if (
+          column.type !== "rollup" ||
+          !column.rollupConfig ||
+          !relationKeys.has(column.rollupConfig.relationField) ||
+          column.rollupConfig.targetField !== oldKey
+        ) continue;
+        column.rollupConfig.targetField = newKey || "";
+        changed = true;
+      }
+      if (changed) await this.deps.dataSource.updateViewDefFile(entry.file, entry.config);
+    }
   }
 
   private removeColumnReferences(config: ViewConfig, key: string): void {
@@ -405,7 +488,10 @@ export class ColumnOperations {
     if (config.chartSeriesField === key) config.chartSeriesField = undefined;
     if (config.chartValueField === key) config.chartValueField = undefined;
     if (config.chartSecondaryValueField === key) config.chartSecondaryValueField = undefined;
-    if (config.summaryRules?.[key]) delete config.summaryRules[key];
+    if (config.summaryRules) {
+      config.summaryRules = config.summaryRules.filter((rule) => rule.field !== key);
+      if (config.summaryRules.length === 0) config.summaryRules = undefined;
+    }
     this.removeSourceRuleReferences(config.sourceRules, key);
     config.sourceRuleTree = removeSourceRuleTreeReferences(config.sourceRuleTree, key);
     delete config.groupOrders?.[key];
@@ -444,7 +530,7 @@ export class ColumnOperations {
   }
 
   async insertColumnNear(col: ColumnDef, side: "left" | "right"): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     const newCol = this.createTextColumn(config);
 
@@ -466,7 +552,7 @@ export class ColumnOperations {
   }
 
   async appendColumn(): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     const newCol = this.createTextColumn(config);
     ensureColumnOrder(config);
@@ -483,7 +569,7 @@ export class ColumnOperations {
     applyReference: (column: ColumnDef) => void,
     rollbackReference: () => void,
   ): Promise<ColumnDef | null> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config || !key || isFileFieldKey(key) || config.schema.columns.some((column) => column.key === key)) return null;
     const newCol: ColumnDef = { key, label: label || key, type: "text" };
     ensureColumnOrder(config);
@@ -516,7 +602,7 @@ export class ColumnOperations {
   }
 
   async duplicateColumn(col: ColumnDef): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config || isFileFieldKey(col.key)) return;
     ensureColumnOrder(config);
 
@@ -526,6 +612,8 @@ export class ColumnOperations {
       key: copyKey,
       label: t("column.copiedLabel", { label: col.label }),
       computedKey: col.type === "computed" ? copyKey : col.computedKey,
+      relationConfig: col.relationConfig ? { ...col.relationConfig } : undefined,
+      rollupConfig: col.rollupConfig ? { ...col.rollupConfig } : undefined,
     };
     const schemaIndex = config.schema.columns.findIndex((candidate) => candidate.key === col.key);
     config.schema.columns.splice(schemaIndex < 0 ? config.schema.columns.length : schemaIndex + 1, 0, copy);
@@ -542,7 +630,9 @@ export class ColumnOperations {
       });
     }
     this.deps.markPendingColumn(copyKey);
-    const frontmatterChanges = col.type === "computed" ? [] : this.getCopyKeyChanges(config, col.key, copyKey);
+    const frontmatterChanges = col.type === "computed" || col.type === "rollup"
+      ? []
+      : this.getCopyKeyChanges(config, col.key, copyKey);
 
     try {
       this.deps.setPendingUndoLabel(t("undo.duplicateColumnConfig"));
@@ -550,7 +640,9 @@ export class ColumnOperations {
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       let changed = 0;
-      if (col.type !== "computed") changed = (await this.propertySync.copy(config, col.key, copyKey)).changed;
+      if (col.type !== "computed" && col.type !== "rollup") {
+        changed = (await this.propertySync.copy(config, col.key, copyKey)).changed;
+      }
       await this.deps.refreshAfterSave();
       this.deps.refreshColumnManager();
       new Notice(col.type === "computed" ? t("column.copiedComputed") : t("column.copiedColumn", { source: col.key, target: copyKey, count: changed }));
@@ -562,7 +654,7 @@ export class ColumnOperations {
 
   /** Quick-add a built-in file property (e.g. file.ctime) or obsidian field (e.g. aliases) as a column. */
   async addFileFieldColumn(key: string): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config) return;
     const existing = config.schema.columns.some((col) => col.key === key);
     if (existing) return;
@@ -611,7 +703,7 @@ export class ColumnOperations {
   }
 
   async changeColumnType(col: ColumnDef, type: ColumnDef["type"]): Promise<void> {
-    const config = this.deps.getConfig();
+    const config = this.deps.getMutableConfig();
     if (!config || col.type === type) return;
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
@@ -678,6 +770,30 @@ export class ColumnOperations {
       }
       target.computedKey = undefined;
     }
+    if (type !== "relation") target.relationConfig = undefined;
+    if (type !== "rollup") target.rollupConfig = undefined;
+    if (previousType === "relation" && type !== "relation") {
+      for (const candidate of config.schema.columns) {
+        if (candidate.rollupConfig?.relationField === target.key) {
+          candidate.rollupConfig.relationField = "";
+        }
+      }
+    }
+    if (type === "relation" && !target.relationConfig?.targetDatabaseId) {
+      target.relationConfig = { targetDatabaseId: this.deps.getActiveDb().id };
+    }
+    if (type === "rollup" && !target.rollupConfig) {
+      const relation = config.schema.columns.find(
+        (column) => column !== target && column.type === "relation" && column.relationConfig?.targetDatabaseId
+      );
+      if (relation) {
+        target.rollupConfig = {
+          relationField: relation.key,
+          targetField: "file.name",
+          aggregation: "count",
+        };
+      }
+    }
     this.clearInvalidChartValueReferences(this.deps.getActiveDb(), target);
     this.clearInvalidCalendarTimelineDateReferences(this.deps.getActiveDb(), target);
     this.normalizeInvalidTimelineDayScales(this.deps.getActiveDb());
@@ -686,6 +802,8 @@ export class ColumnOperations {
     try {
       const frontmatterChanges = type === "computed"
         ? this.getComputedConversionChanges(config, target.key, cleanupExistingProperty)
+        : type === "relation" || type === "rollup"
+          ? []
         : target.key === "file.name"
           ? []
           : this.getConvertKeyTypeChanges(config, target.key, type);
@@ -696,7 +814,7 @@ export class ColumnOperations {
       let changed = 0;
       if (type === "computed" && cleanupExistingProperty) {
         changed = (await this.propertySync.delete(config, target)).changed;
-      } else if (type !== "computed" && target.key !== "file.name") {
+      } else if (type !== "computed" && type !== "relation" && type !== "rollup" && target.key !== "file.name") {
         changed = (await this.propertySync.convert(config, target, type)).changed;
       }
       await this.deps.refreshAfterSave();
@@ -848,7 +966,7 @@ export class ColumnOperations {
   }
 
   private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {
-    if (isFileFieldKey(col.key) || col.type === "computed") return [];
+    if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup") return [];
     const defaultValue = this.deps.propertyService.getDefaultValue(col);
     return this.getRecords(config)
       .filter((record) => !Object.prototype.hasOwnProperty.call(record.frontmatter, col.key))

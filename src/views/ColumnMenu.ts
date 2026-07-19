@@ -10,6 +10,7 @@ import { createDropdownField, DropdownOption } from "./DropdownField";
 export interface ColumnMenuActions {
   editColumn(col: ColumnDef): void;
   editFormula(col: ColumnDef): void;
+  editRelationRollup?(col: ColumnDef): void;
   editStatusOptions(col: ColumnDef): void;
   showOptionsEditor(col: ColumnDef): void;
   changeColumnType(col: ColumnDef, type: ColumnDef["type"]): void;
@@ -36,6 +37,7 @@ export interface ColumnMenuOptions {
   includeWidthActions?: boolean;
   /** Needed to resolve computed→number columns for the number display-style selector. */
   computedFields?: ComputedFieldDef[];
+  onClose?: () => void;
 }
 
 type MenuItemWithDom = { dom?: HTMLElement };
@@ -59,6 +61,7 @@ export class ColumnMenu {
     const includeLayoutActions = options.includeLayoutActions !== false;
     const includeWidthActions = options.includeWidthActions !== false;
     const menu = new Menu().setUseNativeMenu(false);
+    if (options.onClose) menu.onHide(options.onClose);
 
     if (!readonly) {
       menu.addItem((item) => item
@@ -80,6 +83,13 @@ export class ColumnMenu {
           .setTitle(t("menu.openFormula"))
           .setIcon("sigma")
           .onClick(() => this.actions.editFormula(col))
+        );
+      }
+      if ((col.type === "relation" || col.type === "rollup") && this.actions.editRelationRollup) {
+        menu.addItem((item) => item
+          .setTitle(col.type === "relation" ? t("relation.configure") : t("rollup.configure"))
+          .setIcon(col.type === "relation" ? "link" : "sigma")
+          .onClick(() => this.actions.editRelationRollup?.(col))
         );
       }
 
@@ -251,7 +261,7 @@ export class ColumnMenu {
     const groups: Array<{ title: string; types: ColumnDef["type"][] }> = [
       { title: t("columnType.group.basic"), types: ["text", "number", "date", "datetime", "currency", "checkbox"] },
       { title: t("columnType.group.options"), types: ["select", "multi-select", "status"] },
-      { title: t("columnType.group.advanced"), types: ["computed"] },
+      { title: t("columnType.group.advanced"), types: ["computed", "relation", "rollup"] },
     ];
     groups.forEach((group) => {
       panel.createDiv({ cls: "db-dropdown-section-title", text: group.title });

@@ -33,10 +33,17 @@ export class RowMenu {
     });
   }
 
-  show(event: MouseEvent, row: RowData, context?: RowCreateContext): void {
+  show(
+    event: MouseEvent,
+    row: RowData,
+    context?: RowCreateContext,
+    anchorEl?: HTMLElement,
+    onClose?: () => void,
+  ): void {
     event.preventDefault();
     const displayName = row.file.name.replace(/\.md$/, "");
     const menu = new Menu().setUseNativeMenu(false);
+    if (onClose) menu.onHide(onClose);
 
     menu.addItem((item) => item
       .setTitle(t("menu.openNote"))
@@ -104,6 +111,11 @@ export class RowMenu {
       );
     }
 
-    menu.showAtMouseEvent(event);
+    if (anchorEl?.isConnected) {
+      const rect = anchorEl.getBoundingClientRect();
+      menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+    } else {
+      menu.showAtMouseEvent(event);
+    }
   }
 }

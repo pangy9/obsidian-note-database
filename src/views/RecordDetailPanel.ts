@@ -9,10 +9,11 @@ import { parseTextLink } from "../data/TextLink";
 import { ColumnDef, RowData, ViewConfig } from "../data/types";
 import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
 import { t } from "../i18n";
-import { isHTMLElement } from "./DomGuards";
+import { isElement, isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderProgress, renderProgressRing, renderRating } from "./NumberDisplayRenderer";
+import { renderRelationValue } from "./RelationValueRenderer";
 import { getFieldWidth } from "./ColumnWidth";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
@@ -40,6 +41,7 @@ export interface RecordDetailActions {
   showColumnMenu?: (event: MouseEvent, col: ColumnDef, anchorEl: HTMLElement) => void;
   openRow: (row: RowData) => void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   isReadOnly?: boolean;
 }
 
@@ -63,6 +65,19 @@ interface ActivePanel {
 }
 
 let currentPanel: ActivePanel | null = null;
+
+const RECORD_DETAIL_CHILD_POPOVER_SELECTOR = [
+  ".db-cell-edit-popover",
+  ".db-cell-option-popover",
+  ".db-cell-date-popover",
+  ".db-color-picker-popup",
+  ".db-dropdown-popover",
+  ".db-icon-picker-popover",
+].join(", ");
+
+function isRecordDetailChildPopoverTarget(target: EventTarget | null): boolean {
+  return isElement(target) && Boolean(target.closest(RECORD_DETAIL_CHILD_POPOVER_SELECTOR));
+}
 
 /** 关闭当前展开的记录详情面板（若存在）。供切库 / 视图 re-render 调用，避免孤儿 listener。 */
 export function closeRecordDetailPanel(): void {
@@ -89,8 +104,12 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
 
   const { anchorEl, host, row, columns, config, app, actions } = opts;
 
-  // 清理残留的日历 day / all-day popover，避免层叠冲突
-  host.querySelectorAll(".db-calendar-day-popover, .db-calendar-week-allday-popover").forEach((el) => el.remove());
+  // 记录从日历 overflow popover 打开时，定位必须先使用仍连接且可见的事件锚点。
+  // 定位完成后只隐藏 overflow，不能 remove：CalendarRenderer 会保留节点引用供
+  // “还有 N 条”再次打开；remove 会留下 detached 引用，使后续 hover/click 无响应。
+  const calendarPopovers = Array.from(
+    host.querySelectorAll<HTMLElement>(".db-calendar-day-popover, .db-calendar-week-allday-popover")
+  );
 
   const panel = host.createDiv({ cls: "db-record-detail-panel" });
 
@@ -108,13 +127,16 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
   const onOutside = (event: MouseEvent): void => {
     const target = event.target as Node | null;
     if (target && (panel.contains(target) || anchorEl.contains(target))) return;
-    // 豁免字段内联编辑触发的子气泡 / 颜色选择器
-    if (isHTMLElement(target) && target.closest(".db-cell-option-popover, .db-cell-date-popover, .db-color-picker-popup")) return;
+    // 字段编辑器挂在 host/body，而不是详情 panel 内；它们属于详情面板的子交互，
+    // 不能被误判成 outside click。该集合必须覆盖所有 CellRenderer 编辑表面。
+    if (isRecordDetailChildPopoverTarget(event.target)) return;
     close();
   };
   const onKeydown = (event: KeyboardEvent): void => {
     if (isImeComposing(event)) return;
     if (event.key === "Escape") {
+      // 嵌套编辑器拥有第一层 Escape：先关闭/取消编辑器，详情面板继续保留。
+      if (isRecordDetailChildPopoverTarget(event.target)) return;
       event.preventDefault();
       close();
     }
@@ -131,6 +153,7 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
     const header = panel.createDiv({ cls: "db-record-detail-header" });
     actions.renderRecordIcon?.(header, r, config);
     const titleEl = header.createDiv({ cls: "db-record-detail-title", text: title.text });
+    actions.applyConditionalFormat?.(titleEl, r, config, titleField);
     if (title.isEmpty) titleEl.addClass("is-empty-title");
     // 仅 file.name 标题可双击重命名；其它字段标题只读（用字段编辑改值）
     const editFileName = titleField === "file.name" ? actions.editFileName : undefined;
@@ -168,6 +191,13 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
   renderContent(row);
   // 定位（复用 positionToolbarPopover：挂载点选择 / 视口夹取 / 翻转 / 移动端留白）
   positionToolbarPopover(panel, anchorEl, { minWidth: 240, preferredWidth: 360, maxWidth: 420, align: "center" });
+  // positionToolbarPopover 会在下一帧复测一次；按注册顺序在其复测之后隐藏来源
+  // overflow，既保留正确锚点位置，也避免详情面板与事件列表继续层叠显示。
+  window.requestAnimationFrame(() => {
+    calendarPopovers.forEach((popover) => {
+      if (popover.isConnected) popover.addClass("is-hidden");
+    });
+  });
 
   // 延后注册 mousedown，避免触发打开的那次点击冒泡立即关闭面板
   window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
@@ -198,6 +228,7 @@ function renderRecordField(
 
   const field = parent.createDiv({ cls: "db-record-detail-field" });
   field.setAttribute("data-note-database-column-key", col.key);
+  actions.applyConditionalFormat?.(field, row, config, col.key);
   if (actions.isReadOnly || isReadonlyFileField(col.key)) field.addClass("is-readonly");
   if (col.wrap) field.addClass("db-board-card-field-wrap");
   field.style.setProperty("--db-card-field-width", `${getFieldWidth(config, col)}px`);
@@ -281,6 +312,10 @@ function renderRecordValue(
     for (const entry of values) renderBadge(wrap, col, entry);
     return;
   }
+  if (col.type === "relation" && renderRelationValue(valueEl, app, row, value, true)) {
+    valueEl.addClass("has-badges");
+    return;
+  }
 
   // date / datetime
   if (displayType === "date" || displayType === "datetime") {
@@ -355,7 +390,9 @@ function getRecordEventTitleField(config: ViewConfig): string | undefined {
 
 function getRecordCellValue(row: RowData, col: ColumnDef): unknown {
   if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
-  if (col.type === "computed") return row.computed[col.computedKey || col.key];
+  if (col.type === "computed" || col.type === "rollup") {
+    return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+  }
   if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
   return row.frontmatter[col.key];
 }

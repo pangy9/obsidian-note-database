@@ -78,7 +78,7 @@ export class ColumnRenameModal extends Modal {
       });
     }
 
-    const canMigrate = !fileField && this.col.type !== "computed";
+    const canMigrate = !fileField && this.col.type !== "computed" && this.col.type !== "rollup";
     let migrateCheckbox: HTMLInputElement | undefined;
     if (!fileField) {
       const migrateRow = contentEl.createDiv({
@@ -90,7 +90,7 @@ export class ColumnRenameModal extends Modal {
       migrateCheckbox = migrateLabel.createEl("input", { attr: { type: "checkbox" } });
       migrateCheckbox.checked = !canMigrate;
       migrateCheckbox.disabled = !canMigrate;
-      if (this.col.type === "computed") {
+      if (this.col.type === "computed" || this.col.type === "rollup") {
         migrateCheckbox.title = t("modal.migrateComputedDisabled");
         migrateLabel.title = t("modal.migrateComputedDisabled");
       }

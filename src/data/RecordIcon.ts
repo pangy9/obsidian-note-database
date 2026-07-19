@@ -13,14 +13,15 @@ export type ParsedRecordIcon =
 
 const LUCIDE_TOKEN = /^lucide:([a-z0-9-]+)(?:@([a-z]+))?$/;
 const EMOJI_COMPONENT = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+type SegmenterInstance = { segment(input: string): Iterable<unknown> };
+type SegmenterConstructor = new (locale?: string, options?: { granularity: "grapheme" }) => SegmenterInstance;
+let graphemeSegmenter: SegmenterInstance | null = null;
 
 function isSingleEmojiGrapheme(value: string): boolean {
   if (!value || !EMOJI_COMPONENT.test(value)) return false;
-  type SegmenterInstance = { segment(input: string): Iterable<unknown> };
-  type SegmenterConstructor = new (locale?: string, options?: { granularity: "grapheme" }) => SegmenterInstance;
   const Segmenter = (Intl as unknown as { Segmenter: SegmenterConstructor }).Segmenter;
-  const segmenter = new Segmenter(undefined, { granularity: "grapheme" });
-  return Array.from(segmenter.segment(value)).length === 1;
+  graphemeSegmenter ??= new Segmenter(undefined, { granularity: "grapheme" });
+  return Array.from(graphemeSegmenter.segment(value)).length === 1;
 }
 
 export function parseRecordIconToken(value: unknown, validLucideIds: ReadonlySet<string>): ParsedRecordIcon | null {

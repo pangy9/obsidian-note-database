@@ -1,5 +1,7 @@
-import { App, FileView, Scope, WorkspaceLeaf, Notice, Platform, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
-import { DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
+import { App, FileView, Menu, Scope, WorkspaceLeaf, Notice, Platform, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
+import { DataChangeBatch, DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
+import { RefreshCoordinator } from "../data/RefreshCoordinator";
+import { isRefreshBlockedByDrag } from "../data/RefreshBlockers";
 import { evaluateBaseFilterExpression } from "../data/BaseExpression";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
 import { QueryEngine } from "../data/QueryEngine";
@@ -14,7 +16,8 @@ import {
   getVisibleColumns,
 } from "../data/ColumnConfig";
 import { RowPipeline } from "../data/RowPipeline";
-import { ViewConfig, ColumnDef, ComputedFieldDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode, RowCreateContext } from "../data/types";
+import { buildRelationRollups } from "../data/RelationRollup";
+import { ViewConfig, ColumnDef, ComputedFieldDef, RowData, DatabaseConfig, DatabaseViewType, FilterRule, GroupOrderMode, SourceRule, StatusColor, StatusOptionDef, StatusPresetDef, generateId, CreateEntryPosition, NumberDisplayStyle, NumberDisplayConfig, DateGroupMode, RowCreateContext } from "../data/types";
 import {
   getDefaultCellValue as getColumnDefaultCellValue,
   getStatusPresetOptions,
@@ -38,20 +41,24 @@ import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
 import { generateRanks, rankBetween, rebalanceRanks, resolveNewEntryRankBounds } from "../data/ManualOrder";
 import { CellEditSession, CellOptionTransaction, CellRenderer } from "./CellRenderer";
-import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { ColumnMenu, ColumnMenuOptions } from "./ColumnMenu";
 import { ColumnHeaderController } from "./ColumnHeaderController";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { RowMenu } from "./RowMenu";
 import { openDropdownMenu } from "./DropdownField";
 import { openIconPickerPopover } from "./IconPickerPopover";
+import { ImageFileSuggestModal } from "./ImageFileSuggestModal";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { resolveRecordIconField } from "../data/RecordIcon";
+import { applyConditionalFormat } from "../data/ConditionalFormatting";
+import { ParsedRecordTemplate, parseRecordTemplate, resolveCoreRecordTemplate } from "../data/RecordTemplate";
 import { TableRenderer } from "./TableRenderer";
 import {
   captureDatabaseViewport,
   DatabaseViewportRequest,
   resolveDatabaseViewportMode,
+  resolveNewRecordRevealBehavior,
   restoreDatabaseViewport,
 } from "./DatabaseViewport";
 
@@ -79,12 +86,13 @@ import { CalendarTimelineCreateOptions, CalendarTimelineDateChange, CalendarTime
 import { CalendarRenderer } from "./CalendarRenderer";
 import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ColumnRenameModal, ColumnRenameResult } from "./modals/ColumnRenameModal";
+import { RelationRollupConfigModal } from "./modals/RelationRollupConfigModal";
 import { CreateRecordIconFieldModal } from "./modals/CreateRecordIconFieldModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
 import { buildDatabaseWithInferredColumns } from "./modals/AddDatabaseFlow";
-import { normalizeComputedSyncMode } from "../data/ComputedSync";
+import { ComputedSyncQueue, ComputedSyncScope, normalizeComputedSyncMode } from "../data/ComputedSync";
 import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
 import { getColumnDisplayType, getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
@@ -95,7 +103,7 @@ import {
 } from "../data/PropertyTypeConflict";
 import { isDateLikeColumnType, setDateDisplayMode } from "../data/DateTimeFormat";
 import { getAllSourceRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, mergeDbAndViewSourceRuleTrees, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "../data/SourceRules";
-import { planCreateEntry, CreateEntryDiagnostic } from "../data/CreateEntryPlan";
+import { planCreateEntry, CreateEntryDiagnostic, CreateEntryPlan } from "../data/CreateEntryPlan";
 import { planOptionRegistration } from "../data/OptionRegistration";
 import { buildBulkEditImpact, buildBulkEditPlan, BulkEditImpact, BulkEditorRequest, getBulkEditableColumns, resolveBulkEditInitialValue, resolveBulkEditorRequest } from "../data/BulkEdit";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
@@ -131,6 +139,24 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { closeRecordDetailPanel, getOpenRecordDetailPath, openRecordDetailPanel, refreshRecordDetailPanel } from "./RecordDetailPanel";
 import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
+import { isImeComposing } from "../data/KeyboardUtils";
+import {
+  cycleTableSelectionActiveCell,
+  isTableCellAtGridEdge,
+  moveTableCellByRowOffset,
+  planTableSelectionFill,
+  resolveTableCellNavigation,
+  type TableCellAddress,
+  type TableCellNavigationIntent,
+  type TableGridPosition,
+} from "../data/TableKeyboardNavigation";
+import { getTablePasteValue, planTablePasteLayout, TablePasteLayout } from "../data/TablePastePlan";
+import {
+  FileRenameChange,
+  FileRenameRequest,
+  normalizeFileRenameBasename,
+  planFileRenames,
+} from "../data/FileRenamePlan";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
 const NEW_COLUMN_HIGHLIGHT_MS = 2200;
@@ -187,14 +213,24 @@ interface BatchTargetPlan<T extends FillTarget = FillTarget> {
   skipped: number;
 }
 
-interface CellAddress {
-  rowPath: string;
-  colKey: string;
+interface PasteTargetPlan extends BatchTargetPlan<FillTarget & { value: string }> {
+  selection: CellSelectionRange | null;
+  layout: TablePasteLayout | null;
 }
+
+interface PasteNewRowInput {
+  groupDefaults: Record<string, unknown>;
+  pastedDefaults: Record<string, unknown>;
+  pastedCells: Array<{ col: ColumnDef; key: string; value: unknown }>;
+  fileName?: string;
+}
+
+type CellAddress = TableCellAddress;
 
 interface CellSelectionRange {
   anchor: CellAddress;
   focus: CellAddress;
+  active?: CellAddress;
 }
 
 interface CellEditChange {
@@ -220,6 +256,7 @@ interface CellHistoryEntry {
   type: "cells";
   label: string;
   changes: CellEditChange[];
+  createdFiles?: CreatedFileSnapshot[];
 }
 
 interface ConfigHistoryEntry {
@@ -231,13 +268,25 @@ interface ConfigHistoryEntry {
   before: DatabaseConfig;
   after: DatabaseConfig;
   cellChanges?: CellEditChange[];
-  createdPaths?: string[];
+  createdFiles?: CreatedFileSnapshot[];
+  fileRenames?: FileRenameChange[];
+}
+
+interface CreatedFileSnapshot {
+  path: string;
+  content?: string;
 }
 
 interface CreatedHistoryEntry {
   type: "created";
   label: string;
-  path: string;
+  file: CreatedFileSnapshot;
+}
+
+interface PendingCellCut {
+  addressKeys: Set<string>;
+  clearChanges: CellEditChange[];
+  clipboardText: string;
 }
 
 type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry;
@@ -288,7 +337,12 @@ export class DatabaseView extends FileView {
     openRow: (row) => this.dataSource.openNote(row.file),
     openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
-    createEntryForDate: (config, dateKey, options) => { void this.createCalendarTimelineEntry(config, dateKey, options); },
+    createEntryForDate: (config, dateKey, options) => {
+      const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
+      this.suppressNextCreate = false;
+      if (suppressed) { this.closeActiveOverlays(); return; }
+      void this.createCalendarTimelineEntry(config, dateKey, options);
+    },
     updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
     reorderTimelineEvent: (row, beforePath, afterPath) => this.moveRowToPosition(row.file.path, beforePath, afterPath),
     moveTimelineEventToGroup: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
@@ -306,12 +360,19 @@ export class DatabaseView extends FileView {
       this.refresh();
     },
     renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+    renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
+    applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.getActiveDb()),
   });
   private calendarRenderer = new CalendarRenderer({
     openRow: (row) => this.dataSource.openNote(row.file),
     openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
-    createEntryForDate: (config, dateKey, timeRange) => { void this.createCalendarTimelineEntry(config, dateKey, timeRange); },
+    createEntryForDate: (config, dateKey, timeRange) => {
+      const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
+      this.suppressNextCreate = false;
+      if (suppressed) { this.closeActiveOverlays(); return; }
+      void this.createCalendarTimelineEntry(config, dateKey, timeRange);
+    },
     updateEventDates: (row, changes) => this.updateCalendarTimelineDates(row, changes),
     updateCalendarScale: (scale, anchorDateKey, label) => this.updateCalendarScale(scale, anchorDateKey, label),
     onConfigChange: (label) => {
@@ -322,6 +383,7 @@ export class DatabaseView extends FileView {
     getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns),
     getCalendarInvalidEventCount: () => this.getTimelineInvalidEventCount(),
     renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+    applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.getActiveDb()),
     openCalendarInvalidEvents: () => { void this.openInvalidEvents(); },
     isReadOnly: false,
   });
@@ -337,17 +399,24 @@ export class DatabaseView extends FileView {
   private currentDbIndex = 0;
   private currentViewIndex = 0;
   private rows: RowData[] = [];
+  private relationTargetPaths = new Set<string>();
+  private relationTargetDatabases: DatabaseConfig[] = [];
+  private relationTargetDatabasePaths = new Set<string>();
   private timelineInvalidRowsVersion = 0;
   private timelineInvalidEventsScanner = new InvalidTimelineEventsScanner();
   private calendarTimelineSearchResultsEl: HTMLElement | null = null;
   private selectedRows = new Set<string>();
   private lastSelectedRowPath: string | null = null;
   private cellSelection: CellSelectionRange | null = null;
+  private lastCellFocusPosition: TableGridPosition | null = null;
   private isSelectingCells = false;
   private showCellFillInput = false;
+  private pendingCellFillDraft: string | null = null;
+  private pendingCellCut: PendingCellCut | null = null;
   private bulkEditingColumnKey?: string;
   private closeBulkEditPopover?: () => void;
   private historyStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
   private configSnapshots = new Map<string, DatabaseConfig>();
   private pendingConfigCellChanges: CellEditChange[] | null = null;
   private optionTransactionQueue = Promise.resolve();
@@ -375,12 +444,17 @@ export class DatabaseView extends FileView {
   private configSaveTimer: number | null = null;
   private pendingConfigSave: PendingConfigSave | null = null;
   private computedSyncTimer: number | null = null;
+  private pendingComputedSync = new ComputedSyncQueue<RowData>();
   private syncingComputed = false;
   private propertyTypeConflictModalOpen = false;
   private suppressDataReloadUntil = 0;
   private suppressNextSettingsUpdate = false;
+  private suppressNextCreate = false;
   private pendingNewFilePath?: string;
-  private pendingNewRecord?: NoteRecord & { expiresAt: number };
+  private pendingNewRecords = new Map<string, NoteRecord & { expiresAt: number }>();
+  private pendingNewRowCellFocus?: { rowPath: string; colKey: string };
+  private creatingKeyboardRow = false;
+  private creatingPasteRows = false;
   private pendingNewRevealTimer: number | null = null;
   private pendingSearchResultRevealPath?: string;
   private pendingCalendarTimelineCreates = new Set<string>();
@@ -394,6 +468,8 @@ export class DatabaseView extends FileView {
   private readonly instanceId = generateId();
   private scrollbarIdleTimer: number | null = null;
   private descriptionScrollTimers = new WeakMap<HTMLElement, number>();
+  private refreshCoordinator: RefreshCoordinator;
+  private pendingSourceReload = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -410,20 +486,29 @@ export class DatabaseView extends FileView {
     this.databaseFolder = databaseFolder;
     this.statusPresets = normalizeStatusPresets(statusPresets);
     this.defaultStatusPresetId = defaultStatusPresetId;
-    this.propertyService = new PropertyService(this.app, (file, mutator) => this.dataSource.mutateFrontmatter(file, mutator));
+    this.propertyService = new PropertyService(
+      this.app,
+      (file, mutator) => this.dataSource.mutateFrontmatter(
+        file,
+        mutator,
+        { sourceInstanceId: this.instanceId }
+      )
+    );
     this.cellRenderer = new CellRenderer(
       this.dataSource,
       () => this.refreshAfterSave(),
       (row) => this.openRow(row),
       (col) => this.columnMenu.showOptionsEditor(col),
-      (col) => this.showFormulaModal(col),
+      (col, row) => this.showFormulaModal(col, undefined, row),
       false,
       (row, col, transaction) => this.commitCellOptionTransaction(row, col, transaction),
       (row, col, value) => this.saveCellValueWithHistory(row, col, value),
       (row) => this.getFileTitleInfo(row),
       () => this.getConfig()?.schema.computedFields || [],
       this.app,
-      (row, col) => this.restoreTableCellFocus(row, col)
+      (row, col, intent) => this.restoreTableCellFocus(row, col, intent),
+      (row, newName) => this.renameFileWithHistory(row, newName),
+      this.instanceId,
     );
     this.columnOperations = new ColumnOperations({
       app: this.app,
@@ -431,6 +516,7 @@ export class DatabaseView extends FileView {
       propertyService: this.propertyService,
       viewStateStore: this.viewStateStore,
       getConfig: () => this.getStatefulConfig(this.getConfig()),
+      getMutableConfig: () => this.getConfig(),
       getActiveDb: () => this.getActiveDb(),
       getState: () => this.vs(),
       getFilesForConfig: (config) => this.getFilesForConfig(config),
@@ -451,15 +537,20 @@ export class DatabaseView extends FileView {
       getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
       getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
     });
+    // Capture mousedown before popover onOutside handlers close overlays,
+    // so createEntry can know whether an overlay was open at click time.
+    this.registerDomEvent(window.activeDocument, "mousedown", () => {
+      this.suppressNextCreate = this.hasActiveOverlay();
+    }, { capture: true });
     this.rowMenu = new RowMenu({
       app: this.app,
       openRow: (row) => { void this.openRow(row); },
       deleteRow: (row) => this.deleteRow(row),
       duplicateRow: (row) => this.duplicateRow(row),
       isRecordIconShown: () => this.getConfig()?.showRecordIcon === true,
-      canToggleRecordIcon: () => ["board", "gallery", "list", "calendar", "timeline"].includes(this.getConfig()?.viewType || "table"),
+      canToggleRecordIcon: () => ["table", "board", "gallery", "list", "calendar", "timeline"].includes(this.getConfig()?.viewType || "table"),
       toggleRecordIcon: (anchor, row) => this.toggleCurrentViewRecordIcon(anchor, row),
-      createEntry: (defaults, position) => { void this.createBlankEntry(defaults ?? {}, position); },
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       getConfig: () => this.getConfig(),
       getVisibleRows: () => this.rows,
       getCreateDefaults: (row, context) => this.getCreateEntryDefaultsForRow(row, context),
@@ -483,12 +574,15 @@ export class DatabaseView extends FileView {
       setupColumnHeader: (th, col) => this.setupColumnHeader(th, col),
       setupRow: (tr, row, context) => this.setupRowInteractions(tr, row, context),
       renderCell: (td, row, col) => this.renderCell(td, row, col),
+      renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.getActiveDb(), targetField),
       setupFillHandle: (td, row, col) => this.setupTableFillHandle(td, row, col),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
       moveRowsToGroup: (row, field, fromGroupKey, toGroupKey) => this.updateBoardGroup(row, field, toGroupKey, fromGroupKey),
       moveRowToGroupAndPosition: (row, field, fromGroupKey, toGroupKey, beforePath, afterPath) =>
         this.moveRowToGroupAndPosition(row, field, fromGroupKey, toGroupKey, beforePath, afterPath),
-      createEntry: (defaults, position) => { void this.createBlankEntry(defaults, position); },
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.getConfig(), field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.getConfig(), field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
@@ -496,7 +590,8 @@ export class DatabaseView extends FileView {
     });
     this.boardRenderer = new BoardRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults, position) => { void this.createBlankEntry(defaults, position); },
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
+      createGroup: (field, name, color) => this.createBoardGroup(field, name, color),
       updateGroup: (row, field, value, fromValue) => this.updateBoardGroup(row, field, value, fromValue),
       updateGroupOrder: (field, order) => this.updateBoardGroupOrder(field, order),
       updateCardOrder: (field, groupKey, paths) => this.updateBoardCardOrder(field, groupKey, paths),
@@ -520,11 +615,13 @@ export class DatabaseView extends FileView {
       }),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.getActiveDb(), targetField),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults, position) => { void this.createBlankEntry(defaults, position); },
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -546,11 +643,13 @@ export class DatabaseView extends FileView {
       }),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.getActiveDb(), targetField),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults, position) => { void this.createBlankEntry(defaults, position); },
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -571,11 +670,14 @@ export class DatabaseView extends FileView {
       }),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
+      renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
+      applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.getActiveDb(), targetField),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.columnMenu = new ColumnMenu({
       editColumn: (col) => this.showColumnRenameModal(col),
       editFormula: (col) => this.showFormulaModal(col),
+      editRelationRollup: (col) => this.showRelationRollupConfigModal(col),
       editStatusOptions: (col) => this.showStatusOptionsModal(col),
       showOptionsEditor: (col) => this.showStatusOptionsModal(col),
       changeColumnType: (col, type) => { void this.changeColumnType(col, type); },
@@ -596,12 +698,38 @@ export class DatabaseView extends FileView {
       deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
     });
     this.onConfigChanged = onConfigChanged;
-    this.register(this.dataSource.onDataChanged(() => {
-      if (Date.now() < this.suppressDataReloadUntil) return;
-      this.rebuildViewEntries();
-      this.rerenderToolbar();
-      this.refresh();
-    }));
+    this.refreshCoordinator = new RefreshCoordinator({
+      isBlocked: () => this.cellRenderer.hasActiveEditor(this.containerEl_) ||
+        isRefreshBlockedByDrag(this.containerEl_) ||
+        Date.now() < this.suppressDataReloadUntil,
+      isEligible: () => this.isRefreshEligible(),
+      onRefresh: (request) => {
+        const forceReload = request.manual;
+        if (forceReload) this.dataSource.invalidateRecordCache();
+        const reloadSource = this.pendingSourceReload || forceReload;
+        if (reloadSource) {
+          this.rebuildViewEntries();
+          this.rerenderToolbar();
+          this.pendingSourceReload = false;
+        }
+        if (!reloadSource && !request.unknown) {
+          if (this.tryUpdateExternalChartData(request.paths)) return;
+          if (this.tryPatchExternalTableRows(request.paths)) return;
+        }
+        this.refresh();
+      },
+      onStateChange: (state) => this.updateRefreshIndicator(state),
+      onError: (error) => {
+        console.error("Note Database: refresh failed", error);
+        new Notice(t("errors.refreshFailed"));
+      },
+      // active-leaf-change and window focus poke immediately. A hidden tab only
+      // needs a low-frequency fallback if Obsidian misses both lifecycle events.
+      eligibilityRetryMs: 10_000,
+      setTimer: (callback, delay) => this.getRefreshWindow().setTimeout(callback, delay),
+      clearTimer: (timer) => this.getRefreshWindow().clearTimeout(timer),
+    });
+    this.register(this.dataSource.onDataChanged((batch) => this.handleDataChangeBatch(batch)));
     this.register(this.dataSource.onViewConfigChanged((mutation) => this.handlePeerViewConfigChanged(mutation)));
     this.rebuildViewEntries();
   }
@@ -685,6 +813,52 @@ export class DatabaseView extends FileView {
   }
 
   /** Suppress data reload for at least `ms` milliseconds, never shortening existing suppression */
+  private hasActiveOverlay(): boolean {
+    if (this.cellRenderer?.hasActiveEditor(this.containerEl_)) return true;
+    return Boolean(this.containerEl_?.ownerDocument.querySelector(
+      ".modal:not(.is-hidden), .menu, .suggestion-container, " +
+      ".db-cell-edit-popover:not(.is-hidden), .db-cell-option-popover:not(.is-hidden), " +
+      ".db-dropdown-popover:not(.is-hidden), .db-view-config-panel:not(.is-hidden), " +
+      ".db-group-popover:not(.is-hidden), .db-export-popover:not(.is-hidden), " +
+      ".db-title-actions-popover:not(.is-hidden), .db-color-picker-popup:not(.is-hidden), " +
+      ".db-record-detail-panel:not(.is-hidden), .db-filter-panel:not(.is-hidden), " +
+      ".db-sort-panel:not(.is-hidden), .db-column-manager:not(.is-hidden), " +
+      ".db-group-order-popover:not(.is-hidden), .db-chart-options-popover:not(.is-hidden), " +
+      ".db-calendar-options-popover:not(.is-hidden), .db-calendar-timeline-options-popover:not(.is-hidden), " +
+      ".db-database-popover:not(.is-hidden), .db-view-tab-popover:not(.is-hidden), " +
+      ".db-add-view-popover:not(.is-hidden), .db-board-drag-group-preview"
+    ));
+  }
+
+  private guardedCreateEntry(defaults?: Record<string, unknown>, position?: { beforePath?: string; afterPath?: string }): void {
+    const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
+    this.suppressNextCreate = false;
+    if (suppressed) { this.closeActiveOverlays(); return; }
+    void this.createBlankEntry(defaults ?? {}, position);
+  }
+
+  private guardedCalendarCreate(defaults?: Record<string, unknown>): void {
+    const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
+    this.suppressNextCreate = false;
+    if (suppressed) { this.closeActiveOverlays(); return; }
+    void this.createCalendarAwareCreateEntry(defaults);
+  }
+
+  private closeActiveOverlays(): void {
+    this.cellRenderer?.cancelActiveInlineEditor();
+    this.cellRenderer?.closeActiveOptionPopover();
+    this.cellRenderer?.closeActiveBulkEditor();
+    this.closeHeaderPopovers();
+    closeRecordDetailPanel();
+    const doc = this.containerEl_?.ownerDocument || window.activeDocument;
+    doc.querySelectorAll(
+      ".db-color-picker-popup:not(.is-hidden), .db-icon-picker-popover:not(.is-hidden), " +
+      ".db-dropdown-popover:not(.is-hidden), .db-calendar-day-popover:not(.is-hidden), " +
+      ".db-calendar-week-allday-popover:not(.is-hidden), .db-calendar-mini-popover:not(.is-hidden), " +
+      ".menu"
+    ).forEach((element) => element.remove());
+  }
+
   private suppressDataReload(ms: number): void {
     this.suppressDataReloadUntil = Math.max(this.suppressDataReloadUntil, Date.now() + ms);
   }
@@ -692,6 +866,11 @@ export class DatabaseView extends FileView {
   private handlePeerViewConfigChanged(mutation: ViewConfigMutation): void {
     if (mutation.sourceInstanceId === this.instanceId) return;
     if (!this.matchesCurrentView(mutation)) return;
+    if (!this.isRefreshEligible()) {
+      this.pendingSourceReload = true;
+      this.refreshCoordinator.mark([mutation.dbPath || this.getCurrentEntry()?.sourcePath || ""]);
+      return;
+    }
     this.suppressDataReload(1000);
     this.hardRefreshFromSource(mutation.database);
   }
@@ -947,6 +1126,10 @@ export class DatabaseView extends FileView {
     this.selectedRows.clear();
     this.lastSelectedRowPath = null;
     this.cellSelection = null;
+    this.isSelectingCells = false;
+    this.showCellFillInput = false;
+    this.pendingCellFillDraft = null;
+    this.bulkEditingColumnKey = undefined;
     this.rerenderToolbar();
     this.refresh();
   }
@@ -998,7 +1181,13 @@ export class DatabaseView extends FileView {
     // ["Mod"]+"f" 只匹配 Mod+F，Mod+Shift+F 全局搜索不受影响。View.scope 默认 null，需自建。
     this.scope = new Scope(this.app.scope);
     this.scope.register(["Mod"], "f", (event) => this.handleSearchShortcut(event));
-    this.registerDomEvent(window, "focus", () => this.refreshOnActivation());
+    this.scope.register(["Mod"], "z", (event) => this.handleHistoryShortcut(event, "undo"));
+    this.scope.register(["Mod", "Shift"], "z", (event) => this.handleHistoryShortcut(event, "redo"));
+    this.scope.register(["Mod"], "y", (event) => this.handleHistoryShortcut(event, "redo"));
+    this.scope.register(["Mod"], "d", (event) => this.handleTableFillShortcut(event, "down"));
+    this.scope.register(["Mod"], "r", (event) => this.handleTableFillShortcut(event, "right"));
+    this.scope.register([], "Escape", (event) => this.handleInlineEditorEscape(event));
+    this.registerDomEvent(this.getRefreshWindow(), "focus", () => this.refreshOnActivation());
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
       if (leaf === this.leaf) this.refreshOnActivation();
       else this.closeHeaderPopovers();
@@ -1023,6 +1212,7 @@ export class DatabaseView extends FileView {
   }
 
   async onClose(): Promise<void> {
+    this.refreshCoordinator.destroy();
     this.chartRenderer.destroy();
     this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免视图关闭后泄漏
@@ -1039,9 +1229,10 @@ export class DatabaseView extends FileView {
       this.scrollbarIdleTimer = null;
     }
     if (this.computedSyncTimer !== null) {
-      window.clearTimeout(this.computedSyncTimer);
+      this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
       this.computedSyncTimer = null;
     }
+    this.pendingComputedSync.clear();
     if (this.configSaveTimer !== null) {
       await this.saveConfigImmediately();
     }
@@ -1092,6 +1283,19 @@ export class DatabaseView extends FileView {
     return this.app.workspace.getActiveViewOfType(DatabaseView) === this;
   }
 
+  private isRefreshEligible(): boolean {
+    if (!this.containerEl_?.isConnected) return false;
+    if (this.isActiveView()) return true;
+    // A database in another visible split pane should stay current even when
+    // the user is editing a note beside it. Hidden workspace tabs have no
+    // rendered client rect and keep their dirty queue until shown.
+    return this.containerEl_.getClientRects().length > 0;
+  }
+
+  private getRefreshWindow(): Window {
+    return this.containerEl_?.ownerDocument.defaultView || window;
+  }
+
   private focusSearch(): boolean {
     const control = this.containerEl_?.querySelector<HTMLElement>(".db-search-control");
     const searchInput = control?.querySelector<HTMLInputElement>(".db-search-input");
@@ -1119,6 +1323,46 @@ export class DatabaseView extends FileView {
     return true; // 非数据库视图上下文，放行默认
   }
 
+  private handleInlineEditorEscape(event: KeyboardEvent): boolean {
+    if (isImeComposing(event)) return true;
+    if (this.isActiveView() && this.showCellFillInput) {
+      this.showCellFillInput = false;
+      this.pendingCellFillDraft = null;
+      this.renderSelectionStatusBar();
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    }
+    if (!this.isActiveView() || !this.cellRenderer.cancelActiveInlineEditor()) return true;
+    event.preventDefault();
+    event.stopPropagation();
+    return false;
+  }
+
+  private handleTableFillShortcut(event: KeyboardEvent, direction: "down" | "right"): boolean {
+    const active = window.activeDocument.activeElement;
+    const isEditing = isHTMLElement(active)
+      && active.closest("input, textarea, select, .db-cell-editing, .modal") != null;
+    if (!this.isActiveView() || isEditing || !this.cellSelection || this.getConfig()?.viewType !== "table") {
+      return true;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void this.fillSelectedCellsFromEdge(direction);
+    return false;
+  }
+
+  private handleHistoryShortcut(event: KeyboardEvent, direction: "undo" | "redo"): boolean {
+    const active = window.activeDocument.activeElement;
+    const isEditing = isHTMLElement(active)
+      && active.closest("input, textarea, select, .db-cell-editing, .db-cell-popover-editing, .modal") != null;
+    if (!this.isActiveView() || isEditing) return true;
+    event.preventDefault();
+    event.stopPropagation();
+    void this.replayHistory(direction);
+    return false;
+  }
+
   private handleDatabaseKeydown(event: KeyboardEvent): void {
     if (!this.containerEl_?.isConnected) return;
     const active = window.activeDocument.activeElement;
@@ -1127,17 +1371,22 @@ export class DatabaseView extends FileView {
     const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
     const isInsideView = active instanceof Node && this.containerEl_.contains(active);
     if (!isInsideView && !this.containerEl_.matches(":hover")) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
-      event.preventDefault();
-      void this.undoLastEdit();
-      return;
-    }
     if (isEditing) return;
     // 字段编辑弹出层（选项/日期/颜色选择器）打开时，方向键/Enter 由弹出层自己的 keydown 处理，不导航单元格
     if (this.containerEl_?.querySelector(".db-cell-option-popover, .db-cell-date-popover, .db-color-picker-popup")) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && this.cellSelection) {
+      event.preventDefault();
+      this.selectEntireTableGrid();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && this.cellSelection) {
       event.preventDefault();
       void this.copySelectedCells();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "x" && this.cellSelection) {
+      event.preventDefault();
+      void this.cutSelectedCells();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v" && this.cellSelection) {
@@ -1147,6 +1396,10 @@ export class DatabaseView extends FileView {
     }
     if (event.key === "Escape" && this.cellSelection) {
       event.preventDefault();
+      if (this.pendingCellCut) {
+        this.cancelPendingCellCut();
+        return;
+      }
       this.clearCellSelection();
       return;
     }
@@ -1157,14 +1410,86 @@ export class DatabaseView extends FileView {
     }
 
     if (this.cellSelection) {
+      const mod = event.metaKey || event.ctrlKey;
+      if (event.altKey && event.key === "ArrowDown") {
+        if (this.openFocusedColumnMenu()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      if (event.shiftKey && event.key === "F10") {
+        if (this.openFocusedRowMenu()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      if (event.key === " " && mod) {
+        event.preventDefault();
+        this.selectFocusedTableColumn();
+        return;
+      }
+      if (event.key === " " && event.shiftKey) {
+        event.preventDefault();
+        this.selectFocusedTableRow();
+        return;
+      }
+      if (mod && (event.key === "Home" || event.key === "End")) {
+        event.preventDefault();
+        this.moveCellFocus(event.key === "Home" ? "grid-start" : "grid-end", event.shiftKey);
+        return;
+      }
+      if (mod && (event.key === "ArrowUp" || event.key === "ArrowDown"
+          || event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        const intent: TableCellNavigationIntent = event.key === "ArrowUp"
+          ? "column-start"
+          : event.key === "ArrowDown"
+            ? "column-end"
+            : event.key === "ArrowLeft"
+              ? "row-start"
+              : "row-end";
+        this.moveCellFocus(intent, event.shiftKey);
+        return;
+      }
+      if (event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        this.moveCellFocus(event.key === "Home" ? "row-start" : "row-end", event.shiftKey);
+        return;
+      }
+      if (event.key === "PageUp" || event.key === "PageDown") {
+        event.preventDefault();
+        this.moveCellFocusByPage(event.key === "PageUp" ? -1 : 1, event.shiftKey);
+        return;
+      }
       if (event.key === "Tab") {
         event.preventDefault();
-        this.moveCellFocus(event.shiftKey ? "ArrowLeft" : "ArrowRight", false);
+        const selectedCellCount = this.getSelectedCellAddresses().length;
+        if (selectedCellCount > 1) {
+          this.cycleCellFocusWithinSelection(event.shiftKey ? "previous" : "next");
+          return;
+        }
+        if (!event.shiftKey && selectedCellCount === 1) {
+          const activeAddress = this.getCellSelectionActiveAddress();
+          if (this.isLastRenderedTableCell(activeAddress)) {
+            void this.createKeyboardRowAfter(activeAddress);
+            return;
+          }
+        }
+        this.moveCellFocus(event.shiftKey ? "previous" : "next", false);
         return;
       }
       if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
-        this.moveCellFocus(event.key, event.shiftKey);
+        const intent: TableCellNavigationIntent = event.key === "ArrowUp"
+          ? "up"
+          : event.key === "ArrowDown"
+            ? "down"
+            : event.key === "ArrowLeft"
+              ? "left"
+              : "right";
+        this.moveCellFocus(intent, event.shiftKey);
         return;
       }
       if (event.key === "Enter") {
@@ -1172,43 +1497,203 @@ export class DatabaseView extends FileView {
         this.editAtCellSelection();
         return;
       }
+      if (event.key === "F2") {
+        event.preventDefault();
+        this.startEditAtCellSelectionFocus("stay");
+        return;
+      }
+      const selectedCellCount = this.getSelectedCellAddresses().length;
+      if (event.key === " " && selectedCellCount === 1 && this.isFocusedCellCheckbox()) {
+        event.preventDefault();
+        this.startEditAtCellSelectionFocus("stay");
+        return;
+      }
+      if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey
+          && selectedCellCount > 0) {
+        if (selectedCellCount > 1) {
+          event.preventDefault();
+          this.startDirectFillForCellSelection(event.key);
+          return;
+        }
+        if (this.startReplaceEditAtCellSelectionFocus(event.key)) {
+          event.preventDefault();
+          return;
+        }
+      }
     }
   }
 
-  private moveCellFocus(key: string, extend: boolean): void {
+  private moveCellFocus(intent: TableCellNavigationIntent, extend: boolean): void {
     if (!this.cellSelection || !this.containerEl_) return;
     const rowPaths = this.getRenderedTableRowPaths();
     const colKeys = this.getRenderedTableColumnKeys();
-    if (rowPaths.length === 0 || colKeys.length === 0) return;
-    const focusRow = rowPaths.indexOf(this.cellSelection.focus.rowPath);
-    const focusCol = colKeys.indexOf(this.cellSelection.focus.colKey);
-    if (focusRow < 0 || focusCol < 0) return;
-    let newRow = focusRow;
-    let newCol = focusCol;
-    if (key === "ArrowUp") newRow = Math.max(0, focusRow - 1);
-    else if (key === "ArrowDown") newRow = Math.min(rowPaths.length - 1, focusRow + 1);
-    else if (key === "ArrowLeft") newCol = Math.max(0, focusCol - 1);
-    else if (key === "ArrowRight") newCol = Math.min(colKeys.length - 1, focusCol + 1);
-    const newAddr: CellAddress = { rowPath: rowPaths[newRow], colKey: colKeys[newCol] };
+    const newAddr = resolveTableCellNavigation(
+      rowPaths,
+      colKeys,
+      this.getCellSelectionActiveAddress(),
+      intent,
+      this.lastCellFocusPosition,
+    );
+    if (!newAddr) return;
     this.cellSelection = extend
-      ? { anchor: this.cellSelection.anchor, focus: newAddr }
+      ? { anchor: this.cellSelection.anchor, focus: newAddr, active: newAddr }
       : { anchor: newAddr, focus: newAddr };
     this.renderCellSelectionClasses();
     this.renderSelectionStatusBar();
     this.scrollCellIntoView(newAddr);
   }
 
-  private startEditAtCellSelectionFocus(): void {
-    if (!this.cellSelection || !this.containerEl_) return;
-    const { rowPath, colKey } = this.cellSelection.focus;
-    const td = this.containerEl_.querySelector<HTMLElement>(
-      `td[data-note-database-row-path="${CSS.escape(rowPath)}"][data-note-database-column-key="${CSS.escape(colKey)}"]`
+  private cycleCellFocusWithinSelection(direction: "next" | "previous"): void {
+    if (!this.cellSelection) return;
+    const active = cycleTableSelectionActiveCell(
+      this.getRenderedTableRowPaths(),
+      this.getRenderedTableColumnKeys(),
+      this.cellSelection.anchor,
+      this.cellSelection.focus,
+      this.getCellSelectionActiveAddress(),
+      direction,
     );
-    if (!td || td.classList.contains("db-cell-editing")) return;
+    if (!active) return;
+    this.cellSelection = { ...this.cellSelection, active };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+    this.scrollCellIntoView(active);
+  }
+
+  private isLastRenderedTableCell(address: CellAddress): boolean {
+    return isTableCellAtGridEdge(
+      this.getRenderedTableRowPaths(),
+      this.getRenderedTableColumnKeys(),
+      address,
+      "end",
+    );
+  }
+
+  private async createKeyboardRowAfter(address: CellAddress): Promise<void> {
+    if (this.creatingKeyboardRow || this.getConfig()?.viewType !== "table" || !this.isLastRenderedTableCell(address)) return;
+    const row = this.rows.find((candidate) => candidate.file.path === address.rowPath);
+    const firstColumnKey = this.getRenderedTableColumnKeys()[0];
+    if (!row || !firstColumnKey) return;
+    this.creatingKeyboardRow = true;
+    const createContext = this.getRenderedTableRowCreateContext(row.file.path);
+    const created = await this.createBlankEntry(
+      this.getCreateEntryDefaultsForRow(row, createContext),
+      { afterPath: row.file.path },
+      firstColumnKey,
+    );
+    // A successful create keeps the guard until revealPendingNewRow moves real DOM focus.
+    // This closes the frame-sized window where repeated Tab could create duplicate rows.
+    if (!created) {
+      this.creatingKeyboardRow = false;
+    }
+  }
+
+  private openFocusedColumnMenu(): boolean {
+    const context = this.getCellSelectionFocusContext();
+    if (!context || !this.containerEl_) return false;
+    const header = this.containerEl_.querySelector<HTMLElement>(
+      `th[data-note-database-column-key="${CSS.escape(context.col.key)}"]`
+    );
+    if (!header) return false;
+    const anchor = header.querySelector<HTMLElement>(".db-column-menu-trigger") || header;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    this.showContextMenu(event, context.col, anchor, {
+      onClose: () => this.restoreCellFocusAfterKeyboardMenu(),
+    });
+    return true;
+  }
+
+  private openFocusedRowMenu(): boolean {
+    const context = this.getCellSelectionFocusContext();
+    if (!context) return false;
+    const createContext = this.getRenderedTableRowCreateContext(context.row.file.path, context.td)
+      || { visibleRows: this.rows };
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    this.rowMenu.show(
+      event,
+      context.row,
+      createContext,
+      context.td,
+      () => this.restoreCellFocusAfterKeyboardMenu(),
+    );
+    return true;
+  }
+
+  private restoreCellFocusAfterKeyboardMenu(): void {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const active = window.activeDocument.activeElement;
+      if (isHTMLElement(active) && active.closest(".modal, .menu, input, textarea, select")) return;
+      this.restorePreservedCellSelectionAfterRefresh();
+    }));
+  }
+
+  private moveCellFocusByPage(direction: -1 | 1, extend: boolean): void {
+    if (!this.cellSelection || !this.containerEl_) return;
+    const active = this.getCellSelectionActiveAddress();
+    const td = this.containerEl_.querySelector<HTMLElement>(
+      `td[data-note-database-row-path="${CSS.escape(active.rowPath)}"][data-note-database-column-key="${CSS.escape(active.colKey)}"]`
+    );
+    const rowHeight = td?.closest("tr")?.getBoundingClientRect().height || 32;
+    const pageRows = Math.max(1, Math.floor(this.containerEl_.clientHeight / rowHeight) - 2);
+    const newAddr = moveTableCellByRowOffset(
+      this.getRenderedTableRowPaths(),
+      this.getRenderedTableColumnKeys(),
+      active,
+      direction * pageRows,
+      this.lastCellFocusPosition,
+    );
+    if (!newAddr) return;
+    this.cellSelection = extend
+      ? { anchor: this.cellSelection.anchor, focus: newAddr, active: newAddr }
+      : { anchor: newAddr, focus: newAddr };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+    this.scrollCellIntoView(newAddr);
+  }
+
+  private startEditAtCellSelectionFocus(checkboxFinishIntent: TableCellNavigationIntent = "down"): void {
+    const context = this.getCellSelectionFocusContext();
+    if (!context) return;
+    const { td, row, col } = context;
+    if (td.classList.contains("db-cell-editing")) return;
+    this.cellRenderer.startEdit(td, row, col, undefined, undefined, undefined, checkboxFinishIntent);
+  }
+
+  private startReplaceEditAtCellSelectionFocus(initialText: string): boolean {
+    const context = this.getCellSelectionFocusContext();
+    if (!context || context.td.classList.contains("db-cell-editing")) return false;
+    return this.cellRenderer.startReplaceEdit(context.td, context.row, context.col, initialText);
+  }
+
+  private startDirectFillForCellSelection(initialText: string): void {
+    this.cellRenderer.closeActiveBulkEditor();
+    this.bulkEditingColumnKey = undefined;
+    this.pendingCellFillDraft = initialText;
+    this.showCellFillInput = true;
+    this.renderSelectionStatusBar();
+  }
+
+  private isFocusedCellCheckbox(): boolean {
+    return this.getCellSelectionFocusContext()?.col.type === "checkbox";
+  }
+
+  private getCellSelectionFocusContext(): { td: HTMLElement; row: RowData; col: ColumnDef } | null {
+    if (!this.cellSelection || !this.containerEl_) return null;
+    const { rowPath, colKey } = this.getCellSelectionActiveAddress();
+    const active = window.activeDocument.activeElement;
+    const focusedCell = isHTMLElement(active)
+      ? active.closest<HTMLElement>("td[data-note-database-row-path][data-note-database-column-key]")
+      : null;
+    const td = focusedCell?.dataset.noteDatabaseRowPath === rowPath
+      && focusedCell.dataset.noteDatabaseColumnKey === colKey
+      ? focusedCell
+      : this.containerEl_.querySelector<HTMLElement>(
+          `td[data-note-database-row-path="${CSS.escape(rowPath)}"][data-note-database-column-key="${CSS.escape(colKey)}"]`
+        );
+    if (!td) return null;
     const row = this.rows.find((r) => r.file.path === rowPath);
     const col = this.getConfig().schema.columns.find((c) => c.key === colKey);
-    if (!row || !col) return;
-    this.cellRenderer.startEdit(td, row, col);
+    return row && col ? { td, row, col } : null;
   }
 
   // Enter on a cell selection: single cell falls back to inline focus edit; multi-cell routes
@@ -1231,44 +1716,73 @@ export class DatabaseView extends FileView {
       `td[data-note-database-row-path="${CSS.escape(addr.rowPath)}"][data-note-database-column-key="${CSS.escape(addr.colKey)}"]`
     );
     if (!td) return;
+    td.tabIndex = 0;
     td.focus();
     td.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
-  private restoreTableCellFocus(row: RowData, col: ColumnDef): void {
+  private restoreTableCellFocus(
+    row: RowData,
+    col: ColumnDef,
+    intent: TableCellNavigationIntent = "stay",
+  ): void {
     if (!this.containerEl_ || this.getConfig()?.viewType !== "table") return;
-    const address: CellAddress = { rowPath: row.file.path, colKey: col.key };
-    if (!this.cellSelection) {
-      this.clearSelection();
-      this.cellSelection = { anchor: address, focus: address };
-      this.renderCellSelectionClasses();
-      this.renderSelectionStatusBar();
+    const current: CellAddress = { rowPath: row.file.path, colKey: col.key };
+    if (intent === "next" && this.isLastRenderedTableCell(current)) {
+      void this.createKeyboardRowAfter(current);
+      return;
     }
-    this.scrollCellIntoView(address);
+    const address = resolveTableCellNavigation(
+      this.getRenderedTableRowPaths(),
+      this.getRenderedTableColumnKeys(),
+      current,
+      intent,
+      this.lastCellFocusPosition,
+    );
+    if (!address) return;
+    this.clearSelection();
+    this.cellSelection = { anchor: address, focus: address };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+    window.requestAnimationFrame(() => this.scrollCellIntoView(address));
+  }
+
+  private restorePreservedCellSelectionAfterRefresh(): void {
+    if (!this.cellSelection) return;
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    const hasAddress = (address: CellAddress) =>
+      rowPaths.includes(address.rowPath) && colKeys.includes(address.colKey);
+    let active = this.getCellSelectionActiveAddress();
+    if (!hasAddress(this.cellSelection.anchor) || !hasAddress(this.cellSelection.focus) || !hasAddress(active)) {
+      const fallback = resolveTableCellNavigation(
+        rowPaths,
+        colKeys,
+        active,
+        "stay",
+        this.lastCellFocusPosition,
+      );
+      if (!fallback) {
+        this.clearCellSelection();
+        return;
+      }
+      active = fallback;
+      this.cellSelection = { anchor: fallback, focus: fallback };
+    }
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+    window.requestAnimationFrame(() => this.scrollCellIntoView(active));
   }
 
   private refreshOnActivation(): void {
     if (!this.containerEl_?.isConnected) return;
-    // Light refresh on focus / active-leaf return: re-sync db config + re-render,
-    // but do NOT clear the in-memory view state. The search bar (and any open
-    // filter/sort/panel state) must survive a focus round-trip — e.g. user
-    // searches, clicks another pane to take notes, clicks back: the search should
-    // still be there. Record data is already kept fresh by onDataChanged, and
-    // peer db-config changes are handled separately by handlePeerViewConfigChanged
-    // (which does the hard clear). hardRefreshFromSource is reserved for real
-    // structural / peer-config resets.
-    const lightRefresh = () => {
-      this.rebuildViewEntries();
-      this.rerenderToolbar();
-      this.refresh();
-    };
     if (this.configSaveTimer !== null) {
       void this.saveConfigImmediately()
-        .then(lightRefresh)
+        .then(() => this.refreshCoordinator.poke())
         .catch((err) => this.reportConfigSaveFailure(err));
       return;
     }
-    lightRefresh();
+    this.refreshCoordinator.poke();
   }
 
   protected get hideDatabaseActions(): boolean { return false; }
@@ -1351,8 +1865,12 @@ export class DatabaseView extends FileView {
       toggleFilterPanel: (anchorEl) => this.toggleHeaderPopover("filter", anchorEl),
       toggleColumnManager: (anchorEl) => this.toggleHeaderPopover("columns", anchorEl),
       syncComputedFields: () => this.syncComputedFieldsManually(),
+      refreshDatabase: () => this.refreshCoordinator.refreshNow(),
+      pendingRefreshCount: this.refreshCoordinator.getState().pendingCount,
+      pendingRefreshUnknown: this.refreshCoordinator.getState().pendingUnknown,
+      isRefreshingDatabase: this.refreshCoordinator.getState().refreshing,
       closeToolbarPopovers: () => this.closeHeaderPopovers(),
-      createEntry: (defaults) => { void this.createCalendarAwareCreateEntry(defaults); },
+      createEntry: (defaults) => this.guardedCalendarCreate(defaults),
       isReadOnly: needsSetup,
       showChartOptions: true,
       showDatabaseChrome: true,
@@ -1366,7 +1884,86 @@ export class DatabaseView extends FileView {
       exportData: (format) => this.exportData(format),
       exportCsvMarkdownZip: () => { void this.exportCurrentViewAsCsvMarkdownZip(); },
     });
+    this.renderDatabaseCover();
     this.updateStickyOffsets();
+  }
+
+  private renderDatabaseCover(): void {
+    if (!this.containerEl_) return;
+    this.containerEl_.querySelector(":scope > .db-database-cover")?.remove();
+    const database = this.getActiveDb();
+    const path = database?.coverImage?.trim();
+    if (!path) return;
+    const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+    if (!(file instanceof TFile)) return;
+    const header = this.containerEl_.querySelector(":scope > .db-header");
+    const cover = this.containerEl_.createDiv({
+      cls: "db-database-cover",
+      attr: { title: file.path },
+    });
+    const image = cover.createEl("img", {
+      attr: {
+        src: this.app.vault.getResourcePath(file),
+        alt: database?.name || file.basename,
+        draggable: "false",
+      },
+    });
+    const initialPosition = Math.max(0, Math.min(100, database.coverImagePositionY ?? 50));
+    image.style.objectPosition = `center ${initialPosition}%`;
+    if (!this.hideDatabaseActions) {
+      let dragStartY = 0;
+      let dragStartPosition = initialPosition;
+      let dragging = false;
+      cover.addClass("is-repositionable");
+      cover.onpointerdown = (event) => {
+        if (event.button !== 0 || (event.target as HTMLElement | null)?.closest("button")) return;
+        dragging = true;
+        dragStartY = event.clientY;
+        dragStartPosition = this.getActiveDb().coverImagePositionY ?? 50;
+        cover.addClass("is-repositioning");
+        cover.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      };
+      cover.onpointermove = (event) => {
+        if (!dragging) return;
+        const height = Math.max(1, cover.getBoundingClientRect().height);
+        const next = Math.max(0, Math.min(100, dragStartPosition - ((event.clientY - dragStartY) / height) * 100));
+        const current = this.getActiveDb();
+        current.coverImagePositionY = next;
+        image.style.objectPosition = `center ${next}%`;
+      };
+      const finishReposition = (event: PointerEvent) => {
+        if (!dragging) return;
+        dragging = false;
+        cover.removeClass("is-repositioning");
+        if (cover.hasPointerCapture(event.pointerId)) cover.releasePointerCapture(event.pointerId);
+        this.pendingUndoLabel = t("undo.databaseCoverConfig");
+        void this.saveConfigImmediately();
+      };
+      cover.onpointerup = finishReposition;
+      cover.onpointercancel = finishReposition;
+      const change = cover.createEl("button", {
+        cls: "db-database-cover-change db-icon-only-button",
+        attr: { type: "button", "aria-label": t("databaseCover.choose") },
+      });
+      setIcon(change, "image-up");
+      change.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        new ImageFileSuggestModal(this.app, (selected) => {
+          const current = this.getActiveDb();
+          if (!current) return;
+          current.coverImage = selected.path;
+          current.coverImagePositionY = 50;
+          this.pendingUndoLabel = t("undo.databaseCoverConfig");
+          void this.saveConfigImmediately().then(() => {
+            this.rerenderToolbar();
+            this.renderDatabaseCover();
+          });
+        }, t("databaseCover.choose")).open();
+      };
+    }
+    if (header) this.containerEl_.insertBefore(cover, header);
   }
 
   private updateStickyOffsets(): void {
@@ -1379,6 +1976,218 @@ export class DatabaseView extends FileView {
     };
     update();
     window.requestAnimationFrame(update);
+  }
+
+  private handleDataChangeBatch(batch: DataChangeBatch): void {
+    const observable = batch.changes.filter((change) => change.sourceInstanceId !== this.instanceId);
+    if (observable.length === 0) return;
+    const rowPaths = new Set(this.rows.map((row) => row.file.path));
+    const sourcePath = this.viewEntries[this.currentDbIndex]?.sourcePath;
+    const database = this.hasActiveDatabase() ? this.getActiveDb() : null;
+    const relevant = observable.filter((change) => {
+      const sourceConfigEcho = change.origin === "plugin" &&
+        Boolean(change.sourceInstanceId) &&
+        (change.path === sourcePath || change.oldPath === sourcePath);
+      if (sourceConfigEcho) {
+        // updateViewDefFile already broadcasts the authoritative config through
+        // onViewConfigChanged; replaying its file event would refresh peers twice.
+        return false;
+      }
+      return change.path === sourcePath ||
+        change.oldPath === sourcePath ||
+        rowPaths.has(change.path) ||
+        (change.oldPath ? rowPaths.has(change.oldPath) : false) ||
+        this.relationTargetPaths.has(change.path) ||
+        (change.oldPath ? this.relationTargetPaths.has(change.oldPath) : false) ||
+        this.relationTargetDatabasePaths.has(change.path) ||
+        (change.oldPath ? this.relationTargetDatabasePaths.has(change.oldPath) : false) ||
+        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+          this.relationTargetDatabases.some((targetDatabase) => {
+            const record = this.dataSource.getRecordSnapshot(change.path);
+            return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
+          })) ||
+        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+          database != null &&
+          (() => {
+            const record = this.dataSource.getRecordSnapshot(change.path);
+            return record != null && this.dataSource.matchesRecordForDatabase(record, database);
+          })());
+    });
+    if (relevant.length === 0) return;
+    if (relevant.some((change) => change.path === sourcePath || change.oldPath === sourcePath)) {
+      this.pendingSourceReload = true;
+    }
+    this.refreshCoordinator.mark(relevant.map((change) => change.path));
+  }
+
+  /**
+   * Preserve a connected Chart.js instance for ordinary data changes so its
+   * renderer can use update("none"). Source/config reloads and manual recovery
+   * deliberately bypass this path and rebuild the full view.
+   */
+  private tryUpdateExternalChartData(paths: string[]): boolean {
+    if (!this.containerEl_ || !this.hasActiveDatabase()) return false;
+    const config = this.getConfig();
+    if (config.viewType !== "chart") return false;
+
+    const records = this.includePendingNewRecords(
+      this.dataSource.getRecordsForConfig(this.getEffectiveConfig(this.getActiveDb()))
+    );
+    const pipelineConfig = { ...config, manualOrder: undefined };
+    this.rows = this.buildRowsWithRelations(
+      records,
+      pipelineConfig,
+      this.vs(),
+      this.getActiveDb(),
+      true,
+    );
+    this.timelineInvalidRowsVersion += 1;
+    const computedSync = this.getIncrementalComputedSyncPlan(config, this.rows, new Set(paths));
+    this.scheduleComputedSync(
+      config,
+      computedSync.rows,
+      computedSync.scope
+    );
+    this.renderChart(config);
+    this.renderSummary(config);
+    return true;
+  }
+
+  private getIncrementalComputedSyncPlan(
+    config: ViewConfig,
+    rows: RowData[],
+    changedPaths: ReadonlySet<string>
+  ): { rows: RowData[]; scope: ComputedSyncScope } {
+    if ((config.schema.computedFields || []).some((definition) =>
+      /\bbacklinks\b/i.test(definition.expression)
+    )) {
+      // A link edit can change another note's backlinks without an event for
+      // that target note, so cross-file formulas require the full database.
+      return { rows, scope: "database" };
+    }
+    return {
+      rows: rows.filter((row) => changedPaths.has(row.file.path)),
+      scope: "rows",
+    };
+  }
+
+  /**
+   * Fast path for small external table updates. Rebuild the row pipeline first
+   * so filtering/sorting/computed values remain authoritative, then patch DOM
+   * rows only when the rendered ungrouped or grouped structure is identical.
+   */
+  private tryPatchExternalTableRows(paths: string[]): boolean {
+    if (!this.containerEl_ || !this.hasActiveDatabase() || paths.length === 0) return false;
+    const config = this.getConfig();
+    const state = this.vs();
+    if (config.viewType !== "table" || state.searchText.trim()) return false;
+    if (config.schema.columns.some((column) => column.type === "rollup")) return false;
+    const visibleColumns = getVisibleColumns(config, this.rows, state, this.pendingShowColumns);
+    const backlinkComputedKeys = new Set(
+      (config.schema.computedFields || [])
+        .filter((definition) => /\bbacklinks\b/i.test(definition.expression))
+        .map((definition) => definition.key)
+    );
+    if (visibleColumns.some((column) =>
+      column.key === "file.backlinks" ||
+      (column.type === "computed" &&
+        backlinkComputedKeys.has(column.computedKey || column.key.replace(/^formula\./, "")))
+    )) {
+      // Editing one note can change another row's backlinks without emitting a
+      // file event for that target row, so a changed-path-only patch is unsafe.
+      return false;
+    }
+
+    const changedPaths = new Set(paths);
+    const affectedVisibleCount = this.rows.reduce(
+      (count, row) => count + (changedPaths.has(row.file.path) ? 1 : 0),
+      0
+    );
+    const patchLimit = Math.max(12, Math.ceil(this.rows.length / 4));
+    if (affectedVisibleCount > patchLimit) return false;
+
+    const activeElement = this.containerEl_.ownerDocument.activeElement as HTMLElement | null;
+    const focusedCell = activeElement?.closest<HTMLElement>(
+      "td[data-note-database-row-path][data-note-database-column-key]"
+    );
+    const focusedAddress = focusedCell
+      ? {
+          rowPath: focusedCell.getAttribute("data-note-database-row-path") || "",
+          colKey: focusedCell.getAttribute("data-note-database-column-key") || "",
+        }
+      : null;
+
+    const nextRows = this.getRowsForView(this.currentViewIndex);
+    const patched = state.groupByField
+      ? (() => {
+          const field = state.groupByField;
+          const groups = withEmptyOptionGroups(
+            config,
+            field,
+            this.queryEngine.groupBy(
+              nextRows,
+              field,
+              [],
+              config.schema.columns.find((column) => column.key === field),
+              config
+            )
+          );
+          const order = getEffectiveGroupOrder(config, field, groups.map((group) => group.key));
+          return this.tableRenderer.patchGroupedRows(
+            this.containerEl_,
+            this.getStatefulConfig(config),
+            nextRows,
+            this.queryEngine.sortGroups(groups, order),
+            field,
+            changedPaths
+          );
+        })()
+      : this.tableRenderer.patchUngroupedRows(
+          this.containerEl_,
+          this.getStatefulConfig(config),
+          nextRows,
+          changedPaths
+        );
+    if (!patched) {
+      return false;
+    }
+
+    this.rows = nextRows;
+    this.timelineInvalidRowsVersion += 1;
+    const computedSync = this.getIncrementalComputedSyncPlan(config, this.rows, changedPaths);
+    this.scheduleComputedSync(
+      config,
+      computedSync.rows,
+      computedSync.scope
+    );
+    this.renderSummary(config);
+    const summary = this.containerEl_.querySelector<HTMLElement>(":scope > .db-summary");
+    const tableRoot = this.containerEl_.querySelector<HTMLElement>(
+      ":scope > .db-table-wrap, :scope > .db-grouped-table"
+    );
+    if (summary && tableRoot) this.containerEl_.insertBefore(summary, tableRoot);
+    this.renderSelectionStatusBar();
+
+    const openDetailPath = getOpenRecordDetailPath();
+    if (openDetailPath) {
+      const nextRow = this.rows.find((row) => row.file.path === openDetailPath);
+      if (nextRow) refreshRecordDetailPanel(nextRow);
+      else closeRecordDetailPanel();
+    }
+    if (focusedAddress && changedPaths.has(focusedAddress.rowPath)) {
+      window.requestAnimationFrame(() => this.scrollCellIntoView(focusedAddress));
+    }
+    return true;
+  }
+
+  private updateRefreshIndicator(state = this.refreshCoordinator.getState()): void {
+    const button = this.containerEl_?.querySelector<HTMLElement>(".db-database-refresh-button");
+    if (!button) return;
+    this.toolbarRenderer.updateDatabaseRefreshButton(button, {
+      pendingRefreshCount: state.pendingCount,
+      pendingRefreshUnknown: state.pendingUnknown,
+      isRefreshingDatabase: state.refreshing,
+    });
   }
 
   private setViewType(value: DatabaseViewType, viewIndex: number = this.currentViewIndex): void {
@@ -1621,12 +2430,15 @@ export class DatabaseView extends FileView {
       panel,
       anchorEl: this.headerPopoverAnchorEl,
       close: () => this.closeHeaderPopovers(),
+      isActiveTarget: (target) => target instanceof HTMLElement &&
+        Boolean(target.closest(".db-color-picker-popup, .db-dropdown-popover")),
     });
   }
 
   private handleOutsideClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
     if (!target) return;
+    if (target.closest(".db-color-picker-popup")) return;
     if (this.cellSelection && this.shouldClearCellSelectionFromPointer(target)) {
       this.clearCellSelection();
     }
@@ -2231,7 +3043,7 @@ export class DatabaseView extends FileView {
     if (result.deleteFiles) {
       for (const record of records) {
         try {
-          await this.dataSource.trashNote(record.file);
+          await this.dataSource.trashNote(record.file, { sourceInstanceId: this.instanceId });
         } catch (e) {
           console.warn(`Failed to trash file ${record.file.path}:`, e);
         }
@@ -2242,7 +3054,7 @@ export class DatabaseView extends FileView {
     const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
     if (file && file instanceof TFile) {
       try {
-        await this.dataSource.trashNote(file);
+        await this.dataSource.trashNote(file, { sourceInstanceId: this.instanceId });
       } catch (e) {
         new Notice(t("errors.deleteFailed", { error: String(e) }));
         return;
@@ -2310,8 +3122,8 @@ export class DatabaseView extends FileView {
       let value: unknown;
       if (isBaseFileField(col.key)) {
         value = getRowFileFieldValue(row, col.key);
-      } else if (col.type === "computed" && col.computedKey) {
-        value = row.computed[col.computedKey];
+      } else if (col.type === "computed" || col.type === "rollup") {
+        value = row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
       } else {
         value = row.frontmatter[col.key];
       }
@@ -2358,8 +3170,8 @@ export class DatabaseView extends FileView {
   private getExportCellValue(row: RowData, col: ColumnDef): string {
     const value = isBaseFileField(col.key)
       ? getRowFileFieldValue(row, col.key)
-      : col.type === "computed" && col.computedKey
-        ? row.computed[col.computedKey]
+      : col.type === "computed" || col.type === "rollup"
+        ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
         : row.frontmatter[col.key];
     if (value == null || value === "") return "";
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
@@ -2400,8 +3212,56 @@ export class DatabaseView extends FileView {
     const db = this.getActiveDb();
     const view = db?.views[viewIndex] || this.getConfig();
     const state = this.viewStateStore.get(this.currentDbIndex, viewIndex, view);
-    const records = this.includePendingNewRecord(this.dataSource.getRecordsForConfig(this.getEffectiveConfig(db)));
-    return this.rowPipeline.build(records, this.withBaseThisContext(view), state, this.app);
+    const records = this.includePendingNewRecords(this.dataSource.getRecordsForConfig(this.getEffectiveConfig(db)));
+    return this.buildRowsWithRelations(records, view, state, db);
+  }
+
+  private buildRowsWithRelations(
+    records: NoteRecord[],
+    view: ViewConfig,
+    state: DatabaseViewState,
+    database: DatabaseConfig | null | undefined,
+    cacheTargets = false,
+  ): RowData[] {
+    const configured = database || this.getActiveDb();
+    let derived: Map<string, Record<string, unknown>> | undefined;
+    if (configured?.schema.columns.some((column) => column.type === "rollup")) {
+      const entries = this.viewEntries;
+      const databases = entries.map((entry) => entry.config);
+      if (!databases.some((candidate) => candidate.id === configured.id)) databases.push(configured);
+      const result = buildRelationRollups({
+        app: this.app,
+        sourceRecords: records,
+        sourceDatabase: configured,
+        databases,
+        getRecordsForDatabase: (target) => this.dataSource.getRecordsForDatabase(target),
+      });
+      derived = result.valuesByPath;
+      if (cacheTargets) {
+        this.relationTargetPaths = result.targetPaths;
+        const targetIds = new Set(
+          configured.schema.columns
+            .filter((column) => column.type === "relation")
+            .map((column) => column.relationConfig?.targetDatabaseId)
+            .filter((id): id is string => Boolean(id))
+        );
+        this.relationTargetDatabases = databases.filter((candidate) => targetIds.has(candidate.id));
+        this.relationTargetDatabasePaths = new Set(
+          entries.filter((entry) => targetIds.has(entry.config.id)).map((entry) => entry.sourcePath)
+        );
+      }
+    } else if (cacheTargets) {
+      this.relationTargetPaths.clear();
+      this.relationTargetDatabases = [];
+      this.relationTargetDatabasePaths.clear();
+    }
+    return this.rowPipeline.build(
+      records,
+      this.withBaseThisContext(view),
+      state,
+      this.app,
+      derived,
+    );
   }
 
   private duplicateView(viewIndex = this.currentViewIndex): void {
@@ -2529,10 +3389,21 @@ export class DatabaseView extends FileView {
     void this.createBlankEntry(defaults);
   }
 
-  private async createBlankEntry(defaults: Record<string, unknown> = {}, position?: CreateEntryPosition): Promise<void> {
+  private async createBlankEntry(
+    defaults: Record<string, unknown> = {},
+    position?: CreateEntryPosition,
+    focusColumnKey?: string,
+  ): Promise<TFile | null> {
     const config = this.getConfig();
     const entry = this.getCurrentEntry();
-    if (!config || !entry) return;
+    if (!config || !entry) return null;
+    let template: ParsedRecordTemplate | undefined;
+    try {
+      template = await this.loadNewRecordTemplate(entry.config);
+    } catch (error) {
+      new Notice(t("template.loadFailed", { error: String(error) }));
+      return null;
+    }
     const beforeConfig = this.cloneDatabaseConfig(entry.config);
     let registeredGroupOption = false;
     for (const [key, value] of Object.entries(defaults)) {
@@ -2544,49 +3415,41 @@ export class DatabaseView extends FileView {
       if (optionPlan.clearPresetId) col.statusPresetId = undefined;
       registeredGroupOption = true;
     }
-    const sourceConfig = this.getCreateContextConfig(config);
-    // 上下文默认值（列默认 < 视图筛选/状态 < 用户/日历/分组 defaults）。来源规则由
-    // planCreateEntry 单独叠加为最高优先级，并统一计算文件名、文件夹与诊断。
-    // 显式 defaults 的 key 集合标记为用户意图：来源规则覆盖这些才记 conflictOverride；
-    // 列默认空值不在集合内，覆盖不记（避免把分组显式传入的 false/""/[] 误判为列默认）。
-    const explicitDefaults = this.mergeCreateDefaults(
-      config,
-      this.getDefaultFrontmatterFromViewFilters(config),
-      defaults
-    );
-    const intentionalContextKeys = new Set(Object.keys(explicitDefaults));
-    const contextFrontmatter = { ...explicitDefaults };
-    for (const col of config.schema.columns) {
-      if (isFileFieldKey(col.key) || col.type === "computed") continue;
-      if (!Object.prototype.hasOwnProperty.call(contextFrontmatter, col.key)) {
-        contextFrontmatter[col.key] = this.getDefaultCellValue(col);
-      }
+    let plan = this.buildCreateEntryPlan(config, defaults, template?.frontmatter);
+    if (template?.engine === "core") {
+      template = resolveCoreRecordTemplate(template, plan.filename);
+      plan = this.buildCreateEntryPlan(config, defaults, template.frontmatter);
     }
-    const plan = planCreateEntry({
-      sourceRuleTree: getSourceRuleTree(sourceConfig.sourceRuleTree, sourceConfig.sourceRules, sourceConfig.sourceLogic),
-      schema: config.schema,
-      sourceFolder: this.normalizeVaultFolder(sourceConfig.sourceFolder || ""),
-      newRecordFolder: sourceConfig.newRecordFolder ? this.normalizeVaultFolder(sourceConfig.newRecordFolder) : undefined,
-      fallbackFolder: this.databaseFolder || "",
-      contextFrontmatter,
-      intentionalContextKeys,
-      defaultFilename: t("defaults.untitledNote"),
-      normalizeFolder: (folder) => this.normalizeVaultFolder(folder),
-    });
     const diagnostics = [...plan.diagnostics];
     try {
-      const file = await this.dataSource.createNote(plan.folder, plan.filename, plan.frontmatter);
+      const file = await this.dataSource.createNote(
+        plan.folder,
+        plan.filename,
+        plan.frontmatter,
+        { sourceInstanceId: this.instanceId },
+        template?.body || "",
+      );
+      if (template?.engine === "templater") {
+        try {
+          await this.runTemplaterOnCreatedFile(file);
+        } catch (error) {
+          new Notice(t("template.templaterFailed", { error: String(error) }));
+        }
+      }
       // 精确文件名约束被自动序号化时规则失效，记录风险（不阻止创建）。
       if (plan.hasExactFilenameRule && file.basename !== plan.filename) {
         diagnostics.push({ reason: "filenameSuffix", detail: file.basename });
       }
       this.pendingNewFilePath = file.path;
+      this.pendingNewRowCellFocus = focusColumnKey
+        ? { rowPath: file.path, colKey: focusColumnKey }
+        : undefined;
       this.suppressDataReload(1200);
-      this.pendingNewRecord = {
+      this.pendingNewRecords.set(file.path, {
         file,
         frontmatter: { ...plan.frontmatter },
         expiresAt: Date.now() + 8000,
-      };
+      });
       if (config.schema.computedFields.length > 0) {
         void this.syncComputedForFile(file, plan.frontmatter, undefined, config);
       }
@@ -2608,30 +3471,91 @@ export class DatabaseView extends FileView {
             viewId: config.id,
             before: beforeConfig,
             after,
-            createdPaths: [file.path],
+            createdFiles: [{ path: file.path }],
           });
         } catch (err) {
           this.replaceDatabaseConfig(entry.config, beforeConfig);
           this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
           try {
-            await this.dataSource.trashNote(file);
+            await this.dataSource.trashNote(file, { sourceInstanceId: this.instanceId });
           } catch (rollbackErr) {
             console.error("Note Database: failed to roll back created note after option config save failure", rollbackErr);
           }
           throw err;
         }
       } else {
-        this.pushHistory({ type: "created", label: t("undo.createRow"), path: file.path });
+        this.pushHistory({ type: "created", label: t("undo.createRow"), file: { path: file.path } });
       }
       this.showCreateEntryNotice(file, diagnostics);
       await this.refreshAfterSave();
+      return file;
     } catch (err) {
       if (registeredGroupOption) {
         this.replaceDatabaseConfig(entry.config, beforeConfig);
         this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
       }
       new Notice(t("errors.createFailed", { error: String(err) }));
+      return null;
     }
+  }
+
+  private buildCreateEntryPlan(
+    config: ViewConfig,
+    defaults: Record<string, unknown>,
+    templateFrontmatter: Record<string, unknown> = {},
+  ): CreateEntryPlan {
+    const sourceConfig = this.getCreateContextConfig(config);
+    // 上下文默认值（列默认 < 视图筛选/状态 < 用户/日历/分组 defaults）。来源规则由
+    // planCreateEntry 单独叠加为最高优先级，并统一计算文件名、文件夹与诊断。
+    // 显式 defaults 的 key 集合标记为用户意图：来源规则覆盖这些才记 conflictOverride；
+    // 列默认空值不在集合内，覆盖不记（避免把分组显式传入的 false/""/[] 误判为列默认）。
+    const explicitDefaults = this.mergeCreateDefaults(
+      config,
+      this.getDefaultFrontmatterFromViewFilters(config),
+      defaults,
+    );
+    const intentionalContextKeys = new Set(Object.keys(explicitDefaults));
+    const contextFrontmatter: Record<string, unknown> = {};
+    for (const col of config.schema.columns) {
+      if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup") continue;
+      contextFrontmatter[col.key] = this.getDefaultCellValue(col);
+    }
+    Object.assign(contextFrontmatter, templateFrontmatter, explicitDefaults);
+    return planCreateEntry({
+      sourceRuleTree: getSourceRuleTree(sourceConfig.sourceRuleTree, sourceConfig.sourceRules, sourceConfig.sourceLogic),
+      schema: config.schema,
+      sourceFolder: this.normalizeVaultFolder(sourceConfig.sourceFolder || ""),
+      newRecordFolder: sourceConfig.newRecordFolder ? this.normalizeVaultFolder(sourceConfig.newRecordFolder) : undefined,
+      fallbackFolder: this.databaseFolder || "",
+      contextFrontmatter,
+      intentionalContextKeys,
+      defaultFilename: t("defaults.untitledNote"),
+      normalizeFolder: (folder) => this.normalizeVaultFolder(folder),
+    });
+  }
+
+  private async loadNewRecordTemplate(database: DatabaseConfig): Promise<ParsedRecordTemplate | undefined> {
+    const setting = database.newRecordTemplate;
+    if (!setting?.path) return undefined;
+    const file = this.app.vault.getAbstractFileByPath(normalizePath(setting.path));
+    if (!(file instanceof TFile)) throw new Error(t("template.missing"));
+    const content = await this.app.vault.read(file);
+    return parseRecordTemplate(content, setting.engine || "markdown");
+  }
+
+  private async runTemplaterOnCreatedFile(file: TFile): Promise<void> {
+    type TemplaterRuntime = {
+      templater?: {
+        overwrite_file_commands?: (target: TFile) => Promise<unknown>;
+      };
+    };
+    type PluginRegistry = { getPlugin?: (id: string) => unknown; plugins?: Record<string, unknown> };
+    const registry = (this.app as unknown as { plugins?: PluginRegistry }).plugins;
+    const plugin = (registry?.getPlugin?.("templater-obsidian") ||
+      registry?.plugins?.["templater-obsidian"]) as TemplaterRuntime | undefined;
+    const execute = plugin?.templater?.overwrite_file_commands;
+    if (!execute) throw new Error(t("template.templaterUnavailable"));
+    await execute.call(plugin.templater, file);
   }
 
   /** 创建成功通知显示最终 file.path；有诊断时说明可能不符合来源规则并给出原因概括。 */
@@ -2721,7 +3645,7 @@ export class DatabaseView extends FileView {
     const groupKey = options?.groupKey;
     if (!field || groupKey == null) return;
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    if (!col || col.type === "computed" || isReadonlyFileField(col.key)) return;
+    if (!col || col.type === "computed" || col.type === "rollup" || isReadonlyFileField(col.key)) return;
     const writeKey = this.getFrontmatterWriteKey(col);
     if (col.key === "file.tags") {
       defaults[writeKey] = isEmptyGroupId(groupKey) ? [] : toValidObsidianTagValues(groupKey);
@@ -2834,7 +3758,7 @@ export class DatabaseView extends FileView {
   private getWritableDateColumn(config: ViewConfig, field: string | undefined): ColumnDef | null {
     if (!field) return null;
     const col = config.schema.columns.find((candidate) => candidate.key === field);
-    if (!col || col.type === "computed" || isReadonlyFileField(col.key)) return null;
+    if (!col || col.type === "computed" || col.type === "rollup" || isReadonlyFileField(col.key)) return null;
     return isDateLikeColumnType(getColumnDisplayType(col, config.schema.computedFields)) ? col : null;
   }
 
@@ -2852,14 +3776,19 @@ export class DatabaseView extends FileView {
     return getColumnDefaultCellValue(col);
   }
 
-  private assignManualRankForNewEntry(config: ViewConfig, filePath: string, position?: CreateEntryPosition): void {
+  private assignManualRankForNewEntry(
+    config: ViewConfig,
+    filePath: string,
+    position?: CreateEntryPosition,
+    scheduleSave = true,
+  ): boolean {
     if (!config.manualOrder?.ranks || Object.keys(config.manualOrder.ranks).length === 0) {
-      if (!position?.beforePath && !position?.afterPath) return;
+      if (!position?.beforePath && !position?.afterPath) return false;
       this.ensureManualRanks(config);
     }
     const manualOrder = config.manualOrder;
     const ranks = manualOrder?.ranks;
-    if (!manualOrder || !ranks) return;
+    if (!manualOrder || !ranks) return false;
     const fallbackLastPath = this.rows.length > 0 ? this.rows[this.rows.length - 1].file.path : undefined;
     const bounds = resolveNewEntryRankBounds(ranks, position, fallbackLastPath);
     let newRank = rankBetween(bounds.lower, bounds.upper);
@@ -2871,11 +3800,12 @@ export class DatabaseView extends FileView {
       newRank = rankBetween(rebalancedBounds.lower, rebalancedBounds.upper);
     }
 
-    if (!newRank) return;
+    if (!newRank) return false;
     const targetRanks = manualOrder.ranks;
-    if (!targetRanks) return;
+    if (!targetRanks) return false;
     targetRanks[filePath] = newRank;
-    this.scheduleConfigSave({ skipHistory: true });
+    if (scheduleSave) this.scheduleConfigSave({ skipHistory: true });
+    return true;
   }
 
   private getAvailableStatusPresets(db: DatabaseConfig = this.getActiveDb(), view?: ViewConfig): StatusPresetDef[] {
@@ -2931,7 +3861,7 @@ export class DatabaseView extends FileView {
     for (const rule of state.filters) {
       if (!rule.field || rule.field.startsWith("file.") || !rule.value) continue;
       const col = config.schema.columns.find((candidate) => candidate.key === rule.field);
-      if (col?.type === "computed") continue;
+      if (col?.type === "computed" || col?.type === "rollup") continue;
       if (rule.op !== "eq" && rule.op !== "contains") continue;
       if (col?.type === "multi-select") {
         frontmatter[rule.field] = [rule.value];
@@ -3067,23 +3997,87 @@ export class DatabaseView extends FileView {
     this.cellSelection = null;
     this.isSelectingCells = false;
     this.showCellFillInput = false;
+    this.pendingCellFillDraft = null;
     this.bulkEditingColumnKey = undefined;
     this.renderCellSelectionClasses();
     this.renderSelectionStatusBar();
   }
 
+  private getCellSelectionActiveAddress(): CellAddress {
+    if (!this.cellSelection) throw new Error("Cell selection is not active");
+    return this.cellSelection.active ?? this.cellSelection.focus;
+  }
+
+  private selectEntireTableGrid(): void {
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    if (!this.cellSelection || rowPaths.length === 0 || colKeys.length === 0) return;
+    const active = this.getCellSelectionActiveAddress();
+    this.cellSelection = {
+      anchor: { rowPath: rowPaths[0], colKey: colKeys[0] },
+      focus: { rowPath: rowPaths[rowPaths.length - 1], colKey: colKeys[colKeys.length - 1] },
+      active,
+    };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+  }
+
+  private selectFocusedTableRow(): void {
+    const colKeys = this.getRenderedTableColumnKeys();
+    if (!this.cellSelection || colKeys.length === 0) return;
+    const active = this.getCellSelectionActiveAddress();
+    this.cellSelection = {
+      anchor: { rowPath: active.rowPath, colKey: colKeys[0] },
+      focus: { rowPath: active.rowPath, colKey: colKeys[colKeys.length - 1] },
+      active,
+    };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+  }
+
+  private selectFocusedTableColumn(): void {
+    const rowPaths = this.getRenderedTableRowPaths();
+    if (!this.cellSelection || rowPaths.length === 0) return;
+    const active = this.getCellSelectionActiveAddress();
+    this.cellSelection = {
+      anchor: { rowPath: rowPaths[0], colKey: active.colKey },
+      focus: { rowPath: rowPaths[rowPaths.length - 1], colKey: active.colKey },
+      active,
+    };
+    this.renderCellSelectionClasses();
+    this.renderSelectionStatusBar();
+  }
+
   private setupTableCellSelection(td: HTMLElement, row: RowData, col: ColumnDef): void {
-    td.toggleClass("db-cell-range-selected", this.isCellSelected(row.file.path, col.key));
+    const address = { rowPath: row.file.path, colKey: col.key };
+    const activeAddress = this.cellSelection ? this.getCellSelectionActiveAddress() : null;
+    const isFocusCell = activeAddress?.rowPath === address.rowPath
+      && activeAddress.colKey === address.colKey;
+    td.toggleClass("db-cell-range-selected", this.isCellSelected(address.rowPath, address.colKey));
+    td.toggleClass("db-cell-focus", isFocusCell);
+    td.toggleClass("db-cell-cut-source", Boolean(this.pendingCellCut?.addressKeys.has(`${address.rowPath}\u0000${address.colKey}`)));
+    td.tabIndex = -1;
+    const hasGridTabStop = this.containerEl_?.querySelector(
+      'td[data-note-database-row-path][data-note-database-column-key][tabindex="0"]'
+    );
+    td.tabIndex = isFocusCell || (!this.cellSelection && !hasGridTabStop) ? 0 : -1;
+    td.addEventListener("focus", () => {
+      const active = this.cellSelection ? this.getCellSelectionActiveAddress() : null;
+      if (active?.rowPath === address.rowPath && active.colKey === address.colKey) return;
+      this.clearSelection();
+      this.cellSelection = { anchor: address, focus: address };
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
+    });
     td.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       if (this.isInteractiveCellTarget(event.target)) return;
       this.invalidateActiveBulkEditor();
       event.preventDefault();
       event.stopPropagation();
-      const address = { rowPath: row.file.path, colKey: col.key };
       if (this.isPhoneLayout()) {
         if (this.cellSelection) {
-          this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
+          this.cellSelection = { anchor: this.cellSelection.anchor, focus: address, active: address };
         } else {
           this.clearSelection();
           this.cellSelection = { anchor: address, focus: address };
@@ -3094,7 +4088,7 @@ export class DatabaseView extends FileView {
         return;
       }
       if (event.shiftKey && this.cellSelection) {
-        this.cellSelection = { anchor: this.cellSelection.anchor, focus: address };
+        this.cellSelection = { anchor: this.cellSelection.anchor, focus: address, active: address };
       } else {
         this.clearSelection();
         this.cellSelection = { anchor: address, focus: address };
@@ -3102,6 +4096,7 @@ export class DatabaseView extends FileView {
       this.isSelectingCells = true;
       this.renderCellSelectionClasses();
       this.renderSelectionStatusBar();
+      td.focus({ preventScroll: true });
       const onMouseUp = () => {
         this.isSelectingCells = false;
         window.activeDocument.removeEventListener("mouseup", onMouseUp, true);
@@ -3113,6 +4108,7 @@ export class DatabaseView extends FileView {
       this.cellSelection = {
         anchor: this.cellSelection.anchor,
         focus: { rowPath: row.file.path, colKey: col.key },
+        active: { rowPath: row.file.path, colKey: col.key },
       };
       this.renderCellSelectionClasses();
       this.renderSelectionStatusBar();
@@ -3134,6 +4130,10 @@ export class DatabaseView extends FileView {
 
   private getSelectedCellAddressSet(): Set<string> {
     return new Set(this.getSelectedCellAddresses().map((cell) => `${cell.rowPath}\u0000${cell.colKey}`));
+  }
+
+  private getPendingCellCutAddressSet(): Set<string> {
+    return this.pendingCellCut?.addressKeys || new Set<string>();
   }
 
   private getSelectedCellAddresses(): CellAddress[] {
@@ -3171,6 +4171,33 @@ export class DatabaseView extends FileView {
     return paths;
   }
 
+  private getRenderedTableRowCreateContext(rowPath: string, anchor?: HTMLElement): RowCreateContext | undefined {
+    if (!this.containerEl_) return undefined;
+    const anchoredRow = anchor?.closest<HTMLElement>("tr[data-note-database-row-path]");
+    const active = window.activeDocument.activeElement;
+    const focusedRow = isHTMLElement(active)
+      ? active.closest<HTMLElement>("tr[data-note-database-row-path]")
+      : null;
+    let rowEl = anchoredRow?.dataset.noteDatabaseRowPath === rowPath ? anchoredRow : null;
+    if (!rowEl && focusedRow?.dataset.noteDatabaseRowPath === rowPath) rowEl = focusedRow;
+    rowEl ||= this.containerEl_.querySelector<HTMLElement>(
+      `.db-table tbody tr[data-note-database-row-path="${CSS.escape(rowPath)}"]`
+    );
+    if (!rowEl) return undefined;
+    const tbody = rowEl.closest("tbody");
+    const visibleRows = tbody
+      ? Array.from(tbody.querySelectorAll<HTMLElement>("tr[data-note-database-row-path]"))
+          .map((element) => this.rows.find((row) => row.file.path === element.dataset.noteDatabaseRowPath))
+          .filter((row): row is RowData => Boolean(row))
+      : this.rows;
+    const groupField = rowEl.getAttribute("data-note-database-group-field");
+    const groupKey = rowEl.getAttribute("data-note-database-group-key");
+    return {
+      visibleRows,
+      groups: groupField != null && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+    };
+  }
+
   private getRenderedTableColumnKeys(): string[] {
     if (!this.containerEl_) return [];
     const firstRow = this.containerEl_.querySelector<HTMLElement>(".db-table tbody tr[data-note-database-row-path]");
@@ -3183,16 +4210,33 @@ export class DatabaseView extends FileView {
   private renderCellSelectionClasses(): void {
     if (!this.containerEl_) return;
     const selected = this.getSelectedCellAddressSet();
-    const focusKey = this.cellSelection
-      ? this.cellSelection.focus.rowPath + "\u0000" + this.cellSelection.focus.colKey
+    const cutSources = this.getPendingCellCutAddressSet();
+    const activeAddress = this.cellSelection ? this.getCellSelectionActiveAddress() : null;
+    const focusKey = activeAddress
+      ? activeAddress.rowPath + "\u0000" + activeAddress.colKey
       : null;
-    this.containerEl_.querySelectorAll<HTMLElement>("td[data-note-database-row-path][data-note-database-column-key]").forEach((cell) => {
+    const cells = Array.from(this.containerEl_.querySelectorAll<HTMLElement>(
+      "td[data-note-database-row-path][data-note-database-column-key]"
+    ));
+    let foundFocus = false;
+    cells.forEach((cell) => {
       const rowPath = cell.dataset.noteDatabaseRowPath;
       const colKey = cell.dataset.noteDatabaseColumnKey;
       const key = rowPath && colKey ? rowPath + "\u0000" + colKey : null;
+      const isFocus = Boolean(key && key === focusKey);
       cell.toggleClass("db-cell-range-selected", Boolean(key && selected.has(key)));
-      cell.toggleClass("db-cell-focus", Boolean(key && key === focusKey));
+      cell.toggleClass("db-cell-cut-source", Boolean(key && cutSources.has(key)));
+      cell.toggleClass("db-cell-focus", isFocus);
+      cell.tabIndex = isFocus ? 0 : -1;
+      if (isFocus) foundFocus = true;
     });
+    if (!foundFocus && !this.cellSelection && cells[0]) cells[0].tabIndex = 0;
+    if (this.cellSelection) {
+      const active = this.getCellSelectionActiveAddress();
+      const rowIndex = this.getRenderedTableRowPaths().indexOf(active.rowPath);
+      const colIndex = this.getRenderedTableColumnKeys().indexOf(active.colKey);
+      if (rowIndex >= 0 && colIndex >= 0) this.lastCellFocusPosition = { rowIndex, colIndex };
+    }
   }
 
   private async deleteSelectedRows(): Promise<void> {
@@ -3205,7 +4249,7 @@ export class DatabaseView extends FileView {
       danger: true,
     })) return;
     for (const row of rows) {
-      await this.dataSource.trashNote(row.file);
+      await this.dataSource.trashNote(row.file, { sourceInstanceId: this.instanceId });
     }
     this.selectedRows.clear();
     this.lastSelectedRowPath = null;
@@ -3457,12 +4501,16 @@ export class DatabaseView extends FileView {
     if (!database) return null;
     const field = resolveRecordIconField(database, config);
     const token = field ? row.frontmatter[field] : undefined;
-    return renderRecordIcon(parent, token, {
+    const icon = renderRecordIcon(parent, token, {
       compact,
       editable: !readOnly,
       tooltip: t("recordIcon.icons"),
       onClick: (anchor) => this.openRecordIconPicker(anchor, row, config),
     });
+    if (icon && !readOnly && !Platform.isMobile) {
+      icon.addEventListener("contextmenu", (event) => this.openRecordIconContextMenu(event, icon, row, config));
+    }
+    return icon;
   }
 
   private openRecordIconPicker(anchor: HTMLElement, row: RowData, config: ViewConfig): void {
@@ -3470,33 +4518,7 @@ export class DatabaseView extends FileView {
     if (!database) return;
     const field = resolveRecordIconField(database, config);
     if (!field) {
-      const columns = config.schema.columns.filter((column) => column.type === "text" && !column.key.startsWith("file."));
-      openDropdownMenu({
-        anchor,
-        label: t("recordIcon.selectField"),
-        value: "",
-        searchable: true,
-        options: [
-          ...this.orderRecordIconColumns(columns).map((column) => ({ value: column.key, text: column.label || column.key })),
-          { value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus" },
-        ],
-        onChange: (value) => {
-          if (value === "__create_record_icon_field__") {
-            this.openCreateRecordIconFieldModal("database", () => this.openRecordIconPicker(this.findRecordIconAnchor(row) || anchor, row, config));
-            return;
-          }
-          config.recordIconFieldOverrideEnabled = true;
-          config.recordIconField = value || undefined;
-          this.pendingUndoLabel = t("recordIcon.field");
-          void this.saveConfigImmediately().then(() => {
-            this.refresh();
-            window.setTimeout(() => {
-              const liveAnchor = this.findRecordIconAnchor(row) || anchor;
-              this.openRecordIconPicker(liveAnchor, row, config);
-            }, 0);
-          });
-        },
-      });
+      this.openRecordIconFieldMenu(anchor, row, config, true);
       return;
     }
     const column = config.schema.columns.find((candidate) => candidate.key === field);
@@ -3506,10 +4528,88 @@ export class DatabaseView extends FileView {
       current: typeof row.frontmatter[field] === "string" ? row.frontmatter[field] : undefined,
       recent: this.getRecentRecordIcons(),
       onRecentChange: (recent) => this.setRecentRecordIcons(recent),
+      onConfigureField: () => this.openRecordIconFieldMenu(this.findRecordIconAnchor(row) || anchor, row, config, true),
       onSelect: async (value) => {
         await this.saveCellValueWithHistory(row, column, value);
       },
     });
+  }
+
+  private openRecordIconFieldMenu(anchor: HTMLElement, row: RowData, config: ViewConfig, reopenPicker: boolean): void {
+    const database = this.getActiveDb();
+    if (!database) return;
+    const columns = this.orderRecordIconColumns(
+      config.schema.columns.filter((column) => column.type === "text" && !column.key.startsWith("file.")),
+      resolveRecordIconField(database, config),
+    );
+    const databaseFieldLabel = database.recordIconField
+      ? config.schema.columns.find((column) => column.key === database.recordIconField)?.label || database.recordIconField
+      : t("common.notSet");
+    const inheritedLabel = t("recordIcon.followDatabaseField", { field: databaseFieldLabel });
+    const value = config.recordIconFieldOverrideEnabled === true
+      ? `view:${config.recordIconField || ""}`
+      : "__inherit_record_icon_field__";
+    openDropdownMenu({
+      anchor,
+      label: t("recordIcon.configureField"),
+      value,
+      searchable: true,
+      options: [
+        { value: "__inherit_record_icon_field__", text: inheritedLabel, icon: "database", section: t("recordIcon.currentViewField") },
+        ...columns.map((column) => ({ value: `view:${column.key}`, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)), section: t("recordIcon.currentViewField") })),
+        { value: "__create_view_record_icon_field__", text: t("recordIcon.createViewField"), icon: "plus", section: t("recordIcon.currentViewField"), preserveValueOnSelect: true },
+        ...columns.map((column) => ({ value: `database:${column.key}`, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, config.schema.computedFields)), section: t("recordIcon.databaseDefaultField") })),
+        { value: "__create_database_record_icon_field__", text: t("recordIcon.createDatabaseField"), icon: "plus", section: t("recordIcon.databaseDefaultField"), preserveValueOnSelect: true },
+      ],
+      renderIcon: (parent, icon) => {
+        if (!renderDropdownPropertyTypeIcon(parent, icon)) setIcon(parent, icon);
+      },
+      onChange: (nextValue) => {
+        const reopen = () => {
+          this.refresh();
+          if (!reopenPicker || !resolveRecordIconField(database, config)) return;
+          window.setTimeout(() => this.openRecordIconPicker(this.findRecordIconAnchor(row) || anchor, row, config), 0);
+        };
+        if (nextValue === "__create_view_record_icon_field__" || nextValue === "__create_database_record_icon_field__") {
+          const target = nextValue === "__create_view_record_icon_field__" ? "view" : "database";
+          this.openCreateRecordIconFieldModal(target, reopen);
+          return;
+        }
+        if (nextValue === "__inherit_record_icon_field__") {
+          config.recordIconFieldOverrideEnabled = undefined;
+          config.recordIconField = undefined;
+        } else if (nextValue.startsWith("view:")) {
+          config.recordIconFieldOverrideEnabled = true;
+          config.recordIconField = nextValue.slice("view:".length) || undefined;
+        } else if (nextValue.startsWith("database:")) {
+          database.recordIconField = nextValue.slice("database:".length) || undefined;
+          config.recordIconFieldOverrideEnabled = undefined;
+          config.recordIconField = undefined;
+        } else return;
+        this.pendingUndoLabel = t("recordIcon.field");
+        void this.saveConfigImmediately().then(reopen);
+      },
+    });
+  }
+
+  private openRecordIconContextMenu(event: MouseEvent, anchor: HTMLElement, row: RowData, config: ViewConfig): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    menu.addItem((item) => item
+      .setTitle(t("recordIcon.changeRecord"))
+      .setIcon("smile-plus")
+      .onClick(() => this.openRecordIconPicker(anchor, row, config)));
+    menu.addItem((item) => item
+      .setTitle(t("recordIcon.configureField"))
+      .setIcon("settings-2")
+      .onClick(() => this.openRecordIconFieldMenu(anchor, row, config, false)));
+    menu.addSeparator();
+    menu.addItem((item) => item
+      .setTitle(t("recordIcon.hideInView"))
+      .setIcon("eye-off")
+      .onClick(() => this.toggleCurrentViewRecordIcon()));
+    menu.showAtMouseEvent(event);
   }
 
   private orderRecordIconColumns(columns: ColumnDef[], current?: string): ColumnDef[] {
@@ -3559,6 +4659,32 @@ export class DatabaseView extends FileView {
     ) || null;
   }
 
+  private updateRecordIconDOM(row: RowData, config: ViewConfig): boolean {
+    if (!this.containerEl_ || config.showRecordIcon !== true) return false;
+    const selector = `[data-note-database-row-path="${CSS.escape(row.file.path)}"] .db-record-icon`;
+    const currentIcons = Array.from(this.containerEl_.querySelectorAll<HTMLElement>(selector));
+    if (currentIcons.length === 0) return false;
+    for (const current of currentIcons) {
+      const parent = current.parentElement;
+      if (!parent) continue;
+      const compact = current.hasClass("is-compact");
+      const replacement = this.renderRowRecordIcon(parent, row, config, compact);
+      if (!replacement) continue;
+      if (current.getAttribute("tabindex") === "-1") replacement.setAttr("tabindex", "-1");
+      current.replaceWith(replacement);
+    }
+    return true;
+  }
+
+  private isRowFieldRendered(row: RowData, col: ColumnDef): boolean {
+    if (!this.containerEl_) return false;
+    const rowSelector = `[data-note-database-row-path="${CSS.escape(row.file.path)}"]`;
+    const fieldSelector = `[data-note-database-column-key="${CSS.escape(col.key)}"]`;
+    return Boolean(this.containerEl_.querySelector(
+      `${rowSelector}${fieldSelector}, ${rowSelector} ${fieldSelector}`
+    ));
+  }
+
   private toggleCurrentViewRecordIcon(anchor?: HTMLElement, row?: RowData): void {
     const config = this.getConfig();
     const database = this.getActiveDb();
@@ -3601,6 +4727,7 @@ export class DatabaseView extends FileView {
     desc.setAttribute("title", description || placeholder);
     desc.setAttribute("data-placeholder", placeholder);
     this.attachDescriptionScrollState(desc);
+    this.renderDatabaseCover();
   }
 
   private showColumnRenameModal(col: ColumnDef): void {
@@ -3617,6 +4744,21 @@ export class DatabaseView extends FileView {
       }
       await this.columnOperations.renameColumn(col, result);
     }, config.schema.computedFields).open();
+  }
+
+  private showRelationRollupConfigModal(col: ColumnDef): void {
+    const database = this.getActiveDb();
+    if (!database || (col.type !== "relation" && col.type !== "rollup")) return;
+    const entries = this.dataSource.getViewDefFiles();
+    const databases = entries.map((entry) => entry.config);
+    if (!databases.some((candidate) => candidate.id === database.id)) databases.push(database);
+    new RelationRollupConfigModal(this.app, col, database, databases, async () => {
+      this.pendingUndoLabel = col.type === "relation"
+        ? t("undo.relationConfig")
+        : t("undo.rollupConfig");
+      await this.saveConfigImmediately();
+      this.refreshSchemaChanged();
+    }, getNoteDatabasePlugin(this.app)?.settings.showDatabaseIcon !== false).open();
   }
 
   private setAllColumnsVisible(visible: boolean): void {
@@ -3765,7 +4907,7 @@ export class DatabaseView extends FileView {
       }
       const change = this.createCurrentCellChange(row, target, transaction.value);
       if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
-      await this.applyCellChanges([change], t("undo.editCell"), { preserveCellSelection: true });
+      await this.applyOptionCellChangeImmediately(row, target, change);
       return;
     }
 
@@ -3773,7 +4915,7 @@ export class DatabaseView extends FileView {
       if (!transaction.setValue) return;
       const change = this.createCurrentCellChange(row, target, transaction.value);
       if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
-      await this.applyCellChanges([change], t("undo.editCell"), { preserveCellSelection: true });
+      await this.applyOptionCellChangeImmediately(row, target, change);
       return;
     }
 
@@ -3789,6 +4931,37 @@ export class DatabaseView extends FileView {
         value: transaction.value,
       }
     );
+  }
+
+  private async applyOptionCellChangeImmediately(
+    row: RowData,
+    col: ColumnDef,
+    change: CellEditChange
+  ): Promise<void> {
+    const rollback = {
+      ...change,
+      newValue: change.oldExists ? this.cloneFillValue(change.oldValue) : null,
+    };
+    this.applyFrontmatterChangeToRenderedRows(change);
+    this.updateCellDOM(row, col);
+    this.suppressDataReload(1200);
+    try {
+      await this.dataSource.updateFrontmatter(
+        change.file,
+        { [change.key]: change.newValue },
+        { sourceInstanceId: this.instanceId }
+      );
+    } catch (error) {
+      this.applyFrontmatterChangeToRenderedRows(rollback);
+      this.updateCellDOM(row, col);
+      throw error;
+    }
+    this.pushHistory({ type: "cells", label: t("undo.editCell"), changes: [change] });
+    if (this.canApplyCellChangeOptimistically(col)) return;
+    await this.syncComputedForCellChanges([change]);
+    await this.refreshAfterSave();
+    this.restorePreservedCellSelectionAfterRefresh();
+    this.rerenderToolbar();
   }
 
   // Side-effect-free option mutation planning: normalize previous/next, infer renames and
@@ -3837,36 +5010,53 @@ export class DatabaseView extends FileView {
   ): Promise<void> {
     const config = this.getConfig();
     if (!config) return;
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    const before = this.cloneDatabaseConfig(entry.config);
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
     const { normalizedNext, cleanupChanges } = this.buildColumnOptionMutation(target, previousOptions, nextOptions, {
       cleanupRemovedValues: options.cleanupRemovedValues,
       renameValues: options.renameValues,
     });
+    const currentChange = options.setValue && options.currentRow
+      ? this.createCurrentCellChange(options.currentRow, target, options.value)
+      : null;
     const changes = this.mergeCellChanges([
       ...cleanupChanges,
-      ...(options.setValue && options.currentRow
-        ? [this.createCurrentCellChange(options.currentRow, target, options.value)]
-        : []),
+      ...(currentChange ? [currentChange] : []),
     ]);
     target.statusOptions = normalizedNext;
     target.statusPresetId = target.type === "status" ? options.presetId : undefined;
-    this.pendingUndoLabel = t("undo.fieldOptionsConfig");
-    this.pendingConfigCellChanges = changes;
-    await this.saveCurrentViewConfig();
-    if (changes.length > 0) {
-      await this.applyFrontmatterChanges(changes, "new");
-      await this.refreshAfterSave();
-      if (options.setValue && options.currentRow) {
-        this.renderCellSelectionClasses();
-        this.renderSelectionStatusBar();
+    const showImmediateValue = currentChange != null &&
+      options.currentRow != null &&
+      !this.areCellValuesEqual(currentChange.oldValue, currentChange.newValue);
+    if (showImmediateValue && options.currentRow) {
+      this.applyFrontmatterChangeToRenderedRows(currentChange);
+      this.updateCellDOM(options.currentRow, target);
+    }
+    try {
+      await this.commitConfigAndCellChanges(
+        entry,
+        before,
+        changes,
+        t("undo.fieldOptionsConfig"),
+        { preserveCellSelection: Boolean(options.setValue && options.currentRow) },
+      );
+    } catch (error) {
+      if (showImmediateValue && currentChange && options.currentRow) {
+        this.applyFrontmatterChangeToRenderedRows({
+          ...currentChange,
+          newValue: currentChange.oldExists ? this.cloneFillValue(currentChange.oldValue) : null,
+        });
+        const restoredTarget = this.getConfig()?.schema.columns.find((candidate) => candidate.key === col.key);
+        if (restoredTarget) this.updateCellDOM(options.currentRow, restoredTarget);
       }
-    } else {
-      this.refresh();
-      if (options.setValue && options.currentRow) {
-        this.renderCellSelectionClasses();
-        this.renderSelectionStatusBar();
-      }
+      throw error;
+    }
+    if (options.setValue && options.currentRow) {
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
     }
     if (this.showColumnManager) this.renderColumnManager();
   }
@@ -4018,15 +5208,17 @@ export class DatabaseView extends FileView {
     return changes;
   }
 
-  private mergeCellChanges(changes: CellEditChange[]): CellEditChange[] {
+  private mergeCellChanges(...groups: CellEditChange[][]): CellEditChange[] {
     const merged = new Map<string, CellEditChange>();
-    for (const change of changes) {
-      const key = `${change.path}\u0000${change.key}`;
-      const existing = merged.get(key);
-      if (existing) {
-        existing.newValue = this.cloneFillValue(change.newValue);
-      } else {
-        merged.set(key, this.cloneCellChange(change));
+    for (const changes of groups) {
+      for (const change of changes) {
+        const key = `${change.path}\u0000${change.key}`;
+        const existing = merged.get(key);
+        if (existing) {
+          existing.newValue = this.cloneFillValue(change.newValue);
+        } else {
+          merged.set(key, this.cloneCellChange(change));
+        }
       }
     }
     return Array.from(merged.values())
@@ -4069,7 +5261,11 @@ export class DatabaseView extends FileView {
     ).open();
   }
 
-  private showFormulaModal(col: ColumnDef, initialResultType?: ComputedFieldDef["type"]): void {
+  private showFormulaModal(
+    col: ColumnDef,
+    initialResultType?: ComputedFieldDef["type"],
+    restoreFocusRow?: RowData,
+  ): void {
     const config = this.getConfig();
     const entry = this.getCurrentEntry();
     if (!config || !entry) return;
@@ -4079,7 +5275,14 @@ export class DatabaseView extends FileView {
     const baseThisFrontmatter = baseThisFile instanceof TFile
       ? this.app.metadataCache.getFileCache(baseThisFile)?.frontmatter
       : undefined;
-    new FormulaModal(this.app, col, computedField, this.rows, config.schema.columns, normalizeComputedSyncMode(entry.config.computedSyncMode), async (result) => {
+    new FormulaModal(
+      this.app,
+      col,
+      computedField,
+      this.rows,
+      config.schema.columns.filter((candidate) => candidate.type !== "rollup"),
+      normalizeComputedSyncMode(entry.config.computedSyncMode),
+      async (result) => {
       const decision = await this.confirmPropertyTypeConflictBeforeFormulaSave(col, result.resultType);
       if (!decision) return false;
       const computedKey = col.computedKey || col.key;
@@ -4090,7 +5293,10 @@ export class DatabaseView extends FileView {
         ...result,
         resultType: decision.resultType || result.resultType,
       });
-    }, baseThisFile instanceof TFile ? baseThisFile : undefined, baseThisFrontmatter, initialResultType).open();
+    }, baseThisFile instanceof TFile ? baseThisFile : undefined, baseThisFrontmatter, initialResultType, () => {
+      if (!restoreFocusRow) return;
+      window.requestAnimationFrame(() => this.restoreTableCellFocus(restoreFocusRow, col));
+    }).open();
   }
 
   private showComputedFrontmatterCleanupModal(): void {
@@ -4117,9 +5323,10 @@ export class DatabaseView extends FileView {
       if (normalizeComputedSyncMode(db.computedSyncMode) === "automatic") {
         // Cancel any already queued automatic sync so the cleanup cannot be immediately recreated.
         if (this.computedSyncTimer !== null) {
-          window.clearTimeout(this.computedSyncTimer);
+          this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
           this.computedSyncTimer = null;
         }
+        this.pendingComputedSync.clear();
         db.computedSyncMode = "display-only";
         this.scheduleConfigSave();
         this.rerenderToolbar();
@@ -4133,7 +5340,11 @@ export class DatabaseView extends FileView {
           updates[key] = null;
         }
         if (Object.keys(updates).length === 0) continue;
-        await this.dataSource.updateFrontmatter(record.file, updates);
+        await this.dataSource.updateFrontmatter(
+          record.file,
+          updates,
+          { sourceInstanceId: this.instanceId }
+        );
         changed += 1;
       }
       new Notice(t("notice.clearedComputedFrontmatter", { key: uniqueKeys.join(", "), count: changed }));
@@ -4220,6 +5431,33 @@ export class DatabaseView extends FileView {
   }
 
   private async changeColumnType(col: ColumnDef, type: ColumnDef["type"]): Promise<void> {
+    if (type === "relation" || type === "rollup") {
+      if (
+        type === "rollup" &&
+        !this.getConfig().schema.columns.some((candidate) =>
+          candidate !== col &&
+          candidate.type === "relation" &&
+          candidate.relationConfig?.targetDatabaseId
+        )
+      ) {
+        new Notice(t("rollup.relationRequired"));
+        return;
+      }
+      if (type === "relation") {
+        const decision = await this.confirmPropertyTypeConflictBeforeColumnChange(col, type);
+        if (!decision) return;
+        if (decision.changes.length > 0) {
+          await this.applyPropertyTypeConflictChanges(decision.changes, col.key);
+        }
+        if (decision.type !== "relation") {
+          if (decision.type) await this.columnOperations.changeColumnType(col, decision.type);
+          return;
+        }
+      }
+      await this.columnOperations.changeColumnType(col, type);
+      this.showRelationRollupConfigModal(col);
+      return;
+    }
     const decision = type === "computed"
       ? await this.confirmPropertyTypeConflictBeforeComputedCreation(col, "text")
       : await this.confirmPropertyTypeConflictBeforeColumnChange(col, type);
@@ -4521,12 +5759,12 @@ export class DatabaseView extends FileView {
       return true;
     }
     const col = config.schema.columns.find((candidate) => candidate.key === change.key);
-    if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed") return false;
+    if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed" || col.type === "rollup") return false;
     return this.applyColumnTypeToColumn(col, change.type);
   }
 
   private applyColumnTypeToColumn(col: ColumnDef, type: ColumnDef["type"]): boolean {
-    if (col.type === type || col.type === "computed") return false;
+    if (col.type === type || col.type === "computed" || col.type === "rollup") return false;
     col.type = type;
     if (isOptionColumnType(type)) {
       if (!col.statusOptions?.length) {
@@ -4733,7 +5971,7 @@ export class DatabaseView extends FileView {
     }
     let records: NoteRecord[];
     try {
-      records = this.includePendingNewRecord(this.dataSource.getRecordsForConfig(this.getEffectiveConfig(dbConfig)));
+      records = this.includePendingNewRecords(this.dataSource.getRecordsForConfig(this.getEffectiveConfig(dbConfig)));
     } catch (e) {
       this.containerEl_?.createDiv({
         cls: "db-empty",
@@ -4765,7 +6003,7 @@ export class DatabaseView extends FileView {
     // 按当前视图的年份显示策略写入全局，供 DateTimeFormat.shouldShowYear 读取。
     setDateDisplayMode(config.yearDisplayMode || "always");
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
-    this.rows = this.rowPipeline.build(records, this.withBaseThisContext(pipelineConfig), this.vs(), this.app);
+    this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(), dbConfig, true);
     this.timelineInvalidRowsVersion += 1;
     this.scheduleComputedSync(config, this.rows);
 
@@ -5125,11 +6363,13 @@ export class DatabaseView extends FileView {
       const col = config?.schema.columns.find((c) => c.key === [...columnKeys][0]);
       if (col && getBulkEditableColumns([col]).length && anchor) {
         this.showCellFillInput = false;
+        this.pendingCellFillDraft = null;
         this.openBulkEditForSelectedCells(anchor, [...columnKeys][0]);
         return;
       }
     }
     this.showCellFillInput = !this.showCellFillInput;
+    this.pendingCellFillDraft = null;
     this.renderSelectionStatusBar();
   }
 
@@ -5234,11 +6474,11 @@ export class DatabaseView extends FileView {
     const dbAfter = candidateRecords.filter((record) => this.dataSource.matchesRecordForDatabase(record, db));
     const effectiveConfig = this.getEffectiveConfig(db, view);
     const activeSourceAfter = dbAfter.filter((record) => this.dataSource.matchesRecordForDatabase(record, effectiveConfig));
-    const resultAfter = this.rowPipeline.build(
+    const resultAfter = this.buildRowsWithRelations(
       activeSourceAfter,
-      this.withBaseThisContext(view),
+      view,
       this.vs(),
-      this.app
+      db,
     );
     const groupingFields = this.collectBulkGroupingFields();
     const impact = buildBulkEditImpact(plan, {
@@ -5408,7 +6648,7 @@ export class DatabaseView extends FileView {
       pasteBtn.onclick = () => { void this.pasteCellsFromClipboard(); };
       const columnKeys = new Set(addresses.map((address) => address.colKey));
       let chipRendered = false;
-      if (columnKeys.size === 1) {
+      if (this.pendingCellFillDraft == null && columnKeys.size === 1) {
         const col = config?.schema.columns.find((candidate) => candidate.key === [...columnKeys][0]);
         if (col && getBulkEditableColumns([col]).length) {
           this.renderBulkEditingChip(bar, col, () => this.openBulkEditForSelectedCells(this.getStatusBarAnchor() ?? this.containerEl_!, col.key));
@@ -5473,6 +6713,7 @@ export class DatabaseView extends FileView {
         "aria-label": t("selection.fillPlaceholder"),
       },
     });
+    input.value = this.pendingCellFillDraft ?? "";
     const apply = form.createEl("button", {
       cls: "db-selection-action",
       text: t("common.save"),
@@ -5483,14 +6724,26 @@ export class DatabaseView extends FileView {
       void this.fillSelectedCells(input.value);
     };
     input.onkeydown = (event) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         this.showCellFillInput = false;
+        this.pendingCellFillDraft = null;
         this.renderSelectionStatusBar();
+        return;
+      }
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.fillSelectedCells(input.value);
       }
     };
+    input.oninput = () => { this.pendingCellFillDraft = input.value; };
     apply.onclick = (event) => event.stopPropagation();
-    window.requestAnimationFrame(() => input.focus());
+    window.requestAnimationFrame(() => {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
   }
 
   private syncSelectionControls(): void {
@@ -5581,29 +6834,32 @@ export class DatabaseView extends FileView {
     input.indeterminate = selectedCount > 0 && selectedCount < paths.length;
   }
 
-  private includePendingNewRecord(records: NoteRecord[]): NoteRecord[] {
-    const pending = this.pendingNewRecord;
-    if (!pending) return records;
-    if (Date.now() > pending.expiresAt) {
-      this.clearPendingNewRow();
-      return records;
-    }
-
-    let found = false;
+  private includePendingNewRecords(records: NoteRecord[]): NoteRecord[] {
+    if (this.pendingNewRecords.size === 0) return records;
+    const now = Date.now();
+    const found = new Set<string>();
     const merged = records.map((record) => {
-      if (record.file.path !== pending.file.path) return record;
-      found = true;
+      const pending = this.pendingNewRecords.get(record.file.path);
+      if (!pending) return record;
+      found.add(record.file.path);
       return {
         file: record.file,
         frontmatter: { ...pending.frontmatter, ...record.frontmatter },
       };
     });
 
-    if (!found && this.pendingRecordMatchesActiveSource(pending)) {
-      merged.push({
-        file: pending.file,
-        frontmatter: pending.frontmatter,
-      });
+    for (const [path, pending] of this.pendingNewRecords) {
+      if (found.has(path)) {
+        if (path !== this.pendingNewFilePath) this.pendingNewRecords.delete(path);
+        continue;
+      }
+      if (now > pending.expiresAt) {
+        this.pendingNewRecords.delete(path);
+        continue;
+      }
+      if (this.pendingRecordMatchesActiveSource(pending)) {
+        merged.push({ file: pending.file, frontmatter: pending.frontmatter });
+      }
     }
     return merged;
   }
@@ -5776,13 +7032,33 @@ export class DatabaseView extends FileView {
         this.schedulePendingNewRowRevealRetry();
         return;
       }
-      const scrollTarget = target.matches("tr")
+      const focusRequest = this.pendingNewRowCellFocus?.rowPath === path
+        ? this.pendingNewRowCellFocus
+        : undefined;
+      const focusCell = focusRequest
+        ? target.querySelector<HTMLElement>(
+            `td[data-note-database-column-key="${CSS.escape(focusRequest.colKey)}"]`
+          )
+        : null;
+      const scrollTarget = focusCell || (target.matches("tr")
         ? target.querySelector<HTMLElement>("td") || target
-        : target;
+        : target);
       if (this.getConfig()?.viewType === "list") {
         this.revealListRowLeadingEdge(target);
       } else {
-        scrollTarget.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+        scrollTarget.scrollIntoView(resolveNewRecordRevealBehavior(
+          this.getConfig()?.viewType,
+          Boolean(focusCell),
+        ));
+      }
+      if (focusCell && focusRequest) {
+        this.selectedRows.clear();
+        this.lastSelectedRowPath = null;
+        const address = { rowPath: focusRequest.rowPath, colKey: focusRequest.colKey };
+        this.cellSelection = { anchor: address, focus: address };
+        this.renderCellSelectionClasses();
+        this.renderSelectionStatusBar();
+        focusCell.focus({ preventScroll: true });
       }
       target.addClass("is-new-record-highlight");
       this.clearPendingNewRow();
@@ -5888,7 +7164,12 @@ export class DatabaseView extends FileView {
 
   private schedulePendingNewRowRevealRetry(): void {
     if (!this.pendingNewFilePath) return;
-    if (this.pendingNewRecord && Date.now() > this.pendingNewRecord.expiresAt) {
+    const pending = this.pendingNewRecords.get(this.pendingNewFilePath);
+    if (!pending) {
+      this.clearPendingNewRow();
+      return;
+    }
+    if (Date.now() > pending.expiresAt) {
       this.clearPendingNewRow();
       return;
     }
@@ -5900,8 +7181,11 @@ export class DatabaseView extends FileView {
   }
 
   private clearPendingNewRow(clearTimer = true): void {
+    const path = this.pendingNewFilePath;
     this.pendingNewFilePath = undefined;
-    this.pendingNewRecord = undefined;
+    if (path) this.pendingNewRecords.delete(path);
+    this.pendingNewRowCellFocus = undefined;
+    this.creatingKeyboardRow = false;
     if (clearTimer && this.pendingNewRevealTimer !== null) {
       window.clearTimeout(this.pendingNewRevealTimer);
       this.pendingNewRevealTimer = null;
@@ -5925,7 +7209,7 @@ export class DatabaseView extends FileView {
   private async deleteRow(row: RowData): Promise<void> {
     const displayName = row.file.name.replace(/\.md$/, "");
     try {
-      await this.dataSource.trashNote(row.file);
+      await this.dataSource.trashNote(row.file, { sourceInstanceId: this.instanceId });
       new Notice(t("notice.deletedRow", { name: displayName }));
       await this.refreshAfterSave();
     } catch (err) {
@@ -5941,15 +7225,272 @@ export class DatabaseView extends FileView {
 
   private async duplicateRow(row: RowData): Promise<void> {
     try {
-      const file = await this.dataSource.duplicateNote(row.file, t("menu.copySuffix"));
+      const file = await this.dataSource.duplicateNote(
+        row.file,
+        t("menu.copySuffix"),
+        { sourceInstanceId: this.instanceId }
+      );
       new Notice(t("notice.duplicatedRecord", { path: file.path }));
       this.pendingNewFilePath = file.path;
-      this.pendingNewRecord = { file, frontmatter: { ...row.frontmatter }, expiresAt: Date.now() + 8000 };
+      this.pendingNewRecords.set(file.path, { file, frontmatter: { ...row.frontmatter }, expiresAt: Date.now() + 8000 });
       await this.refreshAfterSave();
     } catch (err) {
       console.error("Note Database: failed to duplicate row", err);
       new Notice(t("errors.deleteFailed", { error: String(err) }));
     }
+  }
+
+  private async renameFileWithHistory(row: RowData, newName: string): Promise<boolean> {
+    const entry = this.getCurrentEntry();
+    if (!entry) return false;
+    const plan = planFileRenames(
+      [{ sourcePath: row.file.path, newName }],
+      this.app.vault.getMarkdownFiles().map((file) => file.path),
+    );
+    if (plan.conflicts.length > 0) {
+      const conflict = plan.conflicts[0];
+      if (conflict.reason === "empty") return false;
+      new Notice(t("errors.fileExists", { name: conflict.targetPath || newName }));
+      return false;
+    }
+    if (plan.changes.length === 0) return true;
+
+    const before = this.cloneDatabaseConfig(entry.config);
+    this.remapRecordPathsInConfig(entry.config, plan.changes, "new");
+    const after = this.cloneDatabaseConfig(entry.config);
+    const configChanged = JSON.stringify(before) !== JSON.stringify(after);
+    const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    let renamed = false;
+    try {
+      await this.executeFileRenamesAtomically(plan.changes, "new");
+      renamed = true;
+      if (configChanged && dbFile instanceof TFile) {
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+      }
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
+      this.pushHistory({
+        type: "config",
+        label: t("undo.renameFile"),
+        dbId: entry.config.id,
+        dbPath: entry.sourcePath,
+        viewId: this.getConfig()?.id,
+        before,
+        after,
+        fileRenames: plan.changes,
+      });
+      this.remapTransientRecordPaths(plan.changes, "new");
+      await this.refreshAfterSave();
+      if (this.cellSelection) this.restorePreservedCellSelectionAfterRefresh();
+      this.rerenderToolbar();
+      return true;
+    } catch (err) {
+      this.replaceDatabaseConfig(entry.config, before);
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+      if (configChanged && dbFile instanceof TFile) {
+        try {
+          await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back file rename config", rollbackErr);
+        }
+      }
+      if (renamed) {
+        try {
+          await this.executeFileRenamesAtomically(plan.changes, "old");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back file rename", rollbackErr);
+        }
+      }
+      new Notice(t("errors.renameFailed", { error: String(err) }));
+      return false;
+    }
+  }
+
+  private async executeFileRenamesAtomically(
+    changes: FileRenameChange[],
+    direction: "old" | "new",
+  ): Promise<void> {
+    if (changes.length === 0) return;
+    const moves = changes.map((change) => ({
+      sourcePath: direction === "new" ? change.oldPath : change.newPath,
+      targetPath: direction === "new" ? change.newPath : change.oldPath,
+    }));
+    const sourceKeys = new Set(moves.map((move) => move.sourcePath.normalize("NFC").toLowerCase()));
+    const targetKeys = new Set<string>();
+    const occupiedByKey = new Map(
+      this.app.vault.getMarkdownFiles().map((file) => [file.path.normalize("NFC").toLowerCase(), file] as const),
+    );
+    const stages: Array<{ file: TFile; sourcePath: string; targetPath: string; tempPath: string }> = [];
+    for (let index = 0; index < moves.length; index++) {
+      const move = moves[index];
+      const file = this.app.vault.getAbstractFileByPath(move.sourcePath);
+      if (!(file instanceof TFile)) throw new Error(`Rename source no longer exists: ${move.sourcePath}`);
+      const targetKey = move.targetPath.normalize("NFC").toLowerCase();
+      if (targetKeys.has(targetKey)) throw new Error(`Duplicate rename target: ${move.targetPath}`);
+      targetKeys.add(targetKey);
+      if (occupiedByKey.has(targetKey) && !sourceKeys.has(targetKey)) {
+        throw new Error(`Rename target already exists: ${move.targetPath}`);
+      }
+      stages.push({
+        file,
+        sourcePath: move.sourcePath,
+        targetPath: move.targetPath,
+        tempPath: this.getTemporaryRenamePath(move.sourcePath, index),
+      });
+    }
+
+    try {
+      for (const stage of stages) {
+        this.suppressDataReload(2500);
+        await this.dataSource.renameNote(
+          stage.file,
+          stage.tempPath,
+          { sourceInstanceId: this.instanceId }
+        );
+      }
+      for (const stage of stages) {
+        this.suppressDataReload(2500);
+        await this.dataSource.renameNote(
+          stage.file,
+          stage.targetPath,
+          { sourceInstanceId: this.instanceId }
+        );
+      }
+    } catch (err) {
+      await this.rollbackFileRenameStages(stages);
+      throw err;
+    }
+  }
+
+  private getTemporaryRenamePath(sourcePath: string, index: number): string {
+    const slash = sourcePath.lastIndexOf("/");
+    const parent = slash >= 0 ? sourcePath.slice(0, slash + 1) : "";
+    let attempt = 0;
+    while (true) {
+      const candidate = normalizePath(
+        `${parent}note-database-rename-${this.instanceId}-${Date.now()}-${index}-${attempt}.md`,
+      );
+      if (!this.app.vault.getAbstractFileByPath(candidate)) return candidate;
+      attempt += 1;
+    }
+  }
+
+  private async rollbackFileRenameStages(
+    stages: Array<{ file: TFile; sourcePath: string; targetPath: string; tempPath: string }>,
+  ): Promise<void> {
+    const moved = stages.filter((stage) => stage.file.path !== stage.sourcePath);
+    const restaged: Array<{ stage: typeof stages[number]; tempPath: string }> = [];
+    for (let index = 0; index < moved.length; index++) {
+      const stage = moved[index];
+      try {
+        const tempPath = this.getTemporaryRenamePath(stage.sourcePath, stages.length + index);
+        this.suppressDataReload(2500);
+        await this.dataSource.renameNote(
+          stage.file,
+          tempPath,
+          { sourceInstanceId: this.instanceId }
+        );
+        restaged.push({ stage, tempPath });
+      } catch (rollbackErr) {
+        console.error("Note Database: failed to stage file rename rollback", rollbackErr);
+      }
+    }
+    for (const { stage } of restaged) {
+      try {
+        this.suppressDataReload(2500);
+        await this.dataSource.renameNote(
+          stage.file,
+          stage.sourcePath,
+          { sourceInstanceId: this.instanceId }
+        );
+      } catch (rollbackErr) {
+        console.error("Note Database: failed to restore file rename source", rollbackErr);
+      }
+    }
+  }
+
+  private remapRecordPathsInConfig(
+    database: DatabaseConfig,
+    changes: FileRenameChange[],
+    direction: "old" | "new",
+  ): void {
+    const pathMap = new Map(changes.map((change) => (
+      direction === "new" ? [change.oldPath, change.newPath] : [change.newPath, change.oldPath]
+    )));
+    const remapPath = (path: string): string => pathMap.get(path) || path;
+    for (const view of database.views) {
+      const ranks = view.manualOrder?.ranks;
+      if (ranks) {
+        view.manualOrder = {
+          ...(view.manualOrder || {}),
+          ranks: Object.fromEntries(Object.entries(ranks).map(([path, rank]) => [remapPath(path), rank])),
+        };
+      }
+      if (view.boardCardOrders) {
+        view.boardCardOrders = Object.fromEntries(
+          Object.entries(view.boardCardOrders).map(([field, groups]) => [
+            field,
+            Object.fromEntries(Object.entries(groups).map(([group, paths]) => [group, paths.map(remapPath)])),
+          ]),
+        );
+      }
+      this.remapFileGroupState(view, pathMap);
+    }
+  }
+
+  private remapFileGroupState(view: ViewConfig, pathMap: Map<string, string>): void {
+    const fileGroupFields = new Set(["file.name", "file.basename", "file.path", "file.file"]);
+    const groupValueMap = (field: string): Map<string, string> => new Map(
+      Array.from(pathMap, ([oldPath, newPath]) => [
+        this.getFileGroupValueForPath(field, oldPath),
+        this.getFileGroupValueForPath(field, newPath),
+      ]),
+    );
+    const remapListMap = (source: Record<string, string[]> | undefined): Record<string, string[]> | undefined => {
+      if (!source) return source;
+      return Object.fromEntries(Object.entries(source).map(([field, values]) => {
+        if (!fileGroupFields.has(field)) return [field, values];
+        const valuesMap = groupValueMap(field);
+        return [field, values.map((value) => valuesMap.get(value) || value)];
+      }));
+    };
+    view.groupOrders = remapListMap(view.groupOrders);
+    view.collapsedGroups = remapListMap(view.collapsedGroups);
+    if (view.expandedGroupRows) {
+      view.expandedGroupRows = Object.fromEntries(
+        Object.entries(view.expandedGroupRows).map(([field, values]) => {
+          if (!fileGroupFields.has(field)) return [field, values];
+          const valuesMap = groupValueMap(field);
+          return [field, Object.fromEntries(Object.entries(values).map(([value, count]) => [valuesMap.get(value) || value, count]))];
+        }),
+      );
+    }
+  }
+
+  private getFileGroupValueForPath(field: string, path: string): string {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (field === "file.name") return name;
+    if (field === "file.basename") return name.replace(/\.md$/i, "");
+    if (field === "file.path" || field === "file.file") return path;
+    return path;
+  }
+
+  private remapTransientRecordPaths(changes: FileRenameChange[], direction: "old" | "new"): void {
+    const pathMap = new Map(changes.map((change) => (
+      direction === "new" ? [change.oldPath, change.newPath] : [change.newPath, change.oldPath]
+    )));
+    const remap = (path: string): string => pathMap.get(path) || path;
+    if (this.cellSelection) {
+      this.cellSelection = {
+        anchor: { ...this.cellSelection.anchor, rowPath: remap(this.cellSelection.anchor.rowPath) },
+        focus: { ...this.cellSelection.focus, rowPath: remap(this.cellSelection.focus.rowPath) },
+        active: this.cellSelection.active
+          ? { ...this.cellSelection.active, rowPath: remap(this.cellSelection.active.rowPath) }
+          : undefined,
+      };
+    }
+    this.selectedRows = new Set(Array.from(this.selectedRows, remap));
+    if (this.lastSelectedRowPath) this.lastSelectedRowPath = remap(this.lastSelectedRowPath);
   }
 
   private renderCell(
@@ -5958,6 +7499,8 @@ export class DatabaseView extends FileView {
     col: ColumnDef
   ): void {
     this.cellRenderer.renderCell(td, row, col);
+    const config = this.getConfig();
+    if (config) applyConditionalFormat(td, row, config, this.getActiveDb(), col.key);
     this.setupTableCellSelection(td, row, col);
   }
 
@@ -5977,9 +7520,13 @@ export class DatabaseView extends FileView {
   }
 
   private canFillColumn(col: ColumnDef): boolean {
-    if (col.type === "computed") return false;
+    if (col.type === "computed" || col.type === "rollup") return false;
     if (!isFileFieldKey(col.key)) return true;
     return col.key === "file.tags";
+  }
+
+  private canPasteColumn(col: ColumnDef): boolean {
+    return col.key === "file.name" || this.canFillColumn(col);
   }
 
   private async saveCellValueWithHistory(row: RowData, col: ColumnDef, value: unknown): Promise<void> {
@@ -5991,15 +7538,15 @@ export class DatabaseView extends FileView {
     }
     const change = this.createCellChange(row, col, value);
     if (this.areCellValuesEqual(change.oldValue, change.newValue)) return;
-    if (this.canApplyCellChangeOptimistically(col)) {
-      await this.applyCellChangeOptimistically(change, t("undo.editCell"));
-      return;
-    }
-    await this.applyCellChanges([change], t("undo.editCell"));
+    await this.applyCellChangeOptimistically(
+      change,
+      t("undo.editCell"),
+      !this.canApplyCellChangeOptimistically(col),
+    );
   }
 
   private canApplyCellChangeOptimistically(col: ColumnDef): boolean {
-    if (col.type === "computed" || isFileFieldKey(col.key)) return false;
+    if (col.type === "computed" || col.type === "rollup" || isFileFieldKey(col.key)) return false;
     const config = this.getConfig();
     if (!config) return false;
     const state = this.vs();
@@ -6007,37 +7554,65 @@ export class DatabaseView extends FileView {
       ? config.boardGroupField || state.groupByField || this.getDefaultBoardField(config)
       : state.groupByField;
     if (groupField === col.key) return false;
-    if (config.boardSubgroupField === col.key) return false;
-    if (config.titleField === col.key) return false;
-    if (config.galleryImageField === col.key) return false;
-    const database = this.getActiveDb();
-    if (database && resolveRecordIconField(database, config) === col.key) return false;
+    if (config.viewType === "board" && config.boardSubgroupField === col.key) return false;
+    if (config.viewType !== "table" && config.titleField === col.key) return false;
+    if (config.viewType === "gallery" && config.galleryImageField === col.key) return false;
     if (state.searchText.trim()) return false;
     if (state.sortColumn === col.key || state.sortRules.some((rule) => rule.field === col.key)) return false;
     if (getEffectiveFilterRules(state.filters).some((rule) => rule.field === col.key)) return false;
     if (this.isColumnReferencedByComputedFields(col.key)) return false;
+    if (config.schema.columns.some((column) =>
+      column.type === "rollup" && column.rollupConfig?.relationField === col.key
+    )) return false;
     return true;
   }
 
-  private async applyCellChangeOptimistically(change: CellEditChange, label: string): Promise<void> {
+  private async applyCellChangeOptimistically(
+    change: CellEditChange,
+    label: string,
+    reconcileAfterWrite = false,
+  ): Promise<void> {
     this.suppressDataReload(1200);
-    const oldValue = change.oldValue;
+    const rollback: CellEditChange = {
+      ...change,
+      newValue: change.oldExists ? this.cloneFillValue(change.oldValue) : null,
+    };
+    this.applyFrontmatterChangeToRenderedRows(change);
+    const row = this.rows.find((candidate) => candidate.file.path === change.path);
+    const col = this.getConfig()?.schema.columns.find((candidate) => candidate.key === change.key);
+    const config = this.getConfig();
+    const database = this.getActiveDb();
+    const updatesRecordIcon = Boolean(
+      row &&
+      col &&
+      config &&
+      database &&
+      resolveRecordIconField(database, config) === col.key
+    );
+    if (row && col) {
+      if (!updatesRecordIcon || this.isRowFieldRendered(row, col)) this.updateCellDOM(row, col);
+      if (updatesRecordIcon && config) this.updateRecordIconDOM(row, config);
+    }
     try {
-      await this.dataSource.updateFrontmatter(change.file, { [change.key]: change.newValue });
+      await this.dataSource.updateFrontmatter(
+        change.file,
+        { [change.key]: change.newValue },
+        { sourceInstanceId: this.instanceId }
+      );
     } catch (err) {
-      this.applyFrontmatterChangeToRenderedRows({ ...change, newValue: oldValue });
-      this.refresh();
+      this.applyFrontmatterChangeToRenderedRows(rollback);
+      if (row && col) {
+        if (!updatesRecordIcon || this.isRowFieldRendered(row, col)) this.updateCellDOM(row, col);
+        if (updatesRecordIcon && config) this.updateRecordIconDOM(row, config);
+      }
       new Notice(t("errors.updateFailed", { error: String(err) }));
       return;
     }
-    this.applyFrontmatterChangeToRenderedRows(change);
     this.pushHistory({ type: "cells", label, changes: [change] });
-
-    const row = this.rows.find(r => r.file.path === change.path);
-    if (row) {
-      const col = this.getConfig()?.schema.columns.find(c => c.key === change.key);
-      if (col) this.updateCellDOM(row, col);
-    }
+    if (!reconcileAfterWrite) return;
+    await this.syncComputedForCellChanges([change]);
+    await this.refreshAfterSave();
+    this.rerenderToolbar();
   }
 
   private applyFrontmatterChangeToRenderedRows(change: CellEditChange): void {
@@ -6084,6 +7659,17 @@ export class DatabaseView extends FileView {
         this.refresh();
         break;
     }
+    this.updateConditionalFormatDOM(row, config);
+  }
+
+  private updateConditionalFormatDOM(row: RowData, config: ViewConfig): void {
+    if (!this.containerEl_) return;
+    const selector = `[data-note-database-row-path="${CSS.escape(row.file.path)}"]`;
+    for (const element of Array.from(this.containerEl_.querySelectorAll<HTMLElement>(selector))) {
+      if (element.matches("td[data-note-database-column-key]")) continue;
+      const field = element.getAttribute("data-note-database-column-key") || undefined;
+      applyConditionalFormat(element, row, config, this.getActiveDb(), field);
+    }
   }
 
   private updateCardFieldDOM(row: RowData, col: ColumnDef, config: ViewConfig, newField: HTMLElement): void {
@@ -6115,6 +7701,8 @@ export class DatabaseView extends FileView {
 
     oldTd.replaceWith(newTd);
     this.cellRenderer.renderCell(newTd, row, col);
+    const config = this.getConfig();
+    if (config) applyConditionalFormat(newTd, row, config, this.getActiveDb(), col.key);
     this.setupTableCellSelection(newTd, row, col);
     if (!this.isPhoneLayout() && this.canFillColumn(col)) {
       this.setupTableFillHandle(newTd, row, col);
@@ -6276,7 +7864,35 @@ export class DatabaseView extends FileView {
       updatesByPath.set(change.path, entry);
     }
     for (const entry of updatesByPath.values()) {
-      await this.dataSource.updateFrontmatter(entry.file, entry.updates);
+      await this.dataSource.updateFrontmatter(
+        entry.file,
+        entry.updates,
+        { sourceInstanceId: this.instanceId }
+      );
+    }
+  }
+
+  private async applyFrontmatterChangesAtomically(
+    changes: CellEditChange[],
+    direction: "old" | "new",
+  ): Promise<void> {
+    const byPath = new Map<string, CellEditChange[]>();
+    for (const change of changes) {
+      const list = byPath.get(change.path) || [];
+      list.push(change);
+      byPath.set(change.path, list);
+    }
+    const applied: CellEditChange[] = [];
+    try {
+      for (const pathChanges of byPath.values()) {
+        await this.applyFrontmatterChanges(pathChanges, direction);
+        applied.push(...pathChanges);
+      }
+    } catch (err) {
+      if (applied.length > 0) {
+        await this.applyFrontmatterChanges(applied, direction === "new" ? "old" : "new");
+      }
+      throw err;
     }
   }
 
@@ -6301,6 +7917,56 @@ export class DatabaseView extends FileView {
     }
   }
 
+  private async fillSelectedCellsFromEdge(direction: "down" | "right"): Promise<void> {
+    if (!this.cellSelection) return;
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    const steps = planTableSelectionFill(
+      rowPaths,
+      colKeys,
+      this.cellSelection.anchor,
+      this.cellSelection.focus,
+      direction,
+    );
+    if (steps.length === 0) return;
+
+    const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
+    const colByKey = new Map(this.getConfig().schema.columns.map((col) => [col.key, col]));
+    const changes: CellEditChange[] = [];
+    let skipped = 0;
+    for (const step of steps) {
+      const sourceRow = rowByPath.get(step.source.rowPath);
+      const sourceCol = colByKey.get(step.source.colKey);
+      const targetRow = rowByPath.get(step.target.rowPath);
+      const targetCol = colByKey.get(step.target.colKey);
+      if (!sourceRow || !sourceCol || !targetRow || !targetCol || !this.canFillColumn(targetCol)) {
+        skipped += 1;
+        continue;
+      }
+      const value = direction === "down"
+        ? this.cloneFillValue(this.getFillValue(sourceRow, sourceCol))
+        : this.normalizeBatchInputValue(targetCol, this.getColumnDisplayText(sourceRow, sourceCol));
+      const invalidTags = this.getInvalidFileTagValues(targetCol, value);
+      if (invalidTags.length > 0) {
+        skipped += 1;
+        this.showInvalidFileTagsNotice(invalidTags);
+        continue;
+      }
+      const change = this.createCellChange(targetRow, targetCol, value);
+      if (!this.areCellValuesEqual(change.oldValue, change.newValue)) changes.push(change);
+    }
+    if (changes.length === 0) {
+      if (skipped > 0) new Notice(t("notice.noEditableCellsSkipped", { skipped }));
+      return;
+    }
+    try {
+      await this.applyCellChanges(changes, t("undo.fillCells"), { preserveCellSelection: true });
+      this.showBatchNotice("filled", changes.length, skipped);
+    } catch (err) {
+      new Notice(t("errors.batchFillFailed", { error: String(err) }));
+    }
+  }
+
   private getSelectedEditableCellTargetPlan(): BatchTargetPlan {
     const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
     const colByKey = new Map(this.getConfig().schema.columns.map((col) => [col.key, col]));
@@ -6318,9 +7984,11 @@ export class DatabaseView extends FileView {
     return { targets, skipped };
   }
 
-  private async copySelectedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
+  private getSelectedCellClipboardPayload(
+    format: "tsv" | "markdown" | "csv" = "tsv",
+  ): { selected: CellAddress[]; content: string } | null {
     const selected = this.getSelectedCellAddresses();
-    if (selected.length === 0) return;
+    if (selected.length === 0) return null;
     const rowPaths = this.getRenderedTableRowPaths();
     const colKeys = this.getRenderedTableColumnKeys();
     const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
@@ -6334,8 +8002,68 @@ export class DatabaseView extends FileView {
       colByKey,
       (row, col) => this.getColumnDisplayText(row, col),
     );
-    await navigator.clipboard.writeText(content);
-    new Notice(t("notice.copiedCells", { count: selected.length }));
+    return { selected, content };
+  }
+
+  private async copySelectedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
+    const payload = this.getSelectedCellClipboardPayload(format);
+    if (!payload) return;
+    await navigator.clipboard.writeText(payload.content);
+    this.cancelPendingCellCut();
+    new Notice(t("notice.copiedCells", { count: payload.selected.length }));
+  }
+
+  private async cutSelectedCells(): Promise<void> {
+    const payload = this.getSelectedCellClipboardPayload("tsv");
+    if (!payload) return;
+    const plan = this.getSelectedEditableCellTargetPlan();
+    await navigator.clipboard.writeText(payload.content);
+    this.cancelPendingCellCut(false);
+    if (plan.targets.length === 0) {
+      new Notice(plan.skipped > 0
+        ? t("notice.noEditableCellsSkipped", { skipped: plan.skipped })
+        : t("notice.noEditableCells"));
+      return;
+    }
+    const clearChanges = plan.targets.map((target) => this.createCellChange(target.row, target.col, null));
+    this.pendingCellCut = {
+      addressKeys: new Set(payload.selected.map((address) => `${address.rowPath}\u0000${address.colKey}`)),
+      clearChanges: clearChanges.map((change) => this.cloneCellChange(change)),
+      clipboardText: payload.content,
+    };
+    this.renderCellSelectionClasses();
+    new Notice(t("notice.cutCells", { count: plan.targets.length }));
+  }
+
+  private cancelPendingCellCut(render = true): void {
+    if (!this.pendingCellCut) return;
+    this.pendingCellCut = null;
+    if (render) this.renderCellSelectionClasses();
+  }
+
+  private resolvePendingCellCut(clipboardText: string): { clearChanges: CellEditChange[] } | null {
+    const pending = this.pendingCellCut;
+    if (!pending) return null;
+    if (pending.clipboardText !== clipboardText) {
+      this.cancelPendingCellCut();
+      return null;
+    }
+    for (const change of pending.clearChanges) {
+      const file = this.app.vault.getAbstractFileByPath(change.path);
+      if (!(file instanceof TFile)) {
+        this.cancelPendingCellCut();
+        new Notice(t("notice.cutSourceChanged"));
+        return null;
+      }
+      const frontmatter = this.dataSource.getFrontmatterSnapshot(file);
+      const exists = Object.prototype.hasOwnProperty.call(frontmatter, change.key);
+      if (exists !== change.oldExists || !this.areCellValuesEqual(frontmatter[change.key], change.oldValue)) {
+        this.cancelPendingCellCut();
+        new Notice(t("notice.cutSourceChanged"));
+        return null;
+      }
+    }
+    return { clearChanges: pending.clearChanges.map((change) => this.cloneCellChange(change)) };
   }
 
   private async fillSelectedCells(input: string): Promise<void> {
@@ -6371,8 +8099,14 @@ export class DatabaseView extends FileView {
       confirmText: t("bulkEdit.apply"),
       danger: true,
     })) return;
-    await this.applyExplicitOptionCellChanges(changes, t("undo.fillCells"));
+    await this.applyExplicitOptionCellChanges(
+      changes,
+      t("undo.fillCells"),
+      { preserveCellSelection: true },
+    );
     this.showCellFillInput = false;
+    this.pendingCellFillDraft = null;
+    this.renderSelectionStatusBar();
     this.showBatchNotice("filled", changes.length, skipped);
   }
 
@@ -6382,13 +8116,18 @@ export class DatabaseView extends FileView {
     const matrix = parseClipboardTable(text);
     if (matrix.length === 0 || matrix.every((row) => row.length === 0)) return;
     const plan = this.getPasteTargetPlan(matrix);
-    if (plan.targets.length === 0) {
-      new Notice(plan.skipped > 0 ? t("notice.noEditableCellsSkipped", { skipped: plan.skipped }) : t("notice.noEditableCells"));
-      return;
-    }
     const changes: CellEditChange[] = [];
+    const renameRequests: FileRenameRequest[] = [];
     let skipped = plan.skipped;
     for (const target of plan.targets) {
+      if (target.col.key === "file.name") {
+        if (!normalizeFileRenameBasename(target.value)) {
+          skipped += 1;
+          continue;
+        }
+        renameRequests.push({ sourcePath: target.row.file.path, newName: target.value });
+        continue;
+      }
       const invalidTags = this.getInvalidFileTagValues(target.col, target.value);
       if (invalidTags.length > 0) {
         skipped += 1;
@@ -6397,43 +8136,475 @@ export class DatabaseView extends FileView {
       }
       changes.push(this.createCellChange(target.row, target.col, this.normalizeBatchInputValue(target.col, target.value)));
     }
-    if (changes.length === 0) return;
-    await this.applyExplicitOptionCellChanges(changes, t("undo.pasteCells"));
-    this.showBatchNotice("pasted", changes.length, skipped);
+    const renamePlan = planFileRenames(
+      renameRequests,
+      this.app.vault.getMarkdownFiles().map((file) => file.path),
+    );
+    if (renamePlan.conflicts.length > 0) {
+      this.showFileRenameConflict(renamePlan.conflicts[0], renameRequests);
+      return;
+    }
+    if (plan.layout?.newRows) {
+      await this.pasteCellsWithCreatedRows(text, matrix, plan, changes, renamePlan.changes, skipped);
+      return;
+    }
+    if (plan.targets.length === 0) {
+      new Notice(skipped > 0 ? t("notice.noEditableCellsSkipped", { skipped }) : t("notice.noEditableCells"));
+      return;
+    }
+    const pendingCut = this.resolvePendingCellCut(text);
+    const combinedChanges = pendingCut
+      ? this.mergeCellChanges(pendingCut.clearChanges, changes)
+      : this.mergeCellChanges(changes);
+    if (plan.selection) this.cellSelection = plan.selection;
+    if (combinedChanges.length === 0 && renamePlan.changes.length === 0) {
+      if (pendingCut) this.cancelPendingCellCut();
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
+      return;
+    }
+    const label = t(pendingCut ? "undo.moveCells" : "undo.pasteCells");
+    if (renamePlan.changes.length > 0) {
+      await this.commitPasteWithFileRenames(combinedChanges, renamePlan.changes, label);
+    } else {
+      await this.applyExplicitOptionCellChanges(
+        combinedChanges,
+        label,
+        { preserveCellSelection: true },
+      );
+    }
+    this.showBatchNotice("pasted", changes.length + renamePlan.changes.length, skipped);
   }
 
-  private getPasteTargetPlan(matrix: string[][]): BatchTargetPlan<FillTarget & { value: string }> {
-    const selected = this.getSelectedCellAddresses();
-    if (selected.length === 0) return { targets: [], skipped: 0 };
+  private showFileRenameConflict(
+    conflict: ReturnType<typeof planFileRenames>["conflicts"][number],
+    requests: FileRenameRequest[],
+  ): void {
+    if (conflict.reason === "empty") return;
+    const request = requests.find((candidate) => candidate.sourcePath === conflict.sourcePath);
+    new Notice(t("errors.fileExists", { name: conflict.targetPath || request?.newName || conflict.sourcePath }));
+  }
+
+  private remapCellChangePaths(
+    changes: CellEditChange[],
+    fileRenames: FileRenameChange[],
+    direction: "old" | "new",
+  ): CellEditChange[] {
+    const pathMap = new Map(fileRenames.map((change) => (
+      direction === "new" ? [change.oldPath, change.newPath] : [change.newPath, change.oldPath]
+    )));
+    return changes.map((change) => {
+      const path = pathMap.get(change.path) || change.path;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) throw new Error(`Paste target no longer exists: ${path}`);
+      return { ...this.cloneCellChange(change), file, path };
+    });
+  }
+
+  private async commitPasteWithFileRenames(
+    changes: CellEditChange[],
+    fileRenames: FileRenameChange[],
+    label: string,
+  ): Promise<void> {
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    const before = this.cloneDatabaseConfig(entry.config);
+    for (const change of changes) {
+      const col = entry.config.schema.columns.find((candidate) => this.getFrontmatterWriteKey(candidate) === change.key);
+      if (col) change.newValue = this.registerPastedOptionValue(col, change.newValue);
+    }
+    this.remapRecordPathsInConfig(entry.config, fileRenames, "new");
+    const after = this.cloneDatabaseConfig(entry.config);
+    const configChanged = JSON.stringify(before) !== JSON.stringify(after);
+    const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+    let renamed = false;
+    let configWriteAttempted = false;
+    let remappedChanges: CellEditChange[] = [];
+    const applied: CellEditChange[] = [];
+    try {
+      await this.executeFileRenamesAtomically(fileRenames, "new");
+      renamed = true;
+      remappedChanges = this.remapCellChangePaths(changes, fileRenames, "new");
+      if (configChanged && dbFile instanceof TFile) {
+        configWriteAttempted = true;
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+      }
+      const byPath = new Map<string, CellEditChange[]>();
+      for (const change of remappedChanges) {
+        const list = byPath.get(change.path) || [];
+        list.push(change);
+        byPath.set(change.path, list);
+      }
+      for (const pathChanges of byPath.values()) {
+        const updates: Record<string, unknown> = {};
+        for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
+        this.suppressDataReload(2500);
+        await this.dataSource.updateFrontmatter(
+          pathChanges[0].file,
+          updates,
+          { sourceInstanceId: this.instanceId }
+        );
+        applied.push(...pathChanges);
+      }
+    } catch (err) {
+      if (applied.length > 0) {
+        try {
+          await this.applyFrontmatterChanges(applied, "old");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back renamed paste values", rollbackErr);
+        }
+      }
+      this.replaceDatabaseConfig(entry.config, before);
+      if (configWriteAttempted && dbFile instanceof TFile) {
+        try {
+          this.suppressDataReload(2500);
+          await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back renamed paste config", rollbackErr);
+        }
+      }
+      if (renamed) {
+        try {
+          await this.executeFileRenamesAtomically(fileRenames, "old");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back pasted file names", rollbackErr);
+        }
+      }
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+      new Notice(t("errors.batchFillFailed", { error: String(err) }));
+      return;
+    }
+
+    this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
+    this.pushHistory({
+      type: "config",
+      label,
+      dbId: entry.config.id,
+      dbPath: entry.sourcePath,
+      viewId: this.getConfig()?.id,
+      before,
+      after,
+      cellChanges: changes.length > 0 ? changes.map((change) => this.cloneCellChange(change)) : undefined,
+      fileRenames: fileRenames.map((change) => ({ ...change })),
+    });
+    this.remapTransientRecordPaths(fileRenames, "new");
+    await this.syncComputedForCellChanges(remappedChanges);
+    await this.refreshAfterSave();
+    if (this.cellSelection) this.restorePreservedCellSelectionAfterRefresh();
+    this.rerenderToolbar();
+  }
+
+  private preparePasteNewRows(
+    matrix: string[][],
+    plan: PasteTargetPlan,
+  ): { rows: PasteNewRowInput[]; skipped: number } {
+    const layout = plan.layout;
+    if (!layout || layout.newRows === 0) return { rows: [], skipped: 0 };
+    const config = this.getConfig();
     const rowPaths = this.getRenderedTableRowPaths();
     const colKeys = this.getRenderedTableColumnKeys();
-    const startRow = Math.min(...selected.map((cell) => rowPaths.indexOf(cell.rowPath)).filter((index) => index >= 0));
-    const startCol = Math.min(...selected.map((cell) => colKeys.indexOf(cell.colKey)).filter((index) => index >= 0));
-    if (!Number.isFinite(startRow) || !Number.isFinite(startCol)) return { targets: [], skipped: 0 };
     const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
-    const colByKey = new Map(this.getConfig().schema.columns.map((col) => [col.key, col]));
-    const selectedRows = Math.max(1, new Set(selected.map((cell) => cell.rowPath)).size);
-    const selectedCols = Math.max(1, new Set(selected.map((cell) => cell.colKey)).size);
-    const fillRows = matrix.length === 1 && matrix[0].length === 1 ? selectedRows : matrix.length;
-    const fillCols = matrix.length === 1 && matrix[0].length === 1 ? selectedCols : Math.max(...matrix.map((row) => row.length));
-    const targets: Array<FillTarget & { value: string }> = [];
+    const colByKey = new Map(config.schema.columns.map((col) => [col.key, col]));
+    const contextRow = rowByPath.get(rowPaths[rowPaths.length - 1]);
+    if (!contextRow) return { rows: [], skipped: 0 };
+    const createContext = this.getRenderedTableRowCreateContext(contextRow.file.path);
+    const groupDefaults = this.getCreateEntryDefaultsForRow(contextRow, createContext);
+    const rows: PasteNewRowInput[] = [];
     let skipped = 0;
-    for (let r = 0; r < fillRows; r++) {
-      for (let c = 0; c < fillCols; c++) {
-        const row = rowByPath.get(rowPaths[startRow + r]);
-        const col = colByKey.get(colKeys[startCol + c]);
-        if (!row || !col) continue;
-        if (!this.canFillColumn(col)) {
+
+    for (let r = layout.existingRows; r < layout.fillRows; r++) {
+      const pastedDefaults: Record<string, unknown> = {};
+      const pastedCells: PasteNewRowInput["pastedCells"] = [];
+      for (let c = 0; c < layout.usableCols; c++) {
+        const col = colByKey.get(colKeys[layout.startCol + c]);
+        if (!col) continue;
+        if (!this.canPasteColumn(col)) {
           skipped += 1;
           continue;
         }
-        const value = matrix.length === 1 && matrix[0].length === 1
-          ? matrix[0][0]
-          : matrix[r]?.[c] ?? "";
+        const input = getTablePasteValue(matrix, r, c);
+        const invalidTags = this.getInvalidFileTagValues(col, input);
+        if (invalidTags.length > 0) {
+          skipped += 1;
+          this.showInvalidFileTagsNotice(invalidTags);
+          continue;
+        }
+        if (col.key === "file.name") {
+          const fileName = normalizeFileRenameBasename(input);
+          if (fileName) pastedCells.push({ col, key: col.key, value: fileName });
+          continue;
+        }
+        const key = this.getFrontmatterWriteKey(col);
+        const value = this.normalizeCellValueForChange(col, this.normalizeBatchInputValue(col, input));
+        pastedDefaults[key] = this.cloneFillValue(value);
+        pastedCells.push({ col, key, value: this.cloneFillValue(value) });
+      }
+      if (pastedCells.length > 0) {
+        const fileName = pastedCells.find((cell) => cell.col.key === "file.name")?.value;
+        rows.push({
+          groupDefaults: this.cloneFillValue(groupDefaults) as Record<string, unknown>,
+          pastedDefaults,
+          pastedCells,
+          fileName: typeof fileName === "string" ? fileName : undefined,
+        });
+      }
+    }
+    return { rows, skipped };
+  }
+
+  private registerPastedOptionValue(col: ColumnDef, value: unknown): unknown {
+    const optionPlan = planOptionRegistration(col, value);
+    if (!optionPlan.participates) return value;
+    if (optionPlan.addedOptions.length > 0) {
+      col.statusOptions = optionPlan.options;
+      if (optionPlan.clearPresetId) col.statusPresetId = undefined;
+    }
+    return this.cloneFillValue(optionPlan.value);
+  }
+
+  private async pasteCellsWithCreatedRows(
+    clipboardText: string,
+    matrix: string[][],
+    targetPlan: PasteTargetPlan,
+    targetChanges: CellEditChange[],
+    fileRenames: FileRenameChange[],
+    initialSkipped: number,
+  ): Promise<void> {
+    if (this.creatingPasteRows) return;
+    const layout = targetPlan.layout;
+    const config = this.getConfig();
+    const entry = this.getCurrentEntry();
+    if (!layout || !entry) return;
+    const prepared = this.preparePasteNewRows(matrix, targetPlan);
+    const pastedNewCellCount = prepared.rows.reduce((count, row) => count + row.pastedCells.length, 0);
+    const skipped = initialSkipped + prepared.skipped;
+    if (targetChanges.length === 0 && pastedNewCellCount === 0 && fileRenames.length === 0) {
+      new Notice(skipped > 0 ? t("notice.noEditableCellsSkipped", { skipped }) : t("notice.noEditableCells"));
+      return;
+    }
+    this.creatingPasteRows = true;
+
+    const pendingCut = this.resolvePendingCellCut(clipboardText);
+    const combinedChanges = pendingCut
+      ? this.mergeCellChanges(pendingCut.clearChanges, targetChanges)
+      : this.mergeCellChanges(targetChanges);
+    const before = this.cloneDatabaseConfig(entry.config);
+    const created: Array<{ file: TFile; plan: CreateEntryPlan; diagnostics: CreateEntryDiagnostic[] }> = [];
+    const applied: CellEditChange[] = [];
+    let renamed = false;
+    let configWriteAttempted = false;
+    let remappedChanges: CellEditChange[] = [];
+
+    try {
+      for (const change of combinedChanges) {
+        const col = config.schema.columns.find((candidate) => this.getFrontmatterWriteKey(candidate) === change.key);
+        if (col) change.newValue = this.registerPastedOptionValue(col, change.newValue);
+      }
+      this.remapRecordPathsInConfig(entry.config, fileRenames, "new");
+
+      const createPlans = prepared.rows.map((row) => {
+        const defaults = this.mergeCreateDefaults(config, row.groupDefaults, row.pastedDefaults);
+        for (const [key, value] of Object.entries(defaults)) {
+          const col = config.schema.columns.find((candidate) => (
+            candidate.key === key || this.getFrontmatterWriteKey(candidate) === key
+          ));
+          if (col) defaults[key] = this.registerPastedOptionValue(col, value);
+        }
+        const createPlan = this.buildCreateEntryPlan(config, defaults);
+        if (row.fileName) createPlan.filename = row.fileName;
+        return { createPlan, requestedFileName: row.fileName };
+      });
+
+      if (fileRenames.length > 0) {
+        await this.executeFileRenamesAtomically(fileRenames, "new");
+        renamed = true;
+      }
+      remappedChanges = this.remapCellChangePaths(combinedChanges, fileRenames, "new");
+      const renamePathMap = new Map(fileRenames.map((change) => [change.oldPath, change.newPath]));
+      const rowPaths = this.getRenderedTableRowPaths().map((path) => renamePathMap.get(path) || path);
+      let afterPath = rowPaths[rowPaths.length - 1];
+      for (const { createPlan, requestedFileName } of createPlans) {
+        this.suppressDataReload(2500);
+        const file = await this.dataSource.createNote(
+          createPlan.folder,
+          createPlan.filename,
+          createPlan.frontmatter,
+          { sourceInstanceId: this.instanceId }
+        );
+        const diagnostics = [...createPlan.diagnostics];
+        if ((createPlan.hasExactFilenameRule || requestedFileName) && file.basename !== createPlan.filename) {
+          diagnostics.push({ reason: "filenameSuffix", detail: file.basename });
+        }
+        created.push({ file, plan: createPlan, diagnostics });
+        this.assignManualRankForNewEntry(config, file.path, { afterPath }, false);
+        afterPath = file.path;
+      }
+
+      const after = this.cloneDatabaseConfig(entry.config);
+      const configChanged = JSON.stringify(before) !== JSON.stringify(after);
+      const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+      if (configChanged && dbFile instanceof TFile) {
+        configWriteAttempted = true;
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+      }
+
+      const byPath = new Map<string, CellEditChange[]>();
+      for (const change of remappedChanges) {
+        const list = byPath.get(change.path) || [];
+        list.push(change);
+        byPath.set(change.path, list);
+      }
+      for (const pathChanges of byPath.values()) {
+        const file = this.app.vault.getAbstractFileByPath(pathChanges[0].path);
+        if (!(file instanceof TFile)) throw new Error(`Paste target no longer exists: ${pathChanges[0].path}`);
+        const updates: Record<string, unknown> = {};
+        for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
+        this.suppressDataReload(2500);
+        await this.dataSource.updateFrontmatter(
+          file,
+          updates,
+          { sourceInstanceId: this.instanceId }
+        );
+        applied.push(...pathChanges);
+      }
+
+      const createdFiles = created.map(({ file }) => ({ path: file.path }));
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
+      this.pushHistory({
+        type: "config",
+        label: t(pendingCut ? "undo.moveCells" : "undo.pasteCells"),
+        dbId: entry.config.id,
+        dbPath: entry.sourcePath,
+        viewId: config.id,
+        before,
+        after,
+        cellChanges: combinedChanges.length > 0
+          ? combinedChanges.map((change) => this.cloneCellChange(change))
+          : undefined,
+        createdFiles,
+        fileRenames: fileRenames.length > 0 ? fileRenames.map((change) => ({ ...change })) : undefined,
+      });
+
+      const expiresAt = Date.now() + 8000;
+      for (const item of created) {
+        this.pendingNewRecords.set(item.file.path, {
+          file: item.file,
+          frontmatter: { ...item.plan.frontmatter },
+          expiresAt,
+        });
+        if (config.schema.computedFields.length > 0) {
+          void this.syncComputedForFile(item.file, item.plan.frontmatter, undefined, config);
+        }
+      }
+      await this.syncComputedForCellChanges(remappedChanges);
+
+      this.remapTransientRecordPaths(fileRenames, "new");
+      const rowPathsWithCreated = [
+        ...this.getRenderedTableRowPaths().map((path) => renamePathMap.get(path) || path),
+        ...created.map(({ file }) => file.path),
+      ];
+      const colKeys = this.getRenderedTableColumnKeys();
+      const endRowPath = created[created.length - 1]?.file.path
+        || rowPathsWithCreated[Math.min(rowPathsWithCreated.length - 1, layout.startRow + layout.fillRows - 1)];
+      const endColKey = colKeys[layout.startCol + layout.usableCols - 1];
+      const startRowPath = rowPathsWithCreated[layout.startRow];
+      const startColKey = colKeys[layout.startCol];
+      if (startRowPath && startColKey && endRowPath && endColKey) {
+        this.cellSelection = {
+          anchor: { rowPath: startRowPath, colKey: startColKey },
+          focus: { rowPath: endRowPath, colKey: endColKey },
+          active: { rowPath: startRowPath, colKey: startColKey },
+        };
+      }
+      await this.refreshAfterSave();
+      this.restorePreservedCellSelectionAfterRefresh();
+      this.rerenderToolbar();
+      this.showBatchPasteNotice(targetChanges.length + fileRenames.length + pastedNewCellCount, skipped, created.length);
+      const riskRows = created.filter((item) => item.diagnostics.length > 0).length;
+      if (riskRows > 0) new Notice(t("notice.createdRowsRuleRisk", { count: riskRows }));
+    } catch (err) {
+      if (applied.length > 0) {
+        try {
+          await this.applyFrontmatterChanges(applied, "old");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back pasted cell changes", rollbackErr);
+        }
+      }
+      for (const item of [...created].reverse()) {
+        try {
+          await this.dataSource.trashNote(item.file, { sourceInstanceId: this.instanceId });
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back pasted record creation", rollbackErr);
+        }
+      }
+      this.replaceDatabaseConfig(entry.config, before);
+      if (configWriteAttempted) {
+        const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
+        if (dbFile instanceof TFile) {
+          try {
+            await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+          } catch (rollbackErr) {
+            console.error("Note Database: failed to roll back paste config", rollbackErr);
+          }
+        }
+      }
+      if (renamed) {
+        try {
+          await this.executeFileRenamesAtomically(fileRenames, "old");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back pasted file names", rollbackErr);
+        }
+      }
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+      new Notice(t("errors.batchFillFailed", { error: String(err) }));
+    } finally {
+      this.creatingPasteRows = false;
+    }
+  }
+
+  private showBatchPasteNotice(count: number, skipped: number, createdRows: number): void {
+    const key = skipped > 0
+      ? "notice.pastedCellsCreatedRowsSkipped"
+      : "notice.pastedCellsCreatedRows";
+    new Notice(t(key, { count, skipped, rows: createdRows }));
+  }
+
+  private getPasteTargetPlan(matrix: string[][]): PasteTargetPlan {
+    const selected = this.getSelectedCellAddresses();
+    if (selected.length === 0) return { targets: [], skipped: 0, selection: null, layout: null };
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    const layout = planTablePasteLayout(rowPaths, colKeys, selected, matrix);
+    if (!layout) return { targets: [], skipped: 0, selection: null, layout: null };
+    const rowByPath = new Map(this.rows.map((row) => [row.file.path, row]));
+    const colByKey = new Map(this.getConfig().schema.columns.map((col) => [col.key, col]));
+    const endRow = Math.min(rowPaths.length - 1, layout.startRow + layout.fillRows - 1);
+    const endCol = Math.min(colKeys.length - 1, layout.startCol + layout.fillCols - 1);
+    const selection = endRow >= layout.startRow && endCol >= layout.startCol
+      ? {
+          anchor: { rowPath: rowPaths[layout.startRow], colKey: colKeys[layout.startCol] },
+          focus: { rowPath: rowPaths[endRow], colKey: colKeys[endCol] },
+          active: { rowPath: rowPaths[layout.startRow], colKey: colKeys[layout.startCol] },
+        }
+      : null;
+    const targets: Array<FillTarget & { value: string }> = [];
+    let skipped = 0;
+    for (let r = 0; r < layout.existingRows; r++) {
+      for (let c = 0; c < layout.usableCols; c++) {
+        const row = rowByPath.get(rowPaths[layout.startRow + r]);
+        const col = colByKey.get(colKeys[layout.startCol + c]);
+        if (!row || !col) continue;
+        if (!this.canPasteColumn(col)) {
+          skipped += 1;
+          continue;
+        }
+        const value = getTablePasteValue(matrix, r, c);
         targets.push({ row, col, value });
       }
     }
-    return { targets, skipped };
+    return { targets, skipped, selection, layout };
   }
 
   private async clearSelectedCells(): Promise<void> {
@@ -6500,8 +8671,7 @@ export class DatabaseView extends FileView {
 
   private createCurrentCellChange(row: RowData, col: ColumnDef, newValue: unknown): CellEditChange {
     // Option popovers can survive a refresh after grouped rows move, so re-read the latest value by file path.
-    const record = this.getRecordsForActiveDatabase().find((candidate) => candidate.file.path === row.file.path);
-    const frontmatter = record?.frontmatter || row.frontmatter;
+    const frontmatter = this.dataSource.getFrontmatterSnapshot(row.file);
     const key = this.getFrontmatterWriteKey(col);
     const oldExists = Object.prototype.hasOwnProperty.call(frontmatter, key);
     return {
@@ -6527,7 +8697,11 @@ export class DatabaseView extends FileView {
   }
 
   /** Explicit UI input adopts new option values; mechanical propagation keeps using applyCellChanges. */
-  private async applyExplicitOptionCellChanges(changes: CellEditChange[], label: string): Promise<void> {
+  private async applyExplicitOptionCellChanges(
+    changes: CellEditChange[],
+    label: string,
+    options: { preserveCellSelection?: boolean } = {},
+  ): Promise<void> {
     const entry = this.getCurrentEntry();
     if (!entry) return;
     const before = this.cloneDatabaseConfig(entry.config);
@@ -6544,13 +8718,17 @@ export class DatabaseView extends FileView {
       added = true;
     }
     if (!added) {
-      await this.commitAtomicCellChanges(changes, label);
+      await this.commitAtomicCellChanges(changes, label, options);
       return;
     }
-    await this.commitConfigAndCellChanges(entry, before, changes, label);
+    await this.commitConfigAndCellChanges(entry, before, changes, label, options);
   }
 
-  private async commitAtomicCellChanges(changes: CellEditChange[], label: string): Promise<void> {
+  private async commitAtomicCellChanges(
+    changes: CellEditChange[],
+    label: string,
+    options: { preserveCellSelection?: boolean } = {},
+  ): Promise<void> {
     const effective = changes.filter((change) => change.key !== "file.name" && !isReadonlyFileField(change.key));
     if (effective.length === 0) return;
     const applied: CellEditChange[] = [];
@@ -6566,7 +8744,11 @@ export class DatabaseView extends FileView {
         if (!(file instanceof TFile)) continue;
         const updates: Record<string, unknown> = {};
         for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
-        await this.dataSource.updateFrontmatter(file, updates);
+        await this.dataSource.updateFrontmatter(
+          file,
+          updates,
+          { sourceInstanceId: this.instanceId }
+        );
         applied.push(...pathChanges);
       }
     } catch (err) {
@@ -6576,8 +8758,9 @@ export class DatabaseView extends FileView {
     if (!applied.length) return;
     this.pushHistory({ type: "cells", label, changes: applied.map((change) => this.cloneCellChange(change)) });
     await this.syncComputedForCellChanges(applied);
-    this.clearCellSelection();
+    if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
+    if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
   }
 
@@ -6601,7 +8784,8 @@ export class DatabaseView extends FileView {
     entry: ViewEntry,
     before: DatabaseConfig,
     changes: CellEditChange[],
-    label: string
+    label: string,
+    options: { preserveCellSelection?: boolean } = {},
   ): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
     const applied: CellEditChange[] = [];
@@ -6623,7 +8807,11 @@ export class DatabaseView extends FileView {
         if (!(target instanceof TFile)) continue;
         const updates: Record<string, unknown> = {};
         for (const change of pathChanges) updates[change.key] = this.cloneFillValue(change.newValue);
-        await this.dataSource.updateFrontmatter(target, updates);
+        await this.dataSource.updateFrontmatter(
+          target,
+          updates,
+          { sourceInstanceId: this.instanceId }
+        );
         applied.push(...pathChanges);
       }
     } catch (err) {
@@ -6649,8 +8837,9 @@ export class DatabaseView extends FileView {
       cellChanges: changes.map((change) => this.cloneCellChange(change)),
     });
     await this.syncComputedForCellChanges(changes);
-    this.clearCellSelection();
+    if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
+    if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
   }
 
@@ -6672,16 +8861,17 @@ export class DatabaseView extends FileView {
     for (const entry of updatesByPath.values()) {
       const pathChanges = effectiveChanges.filter((change) => change.path === entry.file.path);
       try {
-        await this.dataSource.updateFrontmatter(entry.file, entry.updates);
+        await this.dataSource.updateFrontmatter(
+          entry.file,
+          entry.updates,
+          { sourceInstanceId: this.instanceId }
+        );
       } catch (err) {
         if (appliedChanges.length > 0) {
           this.pushHistory({ type: "cells", label, changes: appliedChanges });
           if (!options.preserveCellSelection) this.clearCellSelection();
           await this.refreshAfterSave();
-          if (options.preserveCellSelection) {
-            this.renderCellSelectionClasses();
-            this.renderSelectionStatusBar();
-          }
+          if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
           this.rerenderToolbar();
         }
         throw err;
@@ -6702,10 +8892,7 @@ export class DatabaseView extends FileView {
     }
     if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
-    if (options.preserveCellSelection) {
-      this.renderCellSelectionClasses();
-      this.renderSelectionStatusBar();
-    }
+    if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
   }
 
@@ -6722,31 +8909,39 @@ export class DatabaseView extends FileView {
   private pushHistory(entry: HistoryEntry): void {
     this.historyStack.unshift(entry);
     if (this.historyStack.length > 15) this.historyStack.length = 15;
+    if (!this.applyingHistory) {
+      this.redoStack = [];
+      this.cancelPendingCellCut();
+    }
     this.updateUndoAction();
   }
 
   async undoLastEdit(): Promise<void> {
-    const entry = this.historyStack[0];
+    await this.replayHistory("undo");
+  }
+
+  async redoLastEdit(): Promise<void> {
+    await this.replayHistory("redo");
+  }
+
+  private async replayHistory(direction: "undo" | "redo"): Promise<void> {
+    const source = direction === "undo" ? this.historyStack : this.redoStack;
+    const destination = direction === "undo" ? this.redoStack : this.historyStack;
+    const entry = source[0];
     if (!entry) {
-      new Notice(t("notice.nothingToUndo"));
+      new Notice(t(direction === "undo" ? "notice.nothingToUndo" : "notice.nothingToRedo"));
       this.updateUndoAction();
       return;
     }
     this.applyingHistory = true;
     try {
-      if (entry.type === "config") {
-        await this.undoConfigEntry(entry);
-        // Close stale cell option popovers that may survive the table refresh
-        this.containerEl_?.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
-      } else if (entry.type === "created") {
-        await this.undoCreatedEntry(entry);
-      } else {
-        await this.undoCellEntry(entry);
-      }
-      this.historyStack.shift();
-      new Notice(t("notice.undone", { action: entry.label }));
+      await this.applyHistoryEntry(entry, direction);
+      source.shift();
+      destination.unshift(entry);
+      if (destination.length > 15) destination.length = 15;
+      new Notice(t(direction === "undo" ? "notice.undone" : "notice.redone", { action: entry.label }));
     } catch (err) {
-      console.error("Note Database: failed to undo edit", err);
+      console.error(`Note Database: failed to ${direction} edit`, err);
       new Notice(t("errors.updateFailed", { error: String(err) }));
     } finally {
       this.applyingHistory = false;
@@ -6754,75 +8949,210 @@ export class DatabaseView extends FileView {
     }
   }
 
-  private async undoCellEntry(entry: CellHistoryEntry): Promise<void> {
-    const updatesByPath = new Map<string, { file: TFile; updates: Record<string, unknown> }>();
-    for (const change of entry.changes) {
-      const file = this.app.vault.getAbstractFileByPath(change.path);
-      if (!(file instanceof TFile)) continue;
-      const target = updatesByPath.get(change.path) || { file, updates: {} };
-      target.updates[change.key] = change.oldExists ? this.cloneFillValue(change.oldValue) : null;
-      updatesByPath.set(change.path, target);
+  private async applyHistoryEntry(entry: HistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    if (entry.type === "config") {
+      await this.applyConfigHistoryEntry(entry, direction);
+      // Config replay replaces view objects; close popovers holding detached references.
+      this.containerEl_?.querySelectorAll(".db-cell-option-popover").forEach((el) => el.remove());
+      return;
     }
-    for (const target of updatesByPath.values()) {
-      await this.dataSource.updateFrontmatter(target.file, target.updates);
+    if (entry.type === "created") {
+      await this.applyCreatedHistoryEntry(entry, direction);
+      return;
     }
-    await this.refreshAfterSave();
-    this.rerenderToolbar();
-    this.renderSelectionStatusBar();
+    await this.applyCellHistoryEntry(entry, direction);
   }
 
-  private async undoCreatedEntry(entry: CreatedHistoryEntry): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(entry.path);
-    if (file instanceof TFile) {
-      await this.dataSource.trashNote(file);
-    }
-    if (this.pendingNewFilePath === entry.path) this.clearPendingNewRow();
-    await this.refreshAfterSave();
-    this.rerenderToolbar();
-  }
-
-  private async undoConfigEntry(entry: ConfigHistoryEntry): Promise<void> {
-    const index = this.viewEntries.findIndex((candidate) => candidate.sourcePath === entry.dbPath);
-    if (index < 0) return;
-    const target = this.viewEntries[index];
-    this.replaceDatabaseConfig(target.config, entry.before);
-    this.configSnapshots.set(this.getConfigHistoryKey(target), this.cloneDatabaseConfig(target.config));
-    if (entry.viewId) {
-      const viewIndex = target.config.views.findIndex((view) => view.id === entry.viewId);
-      if (viewIndex >= 0) this.currentViewIndex = viewIndex;
-    }
-    this.currentDbIndex = index;
-    this.viewStateStore.clear();
-    this.viewState = undefined;
-    const file = this.app.vault.getAbstractFileByPath(target.sourcePath);
-    if (file instanceof TFile) {
-      this.suppressDataReload(2500);
-      await this.dataSource.updateViewDefFile(file, target.config, this.getCurrentDatabaseMutationTarget());
-    }
-    if (entry.cellChanges?.length) {
-      await this.applyFrontmatterChanges(entry.cellChanges, "old");
-      await this.refreshAfterSave();
-    }
-    if (entry.createdPaths?.length) {
-      for (const path of entry.createdPaths) {
-        const created = this.app.vault.getAbstractFileByPath(path);
-        if (created instanceof TFile) await this.dataSource.trashNote(created);
-        if (this.pendingNewFilePath === path) this.clearPendingNewRow();
+  private async applyCellHistoryEntry(entry: CellHistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    if (direction === "redo") {
+      for (const created of entry.createdFiles || []) {
+        if (created.content == null) {
+          throw new Error(`Cannot redo create because no file snapshot is available: ${created.path}`);
+        }
+        if (this.app.vault.getAbstractFileByPath(created.path)) {
+          throw new Error(`Cannot redo create because the path already exists: ${created.path}`);
+        }
       }
-      await this.refreshAfterSave();
+      for (const created of entry.createdFiles || []) await this.restoreCreatedFile(created);
     }
-    // Undo swaps the view objects inside the database config (the snapshot is
-    // deep-cloned), so any open toolbar config popover (calendar / chart /
-    // timeline) now holds a detached pre-undo view reference — its edits would
-    // never reach the live config. Close them so the next open binds to the
-    // restored config. Filter/sort/column/view-config panels are left alone;
-    // they re-read live config on the refresh below.
-    this.toolbarRenderer.closePopovers();
-    this.chartToolbarRenderer.closePopover();
-    this.calendarToolbarRenderer.closePopover();
+    const valueDirection = direction === "undo" ? "old" : "new";
+    if (entry.changes.length > 0) {
+      await this.applyFrontmatterChanges(entry.changes, valueDirection);
+      await this.syncComputedForCellChanges(this.getDirectedHistoryChanges(entry.changes, direction));
+    }
+    if (direction === "undo") {
+      for (const created of entry.createdFiles || []) await this.removeCreatedFile(created);
+    }
+    await this.refreshAfterSave();
+    if (this.cellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
-    if (!entry.cellChanges?.length && !entry.createdPaths?.length) this.refresh();
-    this.renderViewConfigPanel();
+  }
+
+  private getDirectedHistoryChanges(
+    changes: CellEditChange[],
+    direction: "undo" | "redo",
+  ): CellEditChange[] {
+    if (direction === "redo") return changes.map((change) => this.cloneCellChange(change));
+    return changes.map((change) => ({
+      ...this.cloneCellChange(change),
+      newValue: change.oldExists ? this.cloneFillValue(change.oldValue) : null,
+    }));
+  }
+
+  private async applyCreatedHistoryEntry(entry: CreatedHistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    if (direction === "undo") await this.removeCreatedFile(entry.file);
+    else await this.restoreCreatedFile(entry.file);
+    await this.refreshAfterSave();
+    this.rerenderToolbar();
+  }
+
+  private async removeCreatedFile(snapshot: CreatedFileSnapshot): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(snapshot.path);
+    if (!(file instanceof TFile)) return;
+    snapshot.content = await this.app.vault.cachedRead(file);
+    await this.dataSource.trashNote(file, { sourceInstanceId: this.instanceId });
+    this.pendingNewRecords.delete(snapshot.path);
+    if (this.pendingNewFilePath === snapshot.path) this.clearPendingNewRow();
+  }
+
+  private async restoreCreatedFile(snapshot: CreatedFileSnapshot): Promise<void> {
+    if (this.app.vault.getAbstractFileByPath(snapshot.path)) {
+      throw new Error(`Cannot redo create because the path already exists: ${snapshot.path}`);
+    }
+    if (snapshot.content == null) {
+      throw new Error(`Cannot redo create because no file snapshot is available: ${snapshot.path}`);
+    }
+    this.dataSource.markPluginWrite(snapshot.path, this.instanceId);
+    await this.app.vault.create(snapshot.path, snapshot.content);
+  }
+
+  private async applyConfigHistoryEntry(entry: ConfigHistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    const index = this.viewEntries.findIndex((candidate) => candidate.sourcePath === entry.dbPath);
+    if (index < 0) throw new Error(`Cannot replay history because the database is unavailable: ${entry.dbPath || entry.dbId}`);
+    if (direction === "redo") {
+      const movingSourceKeys = new Set((entry.fileRenames || []).map((change) => (
+        change.oldPath.normalize("NFC").toLowerCase()
+      )));
+      for (const created of entry.createdFiles || []) {
+        if (created.content == null) {
+          throw new Error(`Cannot redo create because no file snapshot is available: ${created.path}`);
+        }
+        if (
+          this.app.vault.getAbstractFileByPath(created.path) &&
+          !movingSourceKeys.has(created.path.normalize("NFC").toLowerCase())
+        ) {
+          throw new Error(`Cannot redo create because the path already exists: ${created.path}`);
+        }
+      }
+    }
+    const target = this.viewEntries[index];
+    const previous = this.cloneDatabaseConfig(target.config);
+    const renameDirection = direction === "undo" ? "old" : "new";
+    const valueDirection = direction === "undo" ? "old" : "new";
+    const removedCreated: CreatedFileSnapshot[] = [];
+    const restoredCreated: CreatedFileSnapshot[] = [];
+    let historyChanges: CellEditChange[] = [];
+    let cellValuesApplied = false;
+    let renamed = false;
+    try {
+      // Undo must remove newly-created files first: a created path may intentionally reuse a
+      // source path that the rename transaction freed (A.md -> B.md, then create A.md).
+      if (direction === "undo") {
+        for (const created of entry.createdFiles || []) {
+          const file = this.app.vault.getAbstractFileByPath(created.path);
+          if (!(file instanceof TFile)) continue;
+          await this.removeCreatedFile(created);
+          removedCreated.push(created);
+        }
+      }
+      if (entry.fileRenames?.length) {
+        await this.executeFileRenamesAtomically(entry.fileRenames, renameDirection);
+        this.remapTransientRecordPaths(entry.fileRenames, renameDirection);
+        renamed = true;
+      }
+      this.replaceDatabaseConfig(target.config, direction === "undo" ? entry.before : entry.after);
+      this.configSnapshots.set(this.getConfigHistoryKey(target), this.cloneDatabaseConfig(target.config));
+      if (entry.viewId) {
+        const viewIndex = target.config.views.findIndex((view) => view.id === entry.viewId);
+        if (viewIndex >= 0) this.currentViewIndex = viewIndex;
+      }
+      this.currentDbIndex = index;
+      this.viewStateStore.clear();
+      this.viewState = undefined;
+      const file = this.app.vault.getAbstractFileByPath(target.sourcePath);
+      if (file instanceof TFile) {
+        this.suppressDataReload(2500);
+        await this.dataSource.updateViewDefFile(file, target.config, this.getCurrentDatabaseMutationTarget());
+      }
+      if (entry.cellChanges?.length) {
+        historyChanges = entry.fileRenames?.length
+          ? this.remapCellChangePaths(entry.cellChanges, entry.fileRenames, renameDirection)
+          : entry.cellChanges.map((change) => this.cloneCellChange(change));
+        await this.applyFrontmatterChangesAtomically(historyChanges, valueDirection);
+        cellValuesApplied = true;
+        await this.syncComputedForCellChanges(this.getDirectedHistoryChanges(historyChanges, direction));
+      }
+      if (direction === "redo") {
+        for (const created of entry.createdFiles || []) {
+          await this.restoreCreatedFile(created);
+          restoredCreated.push(created);
+        }
+      }
+      this.toolbarRenderer.closePopovers();
+      this.chartToolbarRenderer.closePopover();
+      this.calendarToolbarRenderer.closePopover();
+      await this.refreshAfterSave();
+      if (this.cellSelection) this.restorePreservedCellSelectionAfterRefresh();
+      this.rerenderToolbar();
+      this.renderViewConfigPanel();
+    } catch (err) {
+      if (direction === "redo") {
+        for (const created of [...restoredCreated].reverse()) {
+          try {
+            await this.removeCreatedFile(created);
+          } catch (rollbackErr) {
+            console.error("Note Database: failed to remove restored file after history replay failure", rollbackErr);
+          }
+        }
+      }
+      if (cellValuesApplied) {
+        try {
+          await this.applyFrontmatterChangesAtomically(historyChanges, valueDirection === "new" ? "old" : "new");
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to restore cell values after history replay failure", rollbackErr);
+        }
+      }
+      this.replaceDatabaseConfig(target.config, previous);
+      this.configSnapshots.set(this.getConfigHistoryKey(target), this.cloneDatabaseConfig(target.config));
+      const file = this.app.vault.getAbstractFileByPath(target.sourcePath);
+      if (file instanceof TFile) {
+        try {
+          this.suppressDataReload(2500);
+          await this.dataSource.updateViewDefFile(file, target.config, this.getCurrentDatabaseMutationTarget());
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to restore config after history replay failure", rollbackErr);
+        }
+      }
+      if (renamed && entry.fileRenames?.length) {
+        const rollbackDirection = renameDirection === "new" ? "old" : "new";
+        try {
+          await this.executeFileRenamesAtomically(entry.fileRenames, rollbackDirection);
+          this.remapTransientRecordPaths(entry.fileRenames, rollbackDirection);
+        } catch (rollbackErr) {
+          console.error("Note Database: failed to roll back history file rename", rollbackErr);
+        }
+      }
+      if (direction === "undo") {
+        for (const created of removedCreated) {
+          try {
+            await this.restoreCreatedFile(created);
+          } catch (rollbackErr) {
+            console.error("Note Database: failed to restore removed file after history replay failure", rollbackErr);
+          }
+        }
+      }
+      throw err;
+    }
   }
 
   private replaceDatabaseConfig(target: DatabaseConfig, source: DatabaseConfig): void {
@@ -7227,6 +9557,33 @@ export class DatabaseView extends FileView {
     }
   }
 
+  private async createBoardGroup(field: string, name: string, color: StatusColor): Promise<boolean> {
+    const config = this.getConfig();
+    const entry = this.getCurrentEntry();
+    const column = config?.schema.columns.find((candidate) => candidate.key === field);
+    if (!config || !entry || !column || column.type === "computed" || column.type === "rollup") return false;
+    const displayType = getColumnDisplayType(column, config.schema.computedFields);
+    if (displayType !== "status" && displayType !== "select" && displayType !== "multi-select") return false;
+    const registration = planOptionRegistration(column, name);
+    if (registration.addedOptions.length === 0) {
+      new Notice(t("board.groupExists", { name: name.trim() }));
+      return false;
+    }
+    registration.addedOptions[0].color = color;
+    const before = this.cloneDatabaseConfig(entry.config);
+    column.statusOptions = registration.options;
+    if (registration.clearPresetId) column.statusPresetId = undefined;
+    // “新建分组”必须立即产生一个可见的空列，即使用户此前关闭过空分组显示。
+    setShowEmptyGroups(config, field, true);
+    try {
+      await this.commitConfigAndCellChanges(entry, before, [], t("undo.groupConfig"));
+      return true;
+    } catch (error) {
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+      return false;
+    }
+  }
+
   private async moveRowToGroupAndPosition(
     row: RowData,
     field: string,
@@ -7500,8 +9857,8 @@ export class DatabaseView extends FileView {
     if (col.key === "file.name") return this.getFileDisplayName(row);
     const value = isBaseFileField(col.key)
       ? getRowFileFieldValue(row, col.key)
-      : col.type === "computed" && col.computedKey
-        ? row.computed[col.computedKey]
+      : col.type === "computed" || col.type === "rollup"
+        ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
         : row.frontmatter[col.key];
     if (value == null) return "";
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, value).join(", ");
@@ -7558,24 +9915,49 @@ export class DatabaseView extends FileView {
     }
 
     if (Object.keys(updates).length > 0) {
-      await this.dataSource.updateFrontmatter(file, updates);
+      await this.dataSource.updateFrontmatter(
+        file,
+        updates,
+        { sourceInstanceId: this.instanceId }
+      );
     }
   }
 
-  private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
-    if (this.computedSyncTimer !== null) window.clearTimeout(this.computedSyncTimer);
+  private scheduleComputedSync(
+    config: ViewConfig,
+    rows: RowData[],
+    syncScope: ComputedSyncScope = "database"
+  ): void {
+    if (config.schema.computedFields.length === 0 || !this.isAutomaticComputedSync()) {
+      if (this.computedSyncTimer !== null) this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
+      this.computedSyncTimer = null;
+      this.pendingComputedSync.clear();
+      return;
+    }
+    // A deleted/non-matching changed path may produce no incremental rows.
+    // It must not postpone useful work already waiting in the queue.
+    if (syncScope === "rows" && rows.length === 0) return;
+    if (this.computedSyncTimer !== null) this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
     this.computedSyncTimer = null;
-    if (config.schema.computedFields.length === 0 || !this.isAutomaticComputedSync()) return;
+    this.pendingComputedSync.merge(rows, syncScope);
     const entry = this.getCurrentEntry();
     const syncConfig = JSON.parse(JSON.stringify(config)) as ViewConfig;
     const recordConfig = entry
       ? this.cloneDatabaseConfig(this.getEffectiveConfig(entry.config, config))
       : undefined;
     const sourcePath = entry?.sourcePath;
-    this.computedSyncTimer = window.setTimeout(() => {
+    this.computedSyncTimer = this.getRefreshWindow().setTimeout(() => {
       this.computedSyncTimer = null;
-      if (sourcePath && this.getCurrentEntry()?.sourcePath !== sourcePath) return;
-      void this.syncComputedFieldsNow(false, syncConfig, recordConfig, rows).catch((err) => {
+      if (sourcePath && this.getCurrentEntry()?.sourcePath !== sourcePath) {
+        this.pendingComputedSync.clear();
+        return;
+      }
+      const pending = this.pendingComputedSync.drain();
+      if (this.syncingComputed) {
+        this.scheduleComputedSync(syncConfig, pending.rows, pending.scope);
+        return;
+      }
+      void this.syncComputedFieldsNow(false, syncConfig, recordConfig, pending.rows, false, pending.scope).catch((err) => {
         console.error("Note Database: failed to sync computed fields", err);
         new Notice(t("errors.updateFailed", { error: String(err) }));
       });
@@ -7587,7 +9969,8 @@ export class DatabaseView extends FileView {
     config = this.getConfig(),
     recordConfig?: DatabaseConfig,
     fallbackRows: RowData[] = this.rows,
-    force = false
+    force = false,
+    syncScope: ComputedSyncScope = "database"
   ): Promise<void> {
     if (!config || this.syncingComputed) return;
     const activeDb = recordConfig || this.getCurrentEntry()?.config;
@@ -7596,10 +9979,15 @@ export class DatabaseView extends FileView {
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
       const db = activeDb;
-      const records = db ? this.dataSource.getRecordsForDatabase(recordConfig || this.getEffectiveConfig(db, config)) : fallbackRows.map((row) => ({
+      const scopedRecords = fallbackRows.map((row) => ({
         file: row.file,
         frontmatter: row.frontmatter,
       }));
+      const records = syncScope === "rows"
+        ? scopedRecords
+        : db
+          ? this.dataSource.getRecordsForDatabase(recordConfig || this.getEffectiveConfig(db, config))
+          : scopedRecords;
       let changed = 0;
       for (const record of records) {
         const computed = evaluateComputedFields(
@@ -7618,7 +10006,11 @@ export class DatabaseView extends FileView {
           }
         }
         if (Object.keys(updates).length > 0) {
-          await this.dataSource.updateFrontmatter(record.file, updates);
+          await this.dataSource.updateFrontmatter(
+            record.file,
+            updates,
+            { sourceInstanceId: this.instanceId }
+          );
           changed += 1;
         }
       }
@@ -7675,6 +10067,8 @@ export class DatabaseView extends FileView {
         showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderRowRecordIcon(parent, r, view, compact),
+        applyConditionalFormat: (element, r, view, targetField) =>
+          applyConditionalFormat(element, r, view, this.getActiveDb(), targetField),
         isReadOnly: false,
       },
     });

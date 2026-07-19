@@ -135,7 +135,7 @@ export class PropertyService {
     type: ColumnDef["type"]
   ): Promise<FrontmatterBatchResult> {
     const result: FrontmatterBatchResult = { changed: 0, skipped: 0 };
-    if (!key || isFileFieldKey(key) || type === "computed") return result;
+    if (!key || isFileFieldKey(key) || type === "computed" || type === "rollup") return result;
 
     for (const file of files) {
       await this.processFrontmatter(file, (frontmatter) => {

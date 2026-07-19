@@ -28,6 +28,9 @@ export interface TableRendererActions {
   setupColumnHeader(th: HTMLElement, col: ColumnDef): void;
   setupRow(tr: HTMLElement, row: RowData, context?: RowCreateContext): void;
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void;
+  renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   setupFillHandle?(td: HTMLElement, row: RowData, col: ColumnDef): void;
   moveRowToPosition?(movedPath: string, beforePath?: string, afterPath?: string): void;
   moveRowsToGroup?(row: RowData, field: string, fromGroupKey: string, toGroupKey: string): void | Promise<void>;
@@ -71,7 +74,7 @@ export class TableRenderer {
     const tbody = table.createEl("tbody");
     this.renderRows(tbody, config, rows, visibleColumns);
     if (!this.actions.hideCreateEntry) {
-      this.renderNewRow(tbody, visibleColumns.length + 1, undefined, rows);
+      this.renderNewRow(tbody, visibleColumns.length + this.getUtilityColumnCount(config), undefined, rows);
     }
   }
 
@@ -100,6 +103,9 @@ export class TableRenderer {
     for (const group of groups) {
       const groupHeader = container.createEl("div", {
         cls: "db-group-header",
+        attr: {
+          "data-note-database-group-key": group.key,
+        },
       });
       if (groupField) this.setupGroupDropTarget(groupHeader, groupField, group.key);
       groupHeader.style.minWidth = `${tableMinWidth}px`;
@@ -123,10 +129,12 @@ export class TableRenderer {
         text: formatGroupKeyDisplay(config, groupField, group.key),
       });
       label.createSpan({ cls: "db-group-count", text: String(group.count) });
+      this.actions.renderGroupSummaries?.(groupHeader, group.rows, config);
 
       if (collapsed) continue;
 
       const tableWrap = container.createDiv({ cls: "db-table-wrap" });
+      tableWrap.setAttr("data-note-database-group-key", group.key);
       if (groupField) this.setupGroupDropTarget(tableWrap, groupField, group.key);
       const table = tableWrap.createEl("table", { cls: "db-table" });
       table.toggleClass("is-create-entry-hidden", Boolean(this.actions.hideCreateEntry));
@@ -142,10 +150,155 @@ export class TableRenderer {
       if (!this.actions.hideCreateEntry) {
         const computedGroup = Boolean(groupField) && isComputedGroupField(config, groupField);
         const defaults = (!computedGroup && groupField) ? this.getGroupDefaults(config, groupField, group.key) : undefined;
-        this.renderNewRow(tbody, visibleColumns.length + 1, defaults, group.rows, computedGroup);
+        this.renderNewRow(tbody, visibleColumns.length + this.getUtilityColumnCount(config), defaults, group.rows, computedGroup);
       }
       if (groupField) renderGroupExpandControls(tableWrap, config, groupField, group.key, group.rows.length, this.actions);
     }
+  }
+
+  /**
+   * Replace only changed rows in an ungrouped table. The caller must already
+   * have rebuilt the row pipeline; this method refuses the patch unless the
+   * rendered path order and visible column schema are unchanged.
+   */
+  patchUngroupedRows(
+    container: HTMLElement,
+    config: ViewConfig,
+    rows: RowData[],
+    changedPaths: ReadonlySet<string>
+  ): boolean {
+    const table = container.querySelector<HTMLElement>(":scope > .db-table-wrap > table.db-table");
+    const tbody = table?.querySelector<HTMLElement>(":scope > tbody");
+    if (!table || !tbody) return false;
+
+    const renderedRows = Array.from(
+      tbody.querySelectorAll<HTMLElement>(":scope > tr[data-note-database-row-path]")
+    );
+    const renderedPaths = renderedRows.map((row) => row.getAttribute("data-note-database-row-path") || "");
+    const nextPaths = rows.map((row) => row.file.path);
+    if (renderedPaths.length !== nextPaths.length ||
+        renderedPaths.some((path, index) => path !== nextPaths[index])) {
+      return false;
+    }
+
+    const visibleColumns = this.actions.getVisibleColumns(config, rows);
+    const renderedColumnKeys = Array.from(
+      table.querySelectorAll<HTMLElement>(":scope > thead [data-note-database-column-key]")
+    ).map((header) => header.getAttribute("data-note-database-column-key") || "");
+    if (renderedColumnKeys.length !== visibleColumns.length ||
+        renderedColumnKeys.some((key, index) => key !== visibleColumns[index]?.key)) {
+      return false;
+    }
+
+    this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
+    const rowByPath = this.rowByPath;
+    for (const oldRow of renderedRows) {
+      const path = oldRow.getAttribute("data-note-database-row-path") || "";
+      if (!changedPaths.has(path)) continue;
+      const row = rowByPath.get(path);
+      if (!row) return false;
+      const replacement = this.renderRow(tbody, config, row, rows, visibleColumns);
+      oldRow.replaceWith(replacement);
+    }
+    return true;
+  }
+
+  /**
+   * Replace only changed rows in a grouped table. Group headers, counts,
+   * collapsed state, visible row order, and column schemas must all still
+   * match. Any structural change falls back to the normal full render.
+   */
+  patchGroupedRows(
+    container: HTMLElement,
+    config: ViewConfig,
+    rows: RowData[],
+    groups: TableGroup[],
+    groupField: string,
+    changedPaths: ReadonlySet<string>
+  ): boolean {
+    const grouped = container.querySelector<HTMLElement>(":scope > .db-grouped-table");
+    if (!grouped) return false;
+    // Group summaries depend on every row in the group. Until their DOM has a
+    // dedicated patch path, prefer the normal grouped render over stale totals.
+    if (config.summaryRules && config.summaryRules.length > 0) return false;
+
+    const renderedHeaders = Array.from(
+      grouped.querySelectorAll<HTMLElement>(":scope > .db-group-header")
+    );
+    if (renderedHeaders.length !== groups.length) return false;
+
+    const visibleColumns = this.actions.getVisibleColumns(config, rows);
+    const renderedRowsByGroup: Array<{
+      tbody: HTMLElement;
+      renderedRows: HTMLElement[];
+      group: TableGroup;
+      visibleRows: RowData[];
+    }> = [];
+
+    for (let index = 0; index < groups.length; index += 1) {
+      const group = groups[index];
+      const header = renderedHeaders[index];
+      if (header.getAttribute("data-note-database-group-key") !== group.key) return false;
+      if (header.querySelector<HTMLElement>(".db-group-count")?.textContent !== String(group.count)) return false;
+
+      const collapsed = Boolean(this.actions.isGroupCollapsed?.(groupField, group.key));
+      if (header.classList.contains("is-collapsed") !== collapsed) return false;
+      if (collapsed) continue;
+
+      const tableWrap = header.nextElementSibling as HTMLElement | null;
+      if (!tableWrap?.classList.contains("db-table-wrap") ||
+          tableWrap.getAttribute("data-note-database-group-key") !== group.key) {
+        return false;
+      }
+      const table = tableWrap.querySelector<HTMLElement>(":scope > table.db-table");
+      const tbody = table?.querySelector<HTMLElement>(":scope > tbody");
+      if (!table || !tbody) return false;
+
+      const renderedColumnKeys = Array.from(
+        table.querySelectorAll<HTMLElement>(":scope > thead [data-note-database-column-key]")
+      ).map((headerEl) => headerEl.getAttribute("data-note-database-column-key") || "");
+      if (renderedColumnKeys.length !== visibleColumns.length ||
+          renderedColumnKeys.some((key, columnIndex) => key !== visibleColumns[columnIndex]?.key)) {
+        return false;
+      }
+
+      const visibleCount = getGroupVisibleCount(config, groupField, group.key, group.rows.length);
+      const visibleRows = group.rows.slice(0, visibleCount);
+      const renderedRows = Array.from(
+        tbody.querySelectorAll<HTMLElement>(":scope > tr[data-note-database-row-path]")
+      );
+      const renderedPaths = renderedRows.map((rowEl) =>
+        rowEl.getAttribute("data-note-database-row-path") || ""
+      );
+      const nextPaths = visibleRows.map((row) => row.file.path);
+      if (renderedPaths.length !== nextPaths.length ||
+          renderedPaths.some((path, rowIndex) => path !== nextPaths[rowIndex])) {
+        return false;
+      }
+      renderedRowsByGroup.push({ tbody, renderedRows, group, visibleRows });
+    }
+
+    this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
+    for (const { tbody, renderedRows, group, visibleRows } of renderedRowsByGroup) {
+      for (const oldRow of renderedRows) {
+        const path = oldRow.getAttribute("data-note-database-row-path") || "";
+        if (!changedPaths.has(path)) continue;
+        const row = this.rowByPath.get(path);
+        if (!row) return false;
+        const replacement = this.renderRow(
+          tbody,
+          config,
+          row,
+          visibleRows,
+          visibleColumns,
+          groupField,
+          group.key,
+          groups
+        );
+        oldRow.replaceWith(replacement);
+      }
+    }
+    return true;
   }
 
   private clearTable(container: HTMLElement): void {
@@ -163,6 +316,13 @@ export class TableRenderer {
       selectionCol.setAttr("width", String(selectionWidth));
       selectionCol.style.width = `${selectionWidth}px`;
     }
+    if (this.shouldRenderRecordIcon(config)) {
+      const iconCol = colgroup.createEl("col");
+      const iconWidth = this.getRecordIconColumnWidth();
+      iconCol.addClass("db-record-icon-colgroup");
+      iconCol.setAttr("width", String(iconWidth));
+      iconCol.style.width = `${iconWidth}px`;
+    }
     columns.forEach((col, index) => {
       const colEl = colgroup.createEl("col");
       colEl.setAttr("data-note-database-column-key", col.key);
@@ -173,13 +333,11 @@ export class TableRenderer {
   }
 
   private getTableMinWidth(config: ViewConfig, columns: ColumnDef[]): number {
-    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
-    return calculateTableMinWidth(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)));
+    return calculateTableMinWidth(this.getUtilityColumnsWidth(config), columns.map((col) => this.getColumnWidth(config, col)));
   }
 
   private getTableWidth(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): number {
-    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
-    return getTableLayout(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)), availableWidth).tableWidth;
+    return getTableLayout(this.getUtilityColumnsWidth(config), columns.map((col) => this.getColumnWidth(config, col)), availableWidth).tableWidth;
   }
 
   private applyTableWidth(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], availableWidth = 0): void {
@@ -189,8 +347,7 @@ export class TableRenderer {
   }
 
   private getRenderedColumnWidths(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): number[] {
-    const selectionWidth = this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth();
-    return getTableLayout(selectionWidth, columns.map((col) => this.getColumnWidth(config, col)), availableWidth).columnWidths;
+    return getTableLayout(this.getUtilityColumnsWidth(config), columns.map((col) => this.getColumnWidth(config, col)), availableWidth).columnWidths;
   }
 
   private getColumnWidth(config: ViewConfig, col: ColumnDef): number {
@@ -199,6 +356,23 @@ export class TableRenderer {
 
   private getSelectionColumnWidth(): number {
     return this.isPhoneLayout() ? 48 : 40;
+  }
+
+  private getRecordIconColumnWidth(): number {
+    return 28;
+  }
+
+  private shouldRenderRecordIcon(config: ViewConfig): boolean {
+    return config.showRecordIcon === true && typeof this.actions.renderRecordIcon === "function";
+  }
+
+  private getUtilityColumnsWidth(config: ViewConfig): number {
+    return (this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth())
+      + (this.shouldRenderRecordIcon(config) ? this.getRecordIconColumnWidth() : 0);
+  }
+
+  private getUtilityColumnCount(config: ViewConfig): number {
+    return (this.actions.isReadOnly ? 0 : 1) + (this.shouldRenderRecordIcon(config) ? 1 : 0);
   }
 
   private getAvailableTableWidth(tableWrap: HTMLElement): number {
@@ -221,6 +395,12 @@ export class TableRenderer {
       selectAll.onchange = () => {
         this.actions.toggleRowsSelected(rows, selectAll.checked);
       };
+    }
+    if (this.shouldRenderRecordIcon(config)) {
+      headerRow.createEl("th", {
+        cls: "db-record-icon-col",
+        attr: { "aria-label": t("recordIcon.icons"), title: t("recordIcon.icons") },
+      });
     }
     for (const col of columns) {
       const th = headerRow.createEl("th");
@@ -265,41 +445,67 @@ export class TableRenderer {
     groups?: TableGroup[]
   ): void {
     for (const row of rows) {
-      const tr = tbody.createEl("tr", {
-        attr: { "data-note-database-row-path": row.file.path },
-      });
-      this.actions.setupRow(tr, row, {
-        visibleRows: rows,
-        groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
-      });
-      let selectTd: HTMLElement | undefined;
-      if (!this.actions.isReadOnly) {
-        selectTd = tr.createEl("td", { cls: "db-select-col" });
-        const selectInner = selectTd.createDiv({ cls: "db-select-inner" });
-        // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
-        // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
-        this.setupRowDrag(selectInner, tr, row, rows, config, groupField, groupKey);
-        if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
-          this.renderMobileMoveButton(selectInner, config, row, rows, groupField, groupKey, groups);
-        }
-        const cb = selectInner.createEl("input", { attr: { type: "checkbox" } });
-        cb.checked = this.actions.isRowSelected(row);
-        cb.onclick = (event) => {
-          event.stopPropagation();
-          this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
-        };
-      }
-      for (const col of columns) {
-        const td = tr.createEl("td", {
-          attr: {
-            "data-note-database-row-path": row.file.path,
-            "data-note-database-column-key": col.key,
-          },
-        });
-        this.actions.renderCell(td, row, col);
-        if (!this.actions.isReadOnly) this.actions.setupFillHandle?.(td, row, col);
-      }
+      this.renderRow(tbody, config, row, rows, columns, groupField, groupKey, groups);
     }
+  }
+
+  private renderRow(
+    tbody: HTMLElement,
+    config: ViewConfig,
+    row: RowData,
+    rows: RowData[],
+    columns: ColumnDef[],
+    groupField?: string,
+    groupKey?: string,
+    groups?: TableGroup[]
+  ): HTMLElement {
+    const tr = tbody.createEl("tr", {
+      attr: { "data-note-database-row-path": row.file.path },
+    });
+    this.actions.applyConditionalFormat?.(tr, row, config);
+    if (groupField && groupKey != null) {
+      tr.setAttr("data-note-database-group-field", groupField);
+      tr.setAttr("data-note-database-group-key", groupKey);
+    }
+    this.actions.setupRow(tr, row, {
+      visibleRows: rows,
+      groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+    });
+    if (!this.actions.isReadOnly) {
+      const selectTd = tr.createEl("td", { cls: "db-select-col" });
+      const selectInner = selectTd.createDiv({ cls: "db-select-inner" });
+      // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
+      // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
+      this.setupRowDrag(selectInner, tr, row, rows, config, groupField, groupKey);
+      if (this.isPhoneLayout() && (this.canManualReorder(config) || Boolean(groupField && groups?.length))) {
+        this.renderMobileMoveButton(selectInner, config, row, rows, groupField, groupKey, groups);
+      }
+      const cb = selectInner.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = this.actions.isRowSelected(row);
+      cb.onclick = (event) => {
+        event.stopPropagation();
+        this.actions.toggleRowSelected(row, !this.actions.isRowSelected(row), event);
+      };
+    }
+    if (this.shouldRenderRecordIcon(config)) {
+      const iconTd = tr.createEl("td", { cls: "db-record-icon-col" });
+      const icon = this.actions.renderRecordIcon?.(iconTd, row, config, true);
+      // Keep spreadsheet roving-tabindex authoritative: the gutter is clickable,
+      // but must not become an extra Tab stop between real data cells.
+      icon?.setAttr("tabindex", "-1");
+    }
+    for (const col of columns) {
+      const td = tr.createEl("td", {
+        attr: {
+          "data-note-database-row-path": row.file.path,
+          "data-note-database-column-key": col.key,
+        },
+      });
+      this.actions.renderCell(td, row, col);
+      this.actions.applyConditionalFormat?.(td, row, config, col.key);
+      if (!this.actions.isReadOnly) this.actions.setupFillHandle?.(td, row, col);
+    }
+    return tr;
   }
 
   /** Phone layouts use a compact menu instead of HTML drag and drop. */

@@ -1,10 +1,10 @@
-import { TFile, Vault, MetadataCache, App, normalizePath, stringifyYaml, EventRef, getAllTags } from "obsidian";
-import { ChartReferenceLine, ColumnDef, DatabaseConfig, DateGroupMode, FilterRule, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
+import { TFile, Vault, MetadataCache, App, normalizePath, parseYaml, stringifyYaml, EventRef, getAllTags } from "obsidian";
+import { ChartReferenceLine, ColumnDef, ConditionalFormatRule, DatabaseConfig, DateGroupMode, FilterRule, NewRecordTemplateConfig, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
 import { safeString } from "./SafeString";
-import { hasObsidianTagValue, normalizeStatusPresets, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
+import { hasObsidianTagValue, normalizeStatusPresets, OPTION_COLORS, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { normalizeComputedSyncMode } from "./ComputedSync";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
 import { absorbTypeFilterIntoRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
@@ -25,8 +25,29 @@ export interface NoteRecord {
   frontmatter: Record<string, unknown>;
 }
 
-export type DataChangeCallback = () => void;
+export type DataChangeKind = "changed" | "created" | "deleted" | "renamed";
+export type DataChangeOrigin = "plugin" | "external";
+type DataChangeSignal = "metadata" | "vault";
+export interface DataChange {
+  kind: DataChangeKind;
+  path: string;
+  oldPath?: string;
+  origin: DataChangeOrigin;
+  sourceInstanceId?: string;
+}
+export interface DataChangeBatch {
+  changes: DataChange[];
+}
+export type DataChangeCallback = (batch: DataChangeBatch) => void;
 export type FrontmatterMutator = (frontmatter: Record<string, unknown>) => void;
+export interface DataWriteContext {
+  sourceInstanceId?: string;
+}
+
+interface OwnedWriteCredit {
+  expiresAt: number;
+  sourceInstanceId?: string;
+}
 
 export interface ViewConfigMutation {
   dbId?: string;
@@ -55,6 +76,13 @@ export class DataSource {
   private viewConfigListeners: ViewConfigMutationCallback[] = [];
   private eventRefs: { offref: () => void }[] = [];
   private notifyTimer: number | null = null;
+  private modifyRecheckTimers = new Map<string, number>();
+  private pendingChanges = new Map<string, DataChange>();
+  private ownedPathUntil = new Map<string, {
+    metadataEvents: OwnedWriteCredit[];
+    vaultEvents: OwnedWriteCredit[];
+  }>();
+  private recordCache: Map<string, NoteRecord> | null = null;
   private frontmatterOverrides = new Map<string, { values: Record<string, unknown>; expiresAt: number }>();
   private viewDefOverrides = new Map<string, { config: DatabaseConfig; expiresAt: number }>();
   /** Per-file write queue to serialize processFrontMatter calls on the same file */
@@ -68,10 +96,20 @@ export class DataSource {
 
   /** Serialize async writes to the same file path to prevent overlapping processFrontMatter.
    *  Errors from a previous write do not block subsequent writes in the queue. */
-  private enqueueWrite(path: string, operation: () => Promise<void>): Promise<void> {
+  private enqueueWrite(
+    path: string,
+    operation: () => Promise<void>,
+    context?: DataWriteContext
+  ): Promise<void> {
     const prev = this.writeQueues.get(path) ?? Promise.resolve();
     // Swallow previous error so the queue is never poisoned, then run this operation
-    const next = prev.catch(() => {}).then(() => operation());
+    const next = prev.catch(() => {}).then(() => {
+      const credit = this.markOwnedPath(path, context?.sourceInstanceId);
+      return operation().catch((error) => {
+        this.releaseOwnedCredit(path, credit);
+        throw error;
+      });
+    });
     this.writeQueues.set(path, next);
     // Clean up when this slot is the tail of the chain (whether fulfilled or rejected)
     const cleanup = () => {
@@ -109,15 +147,44 @@ export class DataSource {
       if (registerEvent) registerEvent(eventRef);
       else this.trackEvent(eventRef);
     };
-    track(this.metadataCache.on("resolved", () => this.scheduleNotify()));
-    track(this.metadataCache.on("changed", () => this.scheduleNotify()));
-    track(this.vault.on("create", () => this.scheduleNotify()));
-    track(this.vault.on("delete", () => this.scheduleNotify()));
-    track(this.vault.on("rename", () => this.scheduleNotify()));
+    // "resolved" has no file identity and fires broadly; concrete cache/vault
+    // events below are the authoritative refresh signal.
+    track(this.metadataCache.on("changed", (file) => {
+      this.cancelModifyRecheck(file.path);
+      // metadataCache.changed is the hand-off from optimistic plugin overlays
+      // to Obsidian's authoritative parsed frontmatter. Keeping an older
+      // override beyond this point can mask a newer external save indefinitely
+      // because expiry alone does not schedule another render.
+      this.frontmatterOverrides.delete(file.path);
+      this.viewDefOverrides.delete(file.path);
+      this.refreshCachedRecord(file);
+      this.scheduleNotify("changed", file.path, undefined, "metadata");
+    }));
+    track(this.vault.on("modify", (file) => {
+      this.scheduleNotify("changed", file.path, undefined, "vault");
+      this.scheduleModifyRecheck(file);
+    }));
+    track(this.vault.on("create", (file) => {
+      this.refreshCachedRecord(file);
+      this.scheduleNotify("created", file.path, undefined, "vault");
+    }));
+    track(this.vault.on("delete", (file) => {
+      this.recordCache?.delete(file.path);
+      this.scheduleNotify("deleted", file.path, undefined, "vault");
+    }));
+    track(this.vault.on("rename", (file, oldPath) => {
+      this.recordCache?.delete(oldPath);
+      this.refreshCachedRecord(file);
+      this.scheduleNotify("renamed", file.path, oldPath, "vault");
+    }));
   }
 
   /** Unregister all events — call from plugin onunload() */
   destroy(): void {
+    if (this.notifyTimer !== null) window.clearTimeout(this.notifyTimer);
+    this.notifyTimer = null;
+    for (const timer of this.modifyRecheckTimers.values()) window.clearTimeout(timer);
+    this.modifyRecheckTimers.clear();
     for (const ref of this.eventRefs) {
       ref.offref();
     }
@@ -125,6 +192,9 @@ export class DataSource {
     this.listeners = [];
     this.viewConfigListeners = [];
     this.writeQueues.clear();
+    this.pendingChanges.clear();
+    this.ownedPathUntil.clear();
+    this.recordCache = null;
   }
 
   private trackEvent(ref: unknown): void {
@@ -136,38 +206,39 @@ export class DataSource {
 
   /** Get all notes in a folder */
   getNotesInFolder(folderPath: string): NoteRecord[] {
-    const allFiles = this.vault.getMarkdownFiles();
     const normalizedFolder = this.normalizeVaultFolder(folderPath);
     const prefix = normalizedFolder ? (normalizedFolder.endsWith("/") ? normalizedFolder : normalizedFolder + "/") : "";
-
-    const files = allFiles.filter(
-      (f) => (!prefix || f.path.startsWith(prefix)) && f.extension === "md"
-    );
-
-    return files
-      .map((f) => {
-        const cache = this.metadataCache.getFileCache(f);
-        const frontmatter = this.withFrontmatterOverride(
-          f.path,
-          cache?.frontmatter ? (cache.frontmatter) : {}
-        );
-        return { file: f, frontmatter };
-      })
+    return this.getCachedRecords()
+      .filter((record) => !prefix || record.file.path.startsWith(prefix))
       .filter((r) => r.frontmatter["db_view"] !== true);
   }
 
   /** Query records using database-level config (sourceFolder, sourceRules) */
   getRecordsForDatabase(db: DatabaseConfig): NoteRecord[] {
     const matches = this.createRecordDatabaseMatcher(db);
-    const records = this.vault.getMarkdownFiles()
-      .map((file) => this.toRecord(file))
-      .filter((record): record is NoteRecord => record != null);
-    return records.filter(matches);
+    return this.getCachedRecords().filter(matches);
   }
 
   /** Match an in-memory candidate record with exactly the same source semantics as a vault query. */
   matchesRecordForDatabase(record: NoteRecord, db: DatabaseConfig): boolean {
     return this.createRecordDatabaseMatcher(db)(record);
+  }
+
+  getRecordSnapshot(path: string): NoteRecord | null {
+    const file = this.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md") return null;
+    const raw = this.recordCache?.get(path) || this.toRawRecord(file);
+    return this.applyFrontmatterOverride(raw);
+  }
+
+  /** Mark an imminent write performed by a caller that cannot use DataSource IO helpers. */
+  markPluginWrite(path: string, sourceInstanceId?: string): void {
+    this.markOwnedPath(path, sourceInstanceId);
+  }
+
+  /** Recovery path for an explicit force refresh when filesystem events may have been missed. */
+  invalidateRecordCache(): void {
+    this.recordCache = null;
   }
 
   private createRecordDatabaseMatcher(db: DatabaseConfig): (record: NoteRecord) => boolean {
@@ -204,7 +275,8 @@ export class DataSource {
   /** Modify a note's frontmatter with a queued mutator and remember changed keys for immediate reads. */
   async mutateFrontmatter(
     file: TFile,
-    mutator: FrontmatterMutator
+    mutator: FrontmatterMutator,
+    context?: DataWriteContext
   ): Promise<void> {
     return this.enqueueWrite(file.path, async () => {
       let updates: Record<string, unknown> | null = null;
@@ -222,47 +294,78 @@ export class DataSource {
         if (updates && Object.keys(updates).length > 0) this.frontmatterOverrides.delete(file.path);
         throw err;
       }
-    });
+    }, context);
   }
 
   /** Modify a note's frontmatter fields using the official API.
    *  Writes to the same file are serialized to prevent overlapping processFrontMatter. */
   async updateFrontmatter(
     file: TFile,
-    updates: Record<string, unknown>
+    updates: Record<string, unknown>,
+    context?: DataWriteContext
   ): Promise<void> {
     return this.mutateFrontmatter(file, (frontmatter) => {
       for (const [key, value] of Object.entries(updates)) {
         if (value === null) delete frontmatter[key];
         else frontmatter[key] = value;
       }
-    });
+    }, context);
   }
 
   /** Create a new note in a folder with the given frontmatter */
   async createNote(
     folderPath: string,
     filename: string,
-    frontmatter: Record<string, unknown>
+    frontmatter: Record<string, unknown>,
+    context?: DataWriteContext,
+    body = "",
   ): Promise<TFile> {
     const yaml = stringifyYaml(frontmatter).trim();
-    const content = "---\n" + yaml + "\n---\n\n";
+    const content = "---\n" + yaml + "\n---\n\n" + body.replace(/^\r?\n+/, "");
     const safeFilename = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
     const folder = this.normalizeVaultFolder(folderPath);
     await this.ensureFolder(folder);
     const basePath = normalizePath(folder ? `${folder}/${safeFilename}.md` : `${safeFilename}.md`);
     const path = this.getAvailablePath(basePath);
-    return await this.app.vault.create(path, content);
+    const credit = this.markOwnedPath(path, context?.sourceInstanceId);
+    let file: TFile;
+    try {
+      file = await this.app.vault.create(path, content);
+    } catch (error) {
+      this.releaseOwnedCredit(path, credit);
+      throw error;
+    }
+    if (this.recordCache) {
+      this.recordCache.set(file.path, {
+        file,
+        frontmatter: this.cloneFrontmatter(frontmatter),
+      });
+    }
+    return file;
   }
 
   /** 复制笔记全文(frontmatter + body)到同目录,返回新文件。nameSuffix 如 "copy"/"副本"。 */
-  async duplicateNote(file: TFile, nameSuffix: string): Promise<TFile> {
+  async duplicateNote(file: TFile, nameSuffix: string, context?: DataWriteContext): Promise<TFile> {
     const content = await this.app.vault.read(file);
     const copyName = `${file.basename} ${nameSuffix}`;
     const parent = file.parent;
     const basePath = normalizePath(parent && parent.path ? `${parent.path}/${copyName}.md` : `${copyName}.md`);
     const path = this.getAvailablePath(basePath);
-    return await this.app.vault.create(path, content);
+    const credit = this.markOwnedPath(path, context?.sourceInstanceId);
+    let copy: TFile;
+    try {
+      copy = await this.app.vault.create(path, content);
+    } catch (error) {
+      this.releaseOwnedCredit(path, credit);
+      throw error;
+    }
+    if (this.recordCache) {
+      this.recordCache.set(copy.path, {
+        file: copy,
+        frontmatter: this.getFrontmatterSnapshot(file),
+      });
+    }
+    return copy;
   }
 
   /** Open a note in the workspace */
@@ -271,33 +374,61 @@ export class DataSource {
   }
 
   /** Move a note to trash instead of deleting permanently. */
-  async trashNote(file: TFile): Promise<void> {
-    await this.app.fileManager.trashFile(file);
+  async trashNote(file: TFile, context?: DataWriteContext): Promise<void> {
+    const credit = this.markOwnedPath(file.path, context?.sourceInstanceId);
+    try {
+      await this.app.fileManager.trashFile(file);
+    } catch (error) {
+      this.releaseOwnedCredit(file.path, credit);
+      throw error;
+    }
   }
 
   fileExists(path: string): boolean {
     return this.vault.getAbstractFileByPath(path) != null;
   }
 
-  async renameNote(file: TFile, newPath: string): Promise<void> {
-    await this.app.fileManager.renameFile(file, newPath);
+  /** Latest observable frontmatter, including short-lived writes not yet reflected in metadataCache. */
+  getFrontmatterSnapshot(file: TFile): Record<string, unknown> {
+    const cached = this.metadataCache.getFileCache(file)?.frontmatter || {};
+    return { ...this.withFrontmatterOverride(file.path, cached) };
+  }
+
+  async renameNote(file: TFile, newPath: string, context?: DataWriteContext): Promise<void> {
+    const oldCredit = this.markOwnedPath(file.path, context?.sourceInstanceId);
+    const newCredit = this.markOwnedPath(newPath, context?.sourceInstanceId);
+    try {
+      await this.app.fileManager.renameFile(file, newPath);
+    } catch (error) {
+      this.releaseOwnedCredit(file.path, oldCredit);
+      this.releaseOwnedCredit(newPath, newCredit);
+      throw error;
+    }
   }
 
   /** Scan all markdown files for view definitions (files with db_view: true in frontmatter) */
   getViewDefFiles(): { file: TFile; config: DatabaseConfig }[] {
     const results: { file: TFile; config: DatabaseConfig }[] = [];
     const allFiles = this.vault.getMarkdownFiles();
+    const seedRecordCache = !this.recordCache;
+    if (seedRecordCache) this.recordCache = new Map();
     const cleanupTargets: TFile[] = [];
     const idBackfillTargets: { file: TFile; id: string }[] = [];
     const typeFilterTargets: TFile[] = [];
 
     for (const f of allFiles) {
+      const cache = this.metadataCache.getFileCache(f);
+      if (seedRecordCache) {
+        this.recordCache?.set(f.path, {
+          file: f,
+          frontmatter: cache?.frontmatter ? cache.frontmatter : {},
+        });
+      }
       const override = this.getViewDefOverride(f.path);
       if (override) {
         results.push({ file: f, config: override });
         continue;
       }
-      const cache = this.metadataCache.getFileCache(f);
       const fm = cache?.frontmatter;
       if (!fm || fm["db_view"] !== true) continue;
 
@@ -389,6 +520,7 @@ export class DataSource {
   private async migrateRemoveTopLevelName(files: TFile[]): Promise<void> {
     for (const file of files) {
       try {
+        this.markOwnedPath(file.path);
         await this.app.fileManager.processFrontMatter(file, (fm) => {
           const frontmatter = fm as Record<string, unknown>;
           if (frontmatter["db_view"] === true && Object.prototype.hasOwnProperty.call(frontmatter, "name")) {
@@ -409,6 +541,7 @@ export class DataSource {
   private async migrateBackfillDatabaseId(targets: { file: TFile; id: string }[]): Promise<void> {
     for (const target of targets) {
       try {
+        this.markOwnedPath(target.file.path);
         await this.app.fileManager.processFrontMatter(target.file, (fm) => {
           const frontmatter = fm as Record<string, unknown>;
           const database = frontmatter["database"];
@@ -430,6 +563,7 @@ export class DataSource {
   private async migrateDeduplicateDatabaseIds(targets: DatabaseIdDedupTarget[]): Promise<void> {
     for (const target of targets) {
       try {
+        this.markOwnedPath(target.file.path);
         await this.app.fileManager.processFrontMatter(target.file, (fm) => {
           const frontmatter = fm as Record<string, unknown>;
           const database = frontmatter["database"];
@@ -459,6 +593,7 @@ export class DataSource {
   private async migrateTypeFilterToSourceRules(files: TFile[]): Promise<void> {
     for (const file of files) {
       try {
+        this.markOwnedPath(file.path);
         await this.app.fileManager.processFrontMatter(file, (fm) => {
           const frontmatter = fm as Record<string, unknown>;
           const database = frontmatter["database"];
@@ -551,7 +686,8 @@ export class DataSource {
           filterLogic: source["filterLogic"] === "or" ? "or" : "and",
           filters: Array.isArray(source["filters"]) ? source["filters"] as FilterRule[] : undefined,
           resultLimit: this.parseResultLimit(source["resultLimit"]),
-          summaryRules: this.parseStringMap(source["summaryRules"]),
+          summaryRules: this.parseSummaryRules(source["summaryRules"]),
+          conditionalFormats: this.parseConditionalFormats(source["conditionalFormats"]),
           chartType: this.parseChartType(source["chartType"]),
           chartGroupField: safeString(source["chartGroupField"]) || undefined,
           chartDateBucket: this.parseChartDateBucket(source["chartDateBucket"]),
@@ -607,11 +743,24 @@ export class DataSource {
             : undefined,
         }];
       }
+      const legacyConditionalFormats = this.parseConditionalFormats(source["conditionalFormats"]);
+      if (legacyConditionalFormats?.length) {
+        for (const view of views) {
+          if (!view.conditionalFormats?.length) {
+            view.conditionalFormats = legacyConditionalFormats.map((rule) => ({
+              ...rule,
+              condition: { ...rule.condition },
+            }));
+          }
+        }
+      }
 
       return {
         id: database["id"] != null ? safeString(database["id"]) : generateId(),
         name: safeString(source["name"] || fm["name"]),
         icon: safeString(source["icon"]) || undefined,
+        coverImage: safeString(source["coverImage"]) || undefined,
+        coverImagePositionY: this.parseCoverPosition(source["coverImagePositionY"]),
         description: safeString(source["description"]) || undefined,
         sourceFolder: safeString(source["sourceFolder"]),
         sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
@@ -619,6 +768,7 @@ export class DataSource {
         sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
         newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
         recordIconField: safeString(source["recordIconField"]) || undefined,
+        newRecordTemplate: this.parseNewRecordTemplate(source["newRecordTemplate"]),
         computedSyncMode: normalizeComputedSyncMode(source["computedSyncMode"]),
         summaryFormulas: this.parseStringMap(source["summaryFormulas"]),
         schema: sharedSchema,
@@ -630,6 +780,52 @@ export class DataSource {
       console.warn("Failed to parse view definition file:", e);
       return null;
     }
+  }
+
+  private parseConditionalFormats(value: unknown): ConditionalFormatRule[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const operators = new Set(["eq", "neq", "contains", "hasTag", "gt", "lt", "gte", "lte", "empty", "notempty"]);
+    const colors = new Set<string>(OPTION_COLORS);
+    const rules: ConditionalFormatRule[] = [];
+    for (const item of value) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const source = item as Record<string, unknown>;
+      const condition = source["condition"];
+      if (!condition || typeof condition !== "object" || Array.isArray(condition)) continue;
+      const conditionSource = condition as Record<string, unknown>;
+      const field = safeString(conditionSource["field"]).trim();
+      const op = safeString(conditionSource["op"]);
+      const target = source["target"] === "field" ? "field" : source["target"] === "record" ? "record" : null;
+      const color = safeString(source["color"]);
+      if (!field || !operators.has(op) || !target || !colors.has(color)) continue;
+      rules.push({
+        id: safeString(source["id"]).trim() || generateId(),
+        condition: {
+          field,
+          op: op as ConditionalFormatRule["condition"]["op"],
+          value: safeString(conditionSource["value"]) || undefined,
+        },
+        valueSource: source["valueSource"] === "today" ? "today" : "literal",
+        target,
+        color: color as ConditionalFormatRule["color"],
+      });
+    }
+    return rules.length > 0 ? rules : undefined;
+  }
+
+  private parseNewRecordTemplate(value: unknown): NewRecordTemplateConfig | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const source = value as Record<string, unknown>;
+    const path = safeString(source["path"]).trim();
+    if (!path) return undefined;
+    const engine = source["engine"];
+    if (engine !== "markdown" && engine !== "core" && engine !== "templater") return undefined;
+    return { path, engine };
+  }
+
+  private parseCoverPosition(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    return Math.max(0, Math.min(100, value));
   }
 
   private parseViewConfig(v: Record<string, unknown>, sharedSchema: RecordSchema): ViewConfig {
@@ -694,7 +890,8 @@ export class DataSource {
       filterLogic: v["filterLogic"] === "or" ? "or" : "and",
       filters: Array.isArray(v["filters"]) ? v["filters"] as FilterRule[] : undefined,
       resultLimit: this.parseResultLimit(v["resultLimit"]),
-      summaryRules: this.parseStringMap(v["summaryRules"]),
+      summaryRules: this.parseSummaryRules(v["summaryRules"]),
+      conditionalFormats: this.parseConditionalFormats(v["conditionalFormats"]),
       chartType: this.parseChartType(v["chartType"]),
       chartGroupField: safeString(v["chartGroupField"]) || undefined,
       chartDateBucket: this.parseChartDateBucket(v["chartDateBucket"]),
@@ -791,7 +988,7 @@ export class DataSource {
         throw err;
       }
       if (mutation) this.notifyViewConfigChanged({ ...mutation, database: dbConfig });
-    });
+    }, { sourceInstanceId: mutation?.sourceInstanceId });
   }
 
   async createViewDefFile(folderPath: string, filename: string, dbConfig: DatabaseConfig): Promise<TFile> {
@@ -807,7 +1004,17 @@ export class DataSource {
     const safeFilename = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
     const withExtension = safeFilename.endsWith(".md") ? safeFilename : `${safeFilename}.md`;
     const path = this.getAvailablePath(normalizePath(folder ? `${folder}/${withExtension}` : withExtension));
+    this.markOwnedPath(path);
     const file = await this.vault.create(path, `---\n${yaml}\n---\n\n`);
+    if (this.recordCache) {
+      this.recordCache.set(file.path, {
+        file,
+        frontmatter: {
+          db_view: true,
+          database: this.toDatabasePayload(dbConfig),
+        },
+      });
+    }
     // Cache the config so getViewDefFiles can read it before the metadata cache indexes the new file
     this.rememberViewDefConfig(file.path, dbConfig);
     return file;
@@ -818,6 +1025,8 @@ export class DataSource {
       id: dbConfig.id,
       name: dbConfig.name || "",
       icon: dbConfig.icon || "",
+      coverImage: dbConfig.coverImage || "",
+      coverImagePositionY: dbConfig.coverImagePositionY ?? 50,
       description: dbConfig.description || "",
       sourceFolder: dbConfig.sourceFolder || "",
       sourceRules: dbConfig.sourceRules || [],
@@ -825,6 +1034,7 @@ export class DataSource {
       sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
       recordIconField: dbConfig.recordIconField || "",
+      newRecordTemplate: dbConfig.newRecordTemplate,
       computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
       summaryFormulas: dbConfig.summaryFormulas || {},
       columns: dbConfig.schema.columns || [],
@@ -885,7 +1095,8 @@ export class DataSource {
       filterLogic: view.filterLogic || "and",
       filters: view.filters || [],
       resultLimit: view.resultLimit,
-      summaryRules: view.summaryRules || {},
+      summaryRules: view.summaryRules || [],
+      conditionalFormats: view.conditionalFormats || [],
       chartType: view.chartType || "bar",
       chartGroupField: view.chartGroupField || "",
       chartDateBucket: view.chartDateBucket || "",
@@ -1005,6 +1216,7 @@ export class DataSource {
       "filters",
       "resultLimit",
       "summaryRules",
+      "conditionalFormats",
       "chartType",
       "chartGroupField",
       "chartDateBucket",
@@ -1086,6 +1298,25 @@ export class DataSource {
       .filter(([key, item]) => key.trim() && item != null)
       .map(([key, item]) => [key, String(item)] as const);
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  private parseSummaryRules(value: unknown): NonNullable<ViewConfig["summaryRules"]> | undefined {
+    if (Array.isArray(value)) {
+      const rules = value.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const source = entry as Record<string, unknown>;
+        const field = safeString(source["field"]).trim();
+        const summary = safeString(source["summary"]).trim();
+        return field && summary ? [{ field, summary }] : [];
+      });
+      return rules.length > 0 ? rules : undefined;
+    }
+    const legacy = this.parseStringMap(value);
+    if (!legacy) return undefined;
+    const rules = Object.entries(legacy)
+      .filter(([field, summary]) => field.trim() && summary.trim())
+      .map(([field, summary]) => ({ field, summary }));
+    return rules.length > 0 ? rules : undefined;
   }
 
   private parseNumberMap(value: unknown): Record<string, number> | undefined {
@@ -1320,20 +1551,114 @@ export class DataSource {
     return normalized === "/" ? "" : normalized.replace(/^\/+/, "");
   }
 
-  private toRecord(file: TFile): NoteRecord | null {
+  private toRawRecord(file: TFile): NoteRecord {
     const cache = this.metadataCache.getFileCache(file);
-    const frontmatter = this.withFrontmatterOverride(
-      file.path,
-      cache?.frontmatter ? (cache.frontmatter) : {}
-    );
-    return { file, frontmatter };
+    return {
+      file,
+      frontmatter: cache?.frontmatter ? cache.frontmatter : {},
+    };
+  }
+
+  private getCachedRecords(): NoteRecord[] {
+    if (!this.recordCache) {
+      this.recordCache = new Map(
+        this.vault.getMarkdownFiles().map((file) => [file.path, this.toRawRecord(file)])
+      );
+    }
+    this.cleanupFrontmatterOverrides();
+    return Array.from(this.recordCache.values(), (record) => this.applyFrontmatterOverride(record));
+  }
+
+  private refreshCachedRecord(file: unknown): void {
+    if (!this.recordCache || !(file instanceof TFile)) return;
+    if (file.extension !== "md") {
+      this.recordCache.delete(file.path);
+      return;
+    }
+    this.recordCache.set(file.path, this.toRawRecord(file));
+  }
+
+  /**
+   * Vault.modify can arrive before MetadataCache.changed. Usually the latter
+   * refreshes the snapshot, but external tools and sync providers occasionally
+   * fail to produce that hand-off. Re-read only that file after a grace period;
+   * the normal metadata event cancels this fallback.
+   */
+  private scheduleModifyRecheck(file: unknown): void {
+    if (!(file instanceof TFile) || file.extension !== "md") return;
+    this.cancelModifyRecheck(file.path);
+    const timer = window.setTimeout(() => {
+      this.modifyRecheckTimers.delete(file.path);
+      void this.reconcileModifiedRecordFromDisk(file);
+    }, 500);
+    this.modifyRecheckTimers.set(file.path, timer);
+  }
+
+  private cancelModifyRecheck(path: string): void {
+    const timer = this.modifyRecheckTimers.get(path);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.modifyRecheckTimers.delete(path);
+  }
+
+  private async reconcileModifiedRecordFromDisk(file: TFile): Promise<void> {
+    try {
+      const content = await this.vault.read(file);
+      const match = content.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+      let frontmatter: Record<string, unknown> = {};
+      if (match) {
+        const parsed: unknown = parseYaml(match[1]);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          frontmatter = parsed as Record<string, unknown>;
+        }
+      }
+      if (this.recordCache) this.recordCache.set(file.path, { file, frontmatter });
+      this.frontmatterOverrides.delete(file.path);
+      this.viewDefOverrides.delete(file.path);
+      // This path only runs when the authoritative metadata event did not
+      // arrive. Treat the recovery conservatively as external without
+      // consuming ownership credits reserved for real Obsidian events.
+      this.queuePendingChange({
+        kind: "changed",
+        path: file.path,
+        origin: "external",
+      });
+    } catch (error) {
+      console.warn("Note Database: failed to reconcile modified record", file.path, error);
+    }
+  }
+
+  private applyFrontmatterOverride(record: NoteRecord): NoteRecord {
+    const override = this.frontmatterOverrides.get(record.file.path);
+    if (!override) return record;
+    return {
+      file: record.file,
+      frontmatter: this.mergeFrontmatterOverride(record.frontmatter, override.values),
+    };
   }
 
   private rememberFrontmatterUpdates(path: string, updates: Record<string, unknown>): void {
     this.cleanupFrontmatterOverrides();
     const existing = this.frontmatterOverrides.get(path)?.values || {};
+    const combined = { ...existing, ...updates };
+    const file = this.vault.getAbstractFileByPath(path);
+    const cached = file instanceof TFile
+      ? this.metadataCache.getFileCache(file)?.frontmatter || {}
+      : {};
+    const pending: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(combined)) {
+      const cachedHas = Object.prototype.hasOwnProperty.call(cached, key);
+      const caughtUp = value === null
+        ? !cachedHas
+        : cachedHas && this.valuesEqual(cached[key], value);
+      if (!caughtUp) pending[key] = value;
+    }
+    if (Object.keys(pending).length === 0) {
+      this.frontmatterOverrides.delete(path);
+      return;
+    }
     this.frontmatterOverrides.set(path, {
-      values: { ...existing, ...updates },
+      values: pending,
       expiresAt: Date.now() + 10000,
     });
   }
@@ -1390,8 +1715,15 @@ export class DataSource {
     this.cleanupFrontmatterOverrides();
     const override = this.frontmatterOverrides.get(path);
     if (!override) return frontmatter;
+    return this.mergeFrontmatterOverride(frontmatter, override.values);
+  }
+
+  private mergeFrontmatterOverride(
+    frontmatter: Record<string, unknown>,
+    values: Record<string, unknown>
+  ): Record<string, unknown> {
     const merged = { ...frontmatter };
-    for (const [key, value] of Object.entries(override.values)) {
+    for (const [key, value] of Object.entries(values)) {
       if (value === null) delete merged[key];
       else merged[key] = value;
     }
@@ -1578,8 +1910,63 @@ export class DataSource {
     return candidate;
   }
 
-  /** Debounce rapid data change events into a single notification */
-  private scheduleNotify(): void {
+  /** Debounce rapid file events into a single identity-preserving batch. */
+  private scheduleNotify(
+    kind: DataChangeKind,
+    path: string,
+    oldPath: string | undefined,
+    signal: DataChangeSignal
+  ): void {
+    // Consume both sides of a rename. Short-circuiting here would leave the old
+    // path's vault credit alive and could hide an external file recreated at
+    // that path a moment later.
+    const ownedPath = this.consumeOwnedPath(path, signal);
+    const ownedOldPath = oldPath ? this.consumeOwnedPath(oldPath, signal) : null;
+    const origin: DataChangeOrigin = ownedPath || ownedOldPath
+      ? "plugin"
+      : "external";
+    const ownedSources = [ownedPath?.sourceInstanceId, ownedOldPath?.sourceInstanceId]
+      .filter((value): value is string => Boolean(value));
+    const sourceInstanceId = origin === "plugin" &&
+      ownedSources.length > 0 &&
+      ownedSources.every((value) => value === ownedSources[0])
+      ? ownedSources[0]
+      : undefined;
+    this.queuePendingChange({
+      kind,
+      path,
+      oldPath,
+      origin,
+      sourceInstanceId,
+    });
+  }
+
+  private queuePendingChange(change: DataChange): void {
+    const { kind, path, oldPath, origin, sourceInstanceId } = change;
+    const key = kind === "renamed" ? `${kind}:${oldPath || ""}:${path}` : `${kind}:${path}`;
+    const existing = this.pendingChanges.get(key);
+    // When Vault and metadata signals for the same path collapse into one
+    // debounce window, never let a later plugin-owned signal overwrite an
+    // already observed external save. A redundant refresh is safer than
+    // silently losing the user's newer data.
+    const mergedOrigin = existing?.origin === "external" || origin === "external"
+      ? "external"
+      : "plugin";
+    const mergedSourceInstanceId = mergedOrigin === "plugin" &&
+      existing?.sourceInstanceId &&
+      sourceInstanceId &&
+      existing.sourceInstanceId === sourceInstanceId
+      ? sourceInstanceId
+      : existing
+        ? undefined
+        : sourceInstanceId;
+    this.pendingChanges.set(key, {
+      kind,
+      path,
+      oldPath,
+      origin: mergedOrigin,
+      sourceInstanceId: mergedSourceInstanceId,
+    });
     if (this.notifyTimer !== null) window.clearTimeout(this.notifyTimer);
     this.notifyTimer = window.setTimeout(() => {
       this.notifyTimer = null;
@@ -1588,9 +1975,59 @@ export class DataSource {
   }
 
   private notify(): void {
+    const batch = { changes: Array.from(this.pendingChanges.values()) };
+    this.pendingChanges.clear();
     for (const cb of this.listeners) {
-      cb();
+      cb(batch);
     }
+  }
+
+  private markOwnedPath(path: string, sourceInstanceId?: string): OwnedWriteCredit {
+    this.ownedPathUntil ??= new Map();
+    const current = this.ownedPathUntil.get(path);
+    const credit = {
+      expiresAt: Date.now() + 5_000,
+      sourceInstanceId,
+    };
+    this.ownedPathUntil.set(path, {
+      // A normal Obsidian write emits one Vault event and one metadata-cache
+      // event. Keep separate credits so a missing metadata event cannot consume
+      // the user's next external Vault save (or vice versa).
+      metadataEvents: [...(current?.metadataEvents || []), credit],
+      vaultEvents: [...(current?.vaultEvents || []), credit],
+    });
+    return credit;
+  }
+
+  private releaseOwnedCredit(path: string, credit: OwnedWriteCredit): void {
+    const ownership = this.ownedPathUntil.get(path);
+    if (!ownership) return;
+    ownership.metadataEvents = ownership.metadataEvents.filter((candidate) => candidate !== credit);
+    ownership.vaultEvents = ownership.vaultEvents.filter((candidate) => candidate !== credit);
+    if (ownership.metadataEvents.length === 0 && ownership.vaultEvents.length === 0) {
+      this.ownedPathUntil.delete(path);
+    }
+  }
+
+  private consumeOwnedPath(path: string, signal: DataChangeSignal): OwnedWriteCredit | null {
+    this.ownedPathUntil ??= new Map();
+    const now = Date.now();
+    for (const [candidate, state] of this.ownedPathUntil) {
+      state.metadataEvents = state.metadataEvents.filter((credit) => credit.expiresAt >= now);
+      state.vaultEvents = state.vaultEvents.filter((credit) => credit.expiresAt >= now);
+      if (state.metadataEvents.length === 0 && state.vaultEvents.length === 0) {
+        this.ownedPathUntil.delete(candidate);
+      }
+    }
+    const ownership = this.ownedPathUntil.get(path);
+    if (!ownership) return null;
+    const key = signal === "metadata" ? "metadataEvents" : "vaultEvents";
+    const credit = ownership[key].shift();
+    if (!credit) return null;
+    if (ownership.metadataEvents.length === 0 && ownership.vaultEvents.length === 0) {
+      this.ownedPathUntil.delete(path);
+    }
+    return credit;
   }
 }
 

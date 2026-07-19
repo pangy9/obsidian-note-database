@@ -15,6 +15,7 @@ import { isHTMLElement } from "./DomGuards";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderRelationValue } from "./RelationValueRenderer";
 import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
@@ -58,6 +59,8 @@ export interface ListRendererActions {
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
 }
@@ -108,6 +111,7 @@ export class ListRenderer {
       this.renderGroupCheckbox(label, group.rows);
       label.createSpan({ cls: "db-list-group-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
       label.createSpan({ cls: "db-list-group-count", text: String(group.count) });
+      this.actions.renderGroupSummaries?.(label, group.rows, config);
       if (collapsed) continue;
       const list = this.createList(section, config);
       this.setupGroupDropTarget(list, groupField, group.key);
@@ -147,6 +151,7 @@ export class ListRenderer {
       cls: "db-list-row",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
+    this.actions.applyConditionalFormat?.(item, row, config);
     this.attachRowContextMenu(item, row, {
       visibleRows: allRows,
       groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
@@ -226,6 +231,7 @@ export class ListRenderer {
       if (empty && config.showEmptyFields !== true) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const field = meta.createDiv({ cls: "db-list-field", attr: { "data-note-database-column-key": col.key } });
+      this.actions.applyConditionalFormat?.(field, row, config, col.key);
       if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
       else field.style.setProperty("--db-card-field-width", `${getFieldWidth(config, col)}px`);
       setFieldTooltip(field, displayValue, col.label);
@@ -444,7 +450,9 @@ export class ListRenderer {
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
-    if (col.type === "computed") return row.computed[col.computedKey || col.key];
+    if (col.type === "computed" || col.type === "rollup") {
+      return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+    }
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
   }
@@ -502,6 +510,9 @@ export class ListRenderer {
       const values = toMultiSelectValuesForKey(col.key, value);
       setFieldTooltip(badges, values);
       for (const entry of values) this.renderBadge(badges, col, entry);
+      return;
+    }
+    if (col.type === "relation" && renderRelationValue(valueEl, this.app, row, value, true)) {
       return;
     }
     if (displayType === "date" || displayType === "datetime") {
@@ -569,6 +580,7 @@ export class ListRenderer {
     const field = window.activeDocument.createElement("div");
     field.className = "db-list-field";
     field.setAttribute("data-note-database-column-key", col.key);
+    this.actions.applyConditionalFormat?.(field, row, config, col.key);
     if (col.wrap) field.setCssProps({ flex: "0 0 auto" });
     else field.style.setProperty("--db-card-field-width", `${getFieldWidth(config, col)}px`);
     setFieldTooltip(field, displayValue, col.label);

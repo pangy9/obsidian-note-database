@@ -87,7 +87,7 @@ export function buildBulkEditImpact(plan: BulkEditPlan, input: BulkEditImpactInp
 
 export function getBulkEditableColumns(columns: ColumnDef[]): ColumnDef[] {
   return columns.filter((column) => {
-    if (column.type === "computed" || column.key === "file.name") return false;
+    if (column.type === "computed" || column.type === "rollup" || column.key === "file.name") return false;
     if (!column.key.startsWith("file.")) return true;
     return column.key === "file.tags";
   });

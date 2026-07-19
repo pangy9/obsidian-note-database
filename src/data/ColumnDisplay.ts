@@ -1,6 +1,6 @@
 import { ColumnDef, ComputedFieldDef, NumberDisplayStyle } from "./types";
 
-export type ColumnDisplayType = Exclude<ColumnDef["type"], "computed">;
+export type ColumnDisplayType = Exclude<ColumnDef["type"], "computed" | "rollup">;
 
 export function getComputedFieldForColumn(
   col: ColumnDef,
@@ -15,6 +15,13 @@ export function getColumnDisplayType(
   col: ColumnDef,
   computedFields?: ComputedFieldDef[]
 ): ColumnDisplayType {
+  if (col.type === "rollup") {
+    return col.rollupConfig?.aggregation === "count" ||
+      col.rollupConfig?.aggregation === "sum" ||
+      col.rollupConfig?.aggregation === "avg"
+      ? "number"
+      : "text";
+  }
   if (col.type !== "computed") return col.type;
   return getComputedFieldForColumn(col, computedFields)?.type || "text";
 }
@@ -38,4 +45,14 @@ export function getComputedStorageKey(col: Pick<ColumnDef, "key" | "type" | "com
 
 export function normalizeComputedStorageKey(key: string): string {
   return key.startsWith("formula.") ? key.slice("formula.".length) : key;
+}
+
+export function isDerivedColumn(col: Pick<ColumnDef, "type">): boolean {
+  return col.type === "computed" || col.type === "rollup";
+}
+
+export function getColumnValue(row: import("./types").RowData, col: ColumnDef): unknown {
+  if (col.type === "computed") return row.computed[col.computedKey || col.key];
+  if (col.type === "rollup") return row.computed[col.key];
+  return row.frontmatter[col.key];
 }

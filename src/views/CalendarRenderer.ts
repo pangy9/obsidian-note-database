@@ -48,6 +48,7 @@ export interface CalendarRendererActions {
 	onConfigChange?(label?: string): void;
 	getColumns(config: ViewConfig): ColumnDef[];
 	renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+	applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig): void;
 	/** 统计被隐藏的无效时间事件数（A2：日历也接入 invalid 修复入口）。 */
 	getCalendarInvalidEventCount?(): number | Promise<number>;
 	/** 打开无效时间事件修复弹窗。 */
@@ -220,6 +221,7 @@ export class CalendarRenderer {
 			// +2 offset: +1 for heading row, +1 for 1-based grid index
 			eventEl.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
 			this.applyEventColor(eventEl, segment.event.color);
+			this.actions.applyConditionalFormat?.(eventEl, segment.event.row, config);
 			if (segment.isTimed) {
 				eventEl.createSpan({ cls: "db-calendar-month-timed-dot" });
 				if (segment.startMinutes != null) {
@@ -281,7 +283,7 @@ export class CalendarRenderer {
 			};
 			const showPopover = () => {
 				cancelHide();
-				if (popover) { popover.removeClass("is-hidden"); return; }
+				if (popover?.isConnected) { popover.removeClass("is-hidden"); return; }
 				popover = this.createDayPopover(dayCell, config, day, layout, cancelHide, scheduleHide);
 			};
 
@@ -346,6 +348,7 @@ export class CalendarRenderer {
 				},
 			});
 			this.applyEventColor(eventEl, event.color);
+			this.actions.applyConditionalFormat?.(eventEl, event.row, config);
 			if (timing.isTimed) {
 				eventEl.createSpan({ cls: "db-calendar-month-timed-dot" });
 				if (timing.startMinutes != null) {
@@ -573,10 +576,12 @@ export class CalendarRenderer {
 			// Row 1 is reserved for the detached day number, so event lanes start at row 2.
 			eventEl.style.setProperty("--db-calendar-segment-lane", String(segment.lane + 2));
 			this.applyEventColor(eventEl, segment.event.color);
-			this.actions.renderRecordIcon?.(eventEl, segment.event.row, config, true);
-			eventEl.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
+			this.actions.applyConditionalFormat?.(eventEl, segment.event.row, config);
+			const content = eventEl.createSpan({ cls: "db-calendar-week-allday-content" });
+			this.actions.renderRecordIcon?.(content, segment.event.row, config, true);
+			content.createSpan({ cls: `db-calendar-month-title${segment.event.titleIsEmpty ? " is-empty-title" : ""}`, text: segment.event.title });
 			if (segment.event.endDateKey > segment.event.startDateKey) {
-				eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(segment.event.startDateKey, segment.event.endDateKey, segment.event.startMinutes, segment.event.endMinutes) });
+				content.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(segment.event.startDateKey, segment.event.endDateKey, segment.event.startMinutes, segment.event.endMinutes) });
 			}
 			this.attachEventOpenHandlers(eventEl, segment.event);
 			this.attachMonthMoveHandler(eventEl, stage, days, segment, config, ".db-calendar-week-allday-cols", ".db-calendar-week-allday-col", days.length);
@@ -612,7 +617,7 @@ export class CalendarRenderer {
 				};
 				const showPopover = () => {
 					cancelHide();
-					if (popover) { popover.removeClass("is-hidden"); return; }
+					if (popover?.isConnected) { popover.removeClass("is-hidden"); return; }
 					popover = this.createAllDayOverflowPopover(button, hiddenEvents, config, cancelHide, scheduleHide);
 				};
 				button.addEventListener("mouseenter", showPopover);
@@ -638,6 +643,7 @@ export class CalendarRenderer {
 				attr: { type: "button", title: event.title, "data-note-database-row-path": event.row.file.path },
 			});
 			this.applyEventColor(eventEl, event.color);
+			this.actions.applyConditionalFormat?.(eventEl, event.row, config);
 			this.actions.renderRecordIcon?.(eventEl, event.row, config, true);
 			eventEl.createSpan({ cls: `db-calendar-month-title${event.titleIsEmpty ? " is-empty-title" : ""}`, text: event.title });
 			eventEl.createSpan({ cls: "db-calendar-month-dates", text: this.formatMonthDateRange(event.startDateKey, event.endDateKey, event.startMinutes, event.endMinutes) });
@@ -734,6 +740,7 @@ export class CalendarRenderer {
 			},
 		});
 		this.applyEventColor(eventEl, layout.event.color);
+		this.actions.applyConditionalFormat?.(eventEl, layout.event.row, config);
 		if (!this.actions.isReadOnly && this.actions.updateEventDates && config.calendarEndDateField) {
 			this.renderTimeResizeHandle(eventEl, layout, "resize-start");
 		}

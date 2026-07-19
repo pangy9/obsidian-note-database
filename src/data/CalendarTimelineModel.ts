@@ -1,4 +1,5 @@
 import { getColumnDisplayType } from "./ColumnDisplay";
+import { toBooleanValue } from "./ColumnTypes";
 import { isDateLikeColumnType, parseDateTimeParts } from "./DateTimeFormat";
 import { getDefaultGroupOrder, getEffectiveGroupOrder } from "./GroupOrder";
 import { formatGroupKeyDisplay, getDateGroupMode } from "./GroupDisplay";
@@ -641,6 +642,16 @@ function getTimelineSeedLanes(config: ViewConfig, uncategorizedLabel: string, ac
   const defaultOrder = getDefaultGroupOrder(config, field);
   const actualSet = new Set(actualKeys);
   const column = config.schema.columns.find((col) => col.key === field);
+  const displayType = column ? getColumnDisplayType(column, config.schema.computedFields) : undefined;
+  if (displayType === "checkbox") {
+    return getEffectiveGroupOrder(config, field, actualKeys)
+      .filter((key) => actualSet.has(key))
+      .map((key) => ({
+        key,
+        label: formatGroupKeyDisplay(config, field, key),
+        color: getTimelineGroupColor(config, key),
+      }));
+  }
   const showEmptyOptionGroups = isEmptyGroupVisibilityColumn(config, column) && shouldShowEmptyGroups(config, field);
   const shouldIncludeDefaultLanes = actualKeys.length === 0 || defaultOrder.some((key) => actualSet.has(key));
   const visibleConfiguredOrder = shouldShowEmptyGroups(config, field)
@@ -948,9 +959,14 @@ function getTimelineGroupKeys(row: RowData, config: ViewConfig, uncategorizedLab
   const field = config.timelineGroupField;
   if (!field) return [{ key: UNCATEGORIZED_TIMELINE_LANE, label: uncategorizedLabel }];
   const column = config.schema.columns.find((col) => col.key === field);
+  const displayType = column ? getColumnDisplayType(column, config.schema.computedFields) : undefined;
   // datetime 列在 "date" 模式按 dateKey 分组（忽略时刻），与 QueryEngine.getGroupKeys 口径一致。
   const useDateKey = column?.type === "datetime" && getDateGroupMode(config, field) === "date";
   const value = getRowFieldValue(row, field, config);
+  if (displayType === "checkbox") {
+    const key = toBooleanValue(value) ? "true" : "false";
+    return [{ key, label: formatGroupKeyDisplay(config, field, key) }];
+  }
   const values = Array.isArray(value) ? value : [value];
   const groups: { key: string; label: string }[] = [];
   for (const item of values) {
@@ -973,7 +989,9 @@ function getRowFieldValue(row: RowData, field: string, config: ViewConfig): unkn
   const fileValue = getTimelineFileFieldValue(row, field);
   if (fileValue !== undefined) return fileValue;
   const column = config.schema.columns.find((col) => col.key === field);
-  if (column?.type === "computed") return row.computed[column.computedKey || column.key];
+  if (column?.type === "computed" || column?.type === "rollup") {
+    return row.computed[column.type === "computed" ? column.computedKey || column.key : column.key];
+  }
   return row.frontmatter[field];
 }
 

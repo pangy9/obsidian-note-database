@@ -15,6 +15,8 @@ export const PROPERTY_TYPE_ICON_NAMES: Record<ColumnDef["type"], string> = {
   status: "progress-check",
   checkbox: "square-check",
   computed: "math-function",
+  relation: "link",
+  rollup: "sum",
 };
 
 interface SvgPathDef {
@@ -104,6 +106,17 @@ export const PROPERTY_TYPE_ICON_DEFS: Record<string, PropertyTypeIconDef> = {
       { d: "M5 12h6" },
       { d: "M15 12l6 6" },
       { d: "M15 18l6 -6" },
+    ],
+  },
+  link: {
+    paths: [
+      { d: "M10 13a5 5 0 0 0 7.07 .07l2 -2a5 5 0 0 0 -7.07 -7.07l-1.15 1.15" },
+      { d: "M14 11a5 5 0 0 0 -7.07 -.07l-2 2a5 5 0 0 0 7.07 7.07l1.15 -1.15" },
+    ],
+  },
+  sum: {
+    paths: [
+      { d: "M18 4h-10l6 8l-6 8h10" },
     ],
   },
 };

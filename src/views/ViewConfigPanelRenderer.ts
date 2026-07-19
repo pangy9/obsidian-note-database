@@ -1,7 +1,7 @@
 import { App, Notice, setIcon, setTooltip } from "obsidian";
-import { ColumnDef, ComputedSyncMode, DatabaseConfig, DatabaseViewType, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusPresetDef, ViewConfig } from "../data/types";
+import { ColumnDef, ComputedSyncMode, ConditionalFormatRule, DatabaseConfig, DatabaseViewType, FilterOperator, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusColor, StatusPresetDef, ViewConfig, generateId } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
-import { isObsidianAliasesKey, isObsidianTagsKey } from "../data/ColumnTypes";
+import { getColumnOptions, isObsidianAliasesKey, isObsidianTagsKey } from "../data/ColumnTypes";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { BASE_FILE_FIELD_KEYS, getBaseFileFieldType, isBaseFileField } from "../data/FileFields";
@@ -13,6 +13,10 @@ import { confirmWithModal } from "./modals/ConfirmModal";
 import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
 import { getPropertyDropdownIcon, isPropertyDropdownIcon, renderDropdownPropertyTypeIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
+import { ImageFileSuggestModal } from "./ImageFileSuggestModal";
+import { openOptionColorPicker } from "./OptionColorPicker";
+import { MarkdownFileSuggestModal } from "./MarkdownFileSuggestModal";
+import { getFilterOperatorsForColumn } from "./FilterPanelRenderer";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
 
@@ -76,7 +80,7 @@ export function getDefaultSourceRuleOperatorForField(database: DatabaseConfig, f
 export function getDefaultSourceRuleIsTypeValue(database: DatabaseConfig, field: string): string {
   const displayType = getSourceRuleFieldDisplayType(database, field);
   if (displayType === "checkbox") return "boolean";
-  if (displayType === "multi-select") return "list";
+  if (displayType === "multi-select" || displayType === "relation") return "list";
   if (isDateLikeColumnType(displayType)) return "date";
   if (displayType === "number" || displayType === "currency") return "number";
   return "string";
@@ -129,7 +133,7 @@ function getRecommendedSourceRuleOperatorGroups(database: DatabaseConfig, field:
     return groups;
   }
 
-  if (displayType === "multi-select") {
+  if (displayType === "multi-select" || displayType === "relation") {
     groups.push(
       { label: t(SOURCE_RULE_OPERATOR_LABEL_KEYS.value), operators: ["contains", "eq", "neq"] },
       { label: t(SOURCE_RULE_OPERATOR_LABEL_KEYS.presence), operators: PRESENCE_OPERATORS },
@@ -256,8 +260,11 @@ export class ViewConfigPanelRenderer {
     this.renderSectionTitle(panel, t("viewConfig.viewSection"));
     this.renderViewType(panel, config, actions);
     this.renderViewSourceRulesSection(panel, config, actions);
-    if (["board", "gallery", "list", "calendar", "timeline"].includes(config.viewType || "table") && actions.database) {
+    if (["table", "board", "gallery", "list", "calendar", "timeline"].includes(config.viewType || "table") && actions.database) {
       this.renderRecordIconSettings(panel, actions.database, config, actions);
+    }
+    if (config.viewType !== "chart" && actions.database) {
+      this.renderConditionalFormatting(panel, config, actions.database, actions, actions.isDatabaseReadOnly);
     }
     const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
     if (showViewStatusPresets) {
@@ -391,6 +398,7 @@ export class ViewConfigPanelRenderer {
     }, readOnly, (value) => {
       database.description = value || undefined;
     });
+    this.renderDatabaseCoverSetting(panel, database, actions, readOnly);
     this.renderText(panel, t("viewConfig.sourceFolder"), database.sourceFolder || "", t("settings.sourceFolder.placeholder"), (value) => {
       syncSourceFolder(value);
       actions.onDatabaseChange?.(t("undo.sourceFolderConfig"));
@@ -399,6 +407,116 @@ export class ViewConfigPanelRenderer {
     });
     this.renderSourceRules(panel, database, actions, readOnly);
     this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
+    this.renderNewRecordTemplateSetting(panel, database, actions, readOnly);
+  }
+
+  private renderNewRecordTemplateSetting(
+    panel: HTMLElement,
+    database: DatabaseConfig,
+    actions: ViewConfigPanelActions,
+    readOnly?: boolean,
+  ): void {
+    const row = panel.createDiv({ cls: "db-view-config-row" });
+    row.createDiv({ cls: "db-view-config-label", text: t("template.label") });
+    const field = row.createDiv({ cls: "db-view-config-field db-view-config-field-stack" });
+    const controls = field.createDiv({ cls: "db-template-setting-controls" });
+    const pathRow = controls.createDiv({ cls: "db-template-path-row" });
+    pathRow.createDiv({
+      cls: `db-view-config-readonly-value${database.newRecordTemplate?.path ? "" : " is-empty"}`,
+      text: database.newRecordTemplate?.path || t("common.notSet"),
+      attr: { title: database.newRecordTemplate?.path || t("common.notSet") },
+    });
+    if (readOnly) return;
+
+    const engineRow = controls.createDiv({ cls: "db-template-engine-row" });
+    engineRow.createDiv({ cls: "db-template-engine-label", text: t("template.engine.label") });
+    createDropdownField({
+      parent: engineRow,
+      label: t("template.engine.label"),
+      value: database.newRecordTemplate?.engine || "markdown",
+      options: [
+        { value: "markdown", text: t("template.engine.markdown") },
+        { value: "core", text: t("template.engine.core") },
+        { value: "templater", text: t("template.engine.templater") },
+      ],
+      hideLabel: true,
+      disabled: !database.newRecordTemplate?.path,
+      onChange: (value) => {
+        if (!database.newRecordTemplate) return;
+        database.newRecordTemplate.engine = value === "core"
+          ? "core"
+          : value === "templater"
+            ? "templater"
+            : "markdown";
+        actions.onDatabaseChange?.(t("undo.newRecordTemplateConfig"));
+      },
+    });
+
+    const choose = pathRow.createEl("button", { cls: "db-icon-only-button", attr: { type: "button", "aria-label": t("template.choose") } });
+    setIcon(choose, "file-plus-2");
+    choose.onclick = () => {
+      new MarkdownFileSuggestModal(actions.app, (file) => {
+        database.newRecordTemplate = {
+          path: file.path,
+          engine: database.newRecordTemplate?.engine || "markdown",
+        };
+        actions.onDatabaseChange?.(t("undo.newRecordTemplateConfig"));
+      }, t("template.choose")).open();
+    };
+    if (database.newRecordTemplate?.path) {
+      const remove = pathRow.createEl("button", { cls: "db-icon-only-button", attr: { type: "button", "aria-label": t("template.remove") } });
+      setIcon(remove, "x");
+      remove.onclick = () => {
+        database.newRecordTemplate = undefined;
+        actions.onDatabaseChange?.(t("undo.newRecordTemplateConfig"));
+      };
+    }
+    field.createDiv({ cls: "db-view-config-help", text: t("template.help") });
+  }
+
+  private renderDatabaseCoverSetting(
+    panel: HTMLElement,
+    database: DatabaseConfig,
+    actions: ViewConfigPanelActions,
+    readOnly?: boolean,
+  ): void {
+    const row = panel.createDiv({ cls: "db-view-config-row" });
+    row.createDiv({ cls: "db-view-config-label", text: t("databaseCover.label") });
+    const field = row.createDiv({ cls: "db-view-config-field db-database-cover-setting" });
+    field.createDiv({
+      cls: `db-view-config-readonly-value${database.coverImage ? "" : " is-empty"}`,
+      text: database.coverImage || t("common.notSet"),
+      attr: { title: database.coverImage || t("common.notSet") },
+    });
+    if (readOnly) return;
+
+    const choose = field.createEl("button", {
+      cls: "db-icon-only-button",
+      attr: { type: "button", "aria-label": t("databaseCover.choose") },
+    });
+    setIcon(choose, database.coverImage ? "image-up" : "image-plus");
+    setTooltip(choose, t("databaseCover.choose"), { delay: 100 });
+    choose.onclick = () => {
+      new ImageFileSuggestModal(actions.app, (file) => {
+        database.coverImage = file.path;
+        database.coverImagePositionY = 50;
+        actions.onDatabaseChange?.(t("undo.databaseCoverConfig"));
+      }, t("databaseCover.choose")).open();
+    };
+
+    if (database.coverImage) {
+      const remove = field.createEl("button", {
+        cls: "db-icon-only-button",
+        attr: { type: "button", "aria-label": t("databaseCover.remove") },
+      });
+      setIcon(remove, "x");
+      setTooltip(remove, t("databaseCover.remove"), { delay: 100 });
+      remove.onclick = () => {
+        database.coverImage = undefined;
+        database.coverImagePositionY = undefined;
+        actions.onDatabaseChange?.(t("undo.databaseCoverConfig"));
+      };
+    }
   }
 
   private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
@@ -427,6 +545,219 @@ export class ViewConfigPanelRenderer {
       onDefaultPresetChange: (presetId) => actions.onDefaultStatusPresetChange?.(presetId),
       onManagePresets: () => actions.onManageStatusPresets?.(),
     }, actions.isDatabaseReadOnly);
+  }
+
+  private renderConditionalFormatting(
+    panel: HTMLElement,
+    config: ViewConfig,
+    database: DatabaseConfig,
+    actions: ViewConfigPanelActions,
+    readOnly?: boolean,
+  ): void {
+    const section = panel.createDiv({ cls: "db-conditional-format-settings" });
+    const renderRules = () => {
+      section.empty();
+      const heading = section.createDiv({ cls: "db-conditional-format-heading" });
+      heading.createSpan({ text: t("conditionalFormat.title") });
+      if (!readOnly) {
+        const add = heading.createEl("button", {
+          cls: "db-conditional-format-add db-icon-only-button",
+          attr: { type: "button", "aria-label": t("conditionalFormat.add") },
+        });
+        setIcon(add, "plus");
+        add.onclick = () => {
+          const firstField = database.schema.columns[0]?.key || "file.name";
+          const rule: ConditionalFormatRule = {
+            id: generateId(),
+            condition: { field: firstField, op: "eq", value: "" },
+            valueSource: "literal",
+            target: "record",
+            color: "red",
+          };
+          config.conditionalFormats = [...(config.conditionalFormats || []), rule];
+          actions.onChange(t("undo.conditionalFormatConfig"));
+          renderRules();
+        };
+      }
+      const rules = config.conditionalFormats || [];
+      if (rules.length === 0) {
+        section.createDiv({ cls: "db-view-config-help", text: t("conditionalFormat.empty") });
+        return;
+      }
+      rules.forEach((rule, index) => {
+        const row = section.createDiv({ cls: "db-conditional-format-rule" });
+        const currentColumn = database.schema.columns.find((col) => col.key === rule.condition.field);
+        const operators = getFilterOperatorsForColumn(currentColumn);
+        if (!operators.some(([op]) => op === rule.condition.op)) {
+          rule.condition.op = operators[0]?.[0] || "eq";
+          rule.condition.value = "";
+        }
+        if (!isDateLikeColumnType(currentColumn?.type) && rule.valueSource === "today") {
+          rule.valueSource = "literal";
+        }
+        const persist = (rerender = false) => {
+          config.conditionalFormats = [...rules];
+          actions.onChange(t("undo.conditionalFormatConfig"));
+          if (rerender) renderRules();
+        };
+        createDropdownField({
+          parent: row,
+          label: t("filter.field"),
+          value: rule.condition.field,
+          options: database.schema.columns.map((col) => ({
+            value: col.key,
+            text: col.label || col.key,
+            icon: getPropertyDropdownIcon(getColumnDisplayType(col, database.schema.computedFields)),
+          })),
+          hideLabel: true,
+          disabled: Boolean(readOnly),
+          className: "db-conditional-format-dropdown db-conditional-format-field",
+          renderIcon: renderDropdownPropertyTypeIcon,
+          onChange: (next) => {
+            rule.condition.field = next;
+            const nextColumn = database.schema.columns.find((col) => col.key === next);
+            rule.condition.op = getFilterOperatorsForColumn(nextColumn)[0]?.[0] || "eq";
+            rule.condition.value = "";
+            if (!isDateLikeColumnType(nextColumn?.type)) rule.valueSource = "literal";
+            persist(true);
+          },
+        });
+        createDropdownField({
+          parent: row,
+          label: t("filter.operator"),
+          value: rule.condition.op,
+          options: operators.map(([value, text]) => ({ value, text })),
+          hideLabel: true,
+          disabled: Boolean(readOnly),
+          className: "db-conditional-format-dropdown",
+          onChange: (next) => {
+            rule.condition.op = next as FilterOperator;
+            if (next === "empty" || next === "notempty") rule.condition.value = "";
+            persist(true);
+          },
+        });
+        createDropdownField({
+          parent: row,
+          label: t("conditionalFormat.valueSource"),
+          value: rule.valueSource || "literal",
+          options: [
+            { value: "literal", text: t("conditionalFormat.literal") },
+            ...(isDateLikeColumnType(currentColumn?.type)
+              ? [{ value: "today", text: t("conditionalFormat.today") }]
+              : []),
+          ],
+          hideLabel: true,
+          disabled: Boolean(readOnly),
+          className: "db-conditional-format-dropdown db-conditional-format-value-mode",
+          onChange: (next) => {
+            rule.valueSource = next === "today" ? "today" : "literal";
+            persist(true);
+          },
+        });
+
+        const valueDisabled = Boolean(readOnly) || rule.valueSource === "today" ||
+          rule.condition.op === "empty" || rule.condition.op === "notempty";
+        if (valueDisabled) {
+          row.createSpan({ cls: "db-conditional-format-empty-value", text: "—" });
+        } else if (currentColumn && ["select", "status", "multi-select"].includes(currentColumn.type)) {
+          createDropdownField({
+            parent: row,
+            label: t("filter.value"),
+            value: rule.condition.value || "",
+            options: [
+              { value: "", text: t("filter.value") },
+              ...getColumnOptions(currentColumn).map((option) => ({ value: option.value, text: option.value })),
+            ],
+            hideLabel: true,
+            disabled: Boolean(readOnly),
+            className: "db-conditional-format-dropdown db-conditional-format-value",
+            onChange: (next) => {
+              rule.condition.value = next;
+              persist();
+            },
+          });
+        } else {
+          const value = row.createEl("input", {
+            cls: "db-view-config-text db-conditional-format-value",
+            attr: {
+              type: currentColumn?.type === "number" || currentColumn?.type === "currency"
+                ? "number"
+                : isDateLikeColumnType(currentColumn?.type)
+                  ? "date"
+                  : "text",
+              placeholder: t("filter.value"),
+            },
+          });
+          value.value = rule.condition.value || "";
+          value.disabled = Boolean(readOnly);
+          value.onchange = () => {
+            rule.condition.value = value.value;
+            persist();
+          };
+        }
+
+        createDropdownField({
+          parent: row,
+          label: t("conditionalFormat.target"),
+          value: rule.target,
+          options: [
+            { value: "record", text: t("conditionalFormat.record") },
+            { value: "field", text: t("conditionalFormat.field") },
+          ],
+          hideLabel: true,
+          disabled: Boolean(readOnly),
+          className: "db-conditional-format-dropdown",
+          onChange: (next) => {
+            rule.target = next === "field" ? "field" : "record";
+            persist(true);
+          },
+        });
+
+        const color = row.createEl("button", {
+          cls: "db-conditional-format-color",
+          attr: { type: "button", "aria-label": t("conditionalFormat.color") },
+        });
+        color.createSpan({
+          cls: `db-conditional-format-color-swatch db-option-color-${rule.color || "gray"}`,
+        });
+        color.disabled = Boolean(readOnly);
+        color.onclick = () => {
+          openOptionColorPicker(color, rule.color || "gray", (next: StatusColor) => {
+              rule.color = next;
+              actions.onChange(t("undo.conditionalFormatConfig"));
+              renderRules();
+          });
+        };
+
+        if (!readOnly) {
+          const controls = row.createDiv({ cls: "db-conditional-format-controls" });
+          const up = controls.createEl("button", { cls: "db-icon-only-button", attr: { type: "button", "aria-label": t("common.moveUp") } });
+          setIcon(up, "chevron-up");
+          up.disabled = index === 0;
+          up.onclick = () => {
+            if (index <= 0) return;
+            [rules[index - 1], rules[index]] = [rules[index], rules[index - 1]];
+            persist(true);
+          };
+          const down = controls.createEl("button", { cls: "db-icon-only-button", attr: { type: "button", "aria-label": t("common.moveDown") } });
+          setIcon(down, "chevron-down");
+          down.disabled = index === rules.length - 1;
+          down.onclick = () => {
+            if (index >= rules.length - 1) return;
+            [rules[index], rules[index + 1]] = [rules[index + 1], rules[index]];
+            persist(true);
+          };
+          const remove = controls.createEl("button", { cls: "db-icon-only-button", attr: { type: "button", "aria-label": t("common.delete") } });
+          setIcon(remove, "trash-2");
+          remove.onclick = () => {
+            config.conditionalFormats = rules.filter((candidate) => candidate.id !== rule.id);
+            actions.onChange(t("undo.conditionalFormatConfig"));
+            renderRules();
+          };
+        }
+      });
+    };
+    renderRules();
   }
 
   private renderRecordIconSettings(
@@ -862,7 +1193,7 @@ export class ViewConfigPanelRenderer {
     });
     const columns = getSourceRuleColumns(database);
     const noteProperties = unique(columns
-      .filter((col) => col.type !== "computed" && !isBaseFileField(col.key) && !isObsidianAliasesKey(col.key))
+      .filter((col) => col.type !== "computed" && col.type !== "rollup" && !isBaseFileField(col.key) && !isObsidianAliasesKey(col.key))
       .map((col) => ({
         value: col.key,
         label: col.label && col.label !== col.key ? `${col.label} (${col.key})` : col.key,

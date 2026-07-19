@@ -15,6 +15,7 @@ import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay"
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderRelationValue } from "./RelationValueRenderer";
 import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
@@ -59,6 +60,8 @@ export interface GalleryRendererActions {
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
 }
@@ -122,6 +125,7 @@ export class GalleryRenderer {
       this.renderGroupCheckbox(header, group.rows);
       header.createSpan({ cls: "db-gallery-group-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
       header.createSpan({ cls: "db-gallery-group-count", text: String(group.count) });
+      this.actions.renderGroupSummaries?.(header, group.rows, config);
       if (collapsed) continue;
       const gallery = this.createGallery(section, config);
       this.setupGroupDropTarget(gallery, groupField, group.key);
@@ -162,6 +166,7 @@ export class GalleryRenderer {
       cls: "db-gallery-card",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
+    this.actions.applyConditionalFormat?.(card, row, config);
     this.attachRowContextMenu(card, row, {
       visibleRows: allRows,
       groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
@@ -238,6 +243,7 @@ export class GalleryRenderer {
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const item = meta.createDiv({ cls: "db-gallery-field", attr: { "data-note-database-column-key": col.key } });
+      this.actions.applyConditionalFormat?.(item, row, config, col.key);
       item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
@@ -486,7 +492,9 @@ export class GalleryRenderer {
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
-    if (col.type === "computed") return row.computed[col.computedKey || col.key];
+    if (col.type === "computed" || col.type === "rollup") {
+      return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+    }
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
   }
@@ -546,6 +554,10 @@ export class GalleryRenderer {
       const values = toMultiSelectValuesForKey(col.key, value);
       setFieldTooltip(wrap, values);
       for (const entry of values) this.renderBadge(wrap, col, entry);
+      return;
+    }
+    if (col.type === "relation" && renderRelationValue(valueEl, this.app, row, value, true)) {
+      valueEl.addClass("has-badges");
       return;
     }
     if (displayType === "date" || displayType === "datetime") {
@@ -613,6 +625,7 @@ export class GalleryRenderer {
     const item = window.activeDocument.createElement("div");
     item.className = "db-gallery-field";
     item.setAttribute("data-note-database-column-key", col.key);
+    this.actions.applyConditionalFormat?.(item, row, config, col.key);
     item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
     setFieldTooltip(item, displayValue, col.label);
     if (empty) item.classList.add("is-empty-field");

@@ -14,6 +14,32 @@ export interface FilterPanelActions {
   close(): void;
 }
 
+export function getFilterOperatorsForColumn(col?: ColumnDef): [FilterRule["op"], string][] {
+  const base: [FilterRule["op"], string][] = [
+    ["eq", t("filter.eq")],
+    ["neq", t("filter.neq")],
+  ];
+  const emptyOps: [FilterRule["op"], string][] = [
+    ["empty", t("filter.empty")],
+    ["notempty", t("filter.notempty")],
+  ];
+  if (!col) return [...base, ["contains", t("filter.contains")], ...emptyOps];
+  if (col.type === "number" || col.type === "currency" || isDateLikeColumnType(col.type)) {
+    return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
+  }
+  if (col.type === "select" || col.type === "status") {
+    return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
+  }
+  if (col.type === "multi-select") {
+    if (col.key === "file.tags" || isObsidianTagsKey(col.key)) return [...base, ["hasTag", t("filter.hasTag")], ["contains", t("filter.contains")], ...emptyOps];
+    return [...base, ["contains", t("filter.contains")], ...emptyOps];
+  }
+  if (col.type === "checkbox") {
+    return [["notempty", t("filter.checkboxChecked")], ["empty", t("filter.checkboxUnchecked")]];
+  }
+  return [...base, ["contains", t("filter.contains")], ...emptyOps];
+}
+
 export class FilterPanelRenderer {
   private panelEl: HTMLElement | null = null;
   private anchorEl: HTMLElement | null = null;
@@ -125,7 +151,7 @@ export class FilterPanelRenderer {
       onChange: (value) => {
         rule.field = value;
         const nextCol = allCols.find((col) => col.key === rule.field);
-        const nextOps = this.getOperatorsForColumn(nextCol);
+        const nextOps = getFilterOperatorsForColumn(nextCol);
         if (!nextOps.some(([op]) => op === rule.op)) rule.op = nextOps[0]?.[0] || "eq";
         rule.value = "";
         actions.saveState();
@@ -142,7 +168,7 @@ export class FilterPanelRenderer {
       rule.op = wantChecked ? "notempty" : "empty";
       rule.value = "";
     }
-    const ops = this.getOperatorsForColumn(currentCol);
+    const ops = getFilterOperatorsForColumn(currentCol);
     if (!ops.some(([op]) => op === rule.op)) rule.op = ops[0]?.[0] || "eq";
     createDropdownField({
       parent: row,
@@ -172,34 +198,6 @@ export class FilterPanelRenderer {
       this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
       actions.refresh();
     };
-  }
-
-  private getOperatorsForColumn(col?: ColumnDef): [FilterRule["op"], string][] {
-    const base: [FilterRule["op"], string][] = [
-      ["eq", t("filter.eq")],
-      ["neq", t("filter.neq")],
-    ];
-    const emptyOps: [FilterRule["op"], string][] = [
-      ["empty", t("filter.empty")],
-      ["notempty", t("filter.notempty")],
-    ];
-    if (!col) return [...base, ["contains", t("filter.contains")], ...emptyOps];
-    if (col.type === "number" || col.type === "currency" || isDateLikeColumnType(col.type)) {
-      return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
-    }
-    if (col.type === "select" || col.type === "status") {
-      return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
-    }
-    if (col.type === "multi-select") {
-      if (col.key === "file.tags" || isObsidianTagsKey(col.key)) return [...base, ["hasTag", t("filter.hasTag")], ["contains", t("filter.contains")], ...emptyOps];
-      return [...base, ["contains", t("filter.contains")], ...emptyOps];
-    }
-    if (col.type === "checkbox") {
-      // checkbox only offers "is checked" / "is unchecked" (empty/notempty under the hood,
-      // evaluated boolean-aware in QueryEngine). eq/neq are not meaningful for a checkbox.
-      return [["notempty", t("filter.checkboxChecked")], ["empty", t("filter.checkboxUnchecked")]];
-    }
-    return [...base, ["contains", t("filter.contains")], ...emptyOps];
   }
 
   private getFilterColumns(config: ViewConfig): ColumnDef[] {

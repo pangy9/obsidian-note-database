@@ -297,7 +297,9 @@ function getCalendarRowFieldValue(row: RowData, field: string, config: ViewConfi
   if (field === "file.ctime") return new Date(row.file.stat.ctime);
   if (field === "file.mtime") return new Date(row.file.stat.mtime);
   const col = config.schema.columns.find((candidate) => candidate.key === field);
-  if (col?.type === "computed") return row.computed[col.computedKey || col.key];
+  if (col?.type === "computed" || col?.type === "rollup") {
+    return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+  }
   return row.frontmatter[field];
 }
 

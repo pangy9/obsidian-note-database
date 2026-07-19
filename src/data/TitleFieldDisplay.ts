@@ -51,7 +51,9 @@ function getTitleFieldValue(row: RowData, config: ViewConfig, field: string): un
 
 function getColumnValue(row: RowData, col: ColumnDef): unknown {
   if (isTitleFileFieldKey(col.key)) return getTitleFileFieldValue(row, col.key);
-  if (col.type === "computed") return row.computed[col.computedKey || col.key];
+  if (col.type === "computed" || col.type === "rollup") {
+    return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+  }
   return row.frontmatter[col.key];
 }
 

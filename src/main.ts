@@ -1903,14 +1903,16 @@ export default class NoteDatabasePlugin extends Plugin {
     return map;
   }
 
-  private normalizeBaseSummaryRules(value: unknown, schemaColumnKeys: Set<string>): Record<string, string> | undefined {
+  private normalizeBaseSummaryRules(value: unknown, schemaColumnKeys: Set<string>): NonNullable<ViewConfig["summaryRules"]> | undefined {
     const rules = this.getBaseStringMap(value);
-    const normalized: Record<string, string> = {};
+    const normalized: NonNullable<ViewConfig["summaryRules"]> = [];
     for (const [rawKey, summary] of Object.entries(rules)) {
       const key = this.cleanBaseKey(rawKey);
-      if (this.isBaseViewRuleField(key, schemaColumnKeys) && summary.trim()) normalized[key] = summary.trim();
+      if (this.isBaseViewRuleField(key, schemaColumnKeys) && summary.trim()) {
+        normalized.push({ field: key, summary: summary.trim() });
+      }
     }
-    return Object.keys(normalized).length > 0 ? normalized : undefined;
+    return normalized.length > 0 ? normalized : undefined;
   }
 
   private isBaseViewRuleField(key: string, schemaColumnKeys: Set<string>): boolean {

@@ -1,5 +1,6 @@
 import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { getColumnOptions, isObsidianTagsKey, normalizeOptionValueForKey, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
+import { OPTION_REGISTRATION_COLORS } from "../data/OptionRegistration";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
@@ -7,7 +8,7 @@ import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonly
 import { formatGroupKeyDisplay, isComputedGroupField } from "../data/GroupDisplay";
 import { parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
-import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, ViewConfig } from "../data/types";
+import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, StatusColor, ViewConfig } from "../data/types";
 import { t } from "../i18n";
 import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
@@ -15,12 +16,15 @@ import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay"
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderSpecialFileFieldValue, shouldRenderSpecialFileField } from "./FileFieldRenderer";
 import { renderRating, renderProgress, renderProgressRing } from "./NumberDisplayRenderer";
+import { renderRelationValue } from "./RelationValueRenderer";
 import { renderInlineMarkdown, resolveInlineImageSrc, valueToTooltip } from "./InlineMarkdownRenderer";
 import { clampCardFieldWidth, getFieldWidth } from "./ColumnWidth";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { resolveBoardCardDropIntent, resolveBoardColumnByPoint, resolveBoardContainerDropOrder, type BoardDropCandidate } from "../data/BoardContainerDrop";
 import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
+import { isImeComposing } from "../data/KeyboardUtils";
+import { openOptionColorPicker } from "./OptionColorPicker";
 
 const CARD_MIME = "application/x-note-database-card";
 const CARD_FROM_GROUP_MIME = "application/x-note-database-card-from-group";
@@ -43,6 +47,7 @@ export interface BoardSubgroup {
 export interface BoardRendererActions {
   openRow(row: RowData): void;
   createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
+  createGroup?(field: string, name: string, color: StatusColor): Promise<boolean>;
   updateGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void>;
   updateGroupOrder(field: string, order: string[]): void;
   updateCardOrder(field: string, groupKey: string, paths: string[]): void;
@@ -68,6 +73,8 @@ export interface BoardRendererActions {
   showColumnMenu?(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement): void;
   editFormula?(col: ColumnDef): void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
+  renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
+  applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   readonly isReadOnly?: boolean;
   readonly hideCreateEntry?: boolean;
   readonly canReorderGroups?: boolean;
@@ -119,10 +126,117 @@ export class BoardRenderer {
     for (const group of groups) {
       this.renderColumn(board, config, groups, group, groupField);
     }
-    if (!this.actions.isReadOnly && !this.actions.hideCreateEntry) {
-      const addColumn = board.createDiv({ cls: "db-board-add-column" });
-      addColumn.createEl("button", { text: `+ ${t("toolbar.new")}` }).onclick = () => this.actions.createEntry();
+    if (
+      !this.actions.isReadOnly
+      && !this.actions.hideCreateEntry
+      && this.actions.createGroup
+      && this.canCreateGroup(config, groupField)
+    ) {
+      this.renderAddGroupControl(board, config, groupField);
     }
+  }
+
+  private canCreateGroup(config: ViewConfig, groupField: string): boolean {
+    const column = config.schema.columns.find((candidate) => candidate.key === groupField);
+    if (!column || column.type === "computed" || column.type === "rollup" || isObsidianTagsKey(column.key)) return false;
+    const displayType = getColumnDisplayType(column, config.schema.computedFields);
+    return displayType === "status" || displayType === "select" || displayType === "multi-select";
+  }
+
+  private renderAddGroupControl(board: HTMLElement, config: ViewConfig, groupField: string): void {
+    const column = config?.schema.columns.find((candidate) => candidate.key === groupField);
+    let selectedColor: StatusColor = OPTION_REGISTRATION_COLORS[
+      (column?.statusOptions?.length || 0) % OPTION_REGISTRATION_COLORS.length
+    ];
+    const addGroup = board.createDiv({ cls: "db-board-add-column" });
+    const trigger = addGroup.createEl("button", {
+      cls: "db-board-add-group-trigger",
+      text: `+ ${t("board.newGroup")}`,
+      attr: { type: "button" },
+    });
+    trigger.onclick = () => {
+      trigger.remove();
+      const editor = addGroup.createDiv({ cls: "db-board-add-group-editor" });
+      const input = editor.createEl("input", {
+        cls: "db-board-add-group-input",
+        attr: {
+          type: "text",
+          placeholder: t("board.groupNamePlaceholder"),
+          "aria-label": t("board.groupNamePlaceholder"),
+        },
+      });
+      const confirm = editor.createEl("button", {
+        cls: "db-board-add-group-confirm",
+        attr: { type: "button", title: t("common.save"), "aria-label": t("common.save") },
+      });
+      setIcon(confirm, "check");
+      const cancel = editor.createEl("button", {
+        cls: "db-board-add-group-cancel",
+        attr: { type: "button", title: t("common.cancel"), "aria-label": t("common.cancel") },
+      });
+      setIcon(cancel, "x");
+      const colorPreview = editor.createSpan({
+        cls: `db-board-add-group-color-preview db-option-color-${selectedColor}`,
+        attr: {
+          role: "button",
+          tabindex: "0",
+          "aria-label": t("board.groupColor"),
+          title: t("board.groupColor"),
+        },
+      });
+      let closeColorPicker: (() => void) | undefined;
+      const openColorPicker = () => {
+        closeColorPicker = openOptionColorPicker(colorPreview, selectedColor, (color) => {
+          colorPreview.removeClass(`db-option-color-${selectedColor}`);
+          selectedColor = color;
+          colorPreview.addClass(`db-option-color-${selectedColor}`);
+        });
+      };
+      colorPreview.onclick = (event) => {
+        event.stopPropagation();
+        openColorPicker();
+      };
+      colorPreview.onkeydown = (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openColorPicker();
+      };
+      let submitting = false;
+      const close = () => {
+        closeColorPicker?.();
+        editor.remove();
+        addGroup.remove();
+        this.renderAddGroupControl(board, config, groupField);
+      };
+      const submit = async () => {
+        const name = input.value.trim();
+        if (!name || submitting || !this.actions.createGroup) return;
+        submitting = true;
+        closeColorPicker?.();
+        input.disabled = true;
+        confirm.disabled = true;
+        const created = await this.actions.createGroup(groupField, name, selectedColor);
+        if (created) return;
+        submitting = false;
+        input.disabled = false;
+        confirm.disabled = false;
+        input.focus();
+        input.select();
+      };
+      confirm.onclick = () => { void submit(); };
+      cancel.onclick = close;
+      input.onkeydown = (event) => {
+        if (isImeComposing(event)) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void submit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+        }
+      };
+      input.focus();
+    };
   }
 
   private renderColumn(
@@ -217,8 +331,13 @@ export class BoardRenderer {
       checkbox.onclick = (event) => event.stopPropagation();
       checkbox.onchange = () => this.actions.toggleRowsSelected(group.rows, checkbox.checked);
     }
-    header.createSpan({ cls: "db-board-column-title", text: formatGroupKeyDisplay(config, groupField, group.key) });
-    header.createSpan({ cls: "db-board-count", text: String(group.count) });
+    const headerText = header.createDiv({ cls: "db-board-header-text" });
+    this.renderGroupTitle(headerText, config, groupField, group.key, "db-board-column-title");
+    headerText.createSpan({ cls: "db-board-count", text: String(group.count) });
+    if (config.summaryRules?.length) {
+      const summaries = headerText.createSpan({ cls: "db-board-header-summaries" });
+      this.actions.renderGroupSummaries?.(summaries, group.rows, config);
+    }
     if (!this.isPhoneLayout()) {
       const resizeHandle = column.createDiv({ cls: "db-board-column-resize-handle" });
       resizeHandle.addEventListener("mousedown", (event) => this.startColumnResize(event, board, config));
@@ -279,8 +398,13 @@ export class BoardRenderer {
       checkbox.onclick = (event) => event.stopPropagation();
       checkbox.onchange = () => this.actions.toggleRowsSelected(subgroup.rows, checkbox.checked);
     }
-    header.createSpan({ cls: "db-board-subgroup-title", text: formatGroupKeyDisplay(config, subgroupField, subgroup.key) });
-    header.createSpan({ cls: "db-board-subgroup-count", text: String(subgroup.count) });
+    const headerText = header.createDiv({ cls: "db-board-header-text" });
+    this.renderGroupTitle(headerText, config, subgroupField, subgroup.key, "db-board-subgroup-title");
+    headerText.createSpan({ cls: "db-board-subgroup-count", text: String(subgroup.count) });
+    if (config.summaryRules?.length) {
+      const summaries = headerText.createSpan({ cls: "db-board-header-summaries" });
+      this.actions.renderGroupSummaries?.(summaries, subgroup.rows, config);
+    }
     if (collapsed) return;
 
     const cards = this.createCardsContainer(section, config, group, groupField, subgroupField, subgroup);
@@ -365,6 +489,7 @@ export class BoardRenderer {
       cls: "db-board-card",
       attr: { "data-note-database-row-path": row.file.path, title: row.file.path },
     });
+    this.actions.applyConditionalFormat?.(card, row, config);
     this.attachRowContextMenu(card, row, {
       visibleRows,
       groups: [
@@ -507,6 +632,7 @@ export class BoardRenderer {
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const item = meta.createDiv({ cls: "db-board-card-field", attr: { "data-note-database-column-key": col.key } });
+      this.actions.applyConditionalFormat?.(item, row, config, col.key);
       item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
       setFieldTooltip(item, displayValue, col.label);
       if (empty) item.addClass("is-empty-field");
@@ -791,7 +917,9 @@ export class BoardRenderer {
   private getCellValue(row: RowData, col: ColumnDef): unknown {
     if (col.key === "file.name") return getFileTitleDisplay(row, Array.from(this.rowByPath.values())).displayPath;
     if (isFileFieldKey(col.key)) return getRowFileFieldValue(row, col.key);
-    if (col.type === "computed") return row.computed[col.computedKey || col.key];
+    if (col.type === "computed" || col.type === "rollup") {
+      return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key];
+    }
     if (isObsidianTagsKey(col.key)) return toMultiSelectValuesForKey(col.key, row.frontmatter[col.key]);
     return row.frontmatter[col.key];
   }
@@ -851,6 +979,10 @@ export class BoardRenderer {
       const wrap = valueEl.createDiv({ cls: "db-board-card-badges" });
       setFieldTooltip(wrap, values);
       for (const entry of values) this.renderBadge(wrap, col, entry);
+      return;
+    }
+    if (col.type === "relation" && renderRelationValue(valueEl, this.app, row, value, true)) {
+      valueEl.addClass("has-badges");
       return;
     }
     if (displayType === "date" || displayType === "datetime") {
@@ -919,6 +1051,7 @@ export class BoardRenderer {
     const item = window.activeDocument.createElement("div");
     item.className = "db-board-card-field";
     item.setAttribute("data-note-database-column-key", col.key);
+    this.actions.applyConditionalFormat?.(item, row, config, col.key);
     item.style.setProperty("--db-card-field-width", `${this.getCardFieldWidth(config, col)}px`);
     setFieldTooltip(item, displayValue, col.label);
     if (empty) item.classList.add("is-empty-field");
@@ -951,6 +1084,36 @@ export class BoardRenderer {
     const option = getColumnOptions(col).find((item) => normalizeOptionValueForKey(col.key, item.value) === value);
     if (option) badge.addClass(`status-color-${option.color}`);
     else badge.addClass("status-color-gray");
+  }
+
+  private renderGroupTitle(
+    parent: HTMLElement,
+    config: ViewConfig,
+    field: string,
+    groupKey: string,
+    className: string
+  ): void {
+    const label = formatGroupKeyDisplay(config, field, groupKey);
+    const title = parent.createSpan({ cls: className });
+    title.title = label;
+    const column = config.schema.columns.find((candidate) => candidate.key === field);
+    const option = column
+      ? getColumnOptions(column).find((candidate) =>
+        normalizeOptionValueForKey(column.key, candidate.value) ===
+        normalizeOptionValueForKey(column.key, groupKey))
+      : undefined;
+    const displayType = column
+      ? getColumnDisplayType(column, config.schema.computedFields)
+      : undefined;
+    const isOptionGroup = displayType === "status" || displayType === "select" || displayType === "multi-select";
+    if (!isOptionGroup) {
+      title.setText(label);
+      return;
+    }
+    title.createSpan({
+      cls: `status-badge status-color-${option?.color || "gray"}`,
+      text: label,
+    });
   }
 
   private startColumnResize(event: MouseEvent, board: HTMLElement, config: ViewConfig): void {

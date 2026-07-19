@@ -1,4 +1,5 @@
 import { getColumnOptionValues } from "./ColumnTypes";
+import { getColumnDisplayType } from "./ColumnDisplay";
 import { ColumnDef, ViewConfig } from "./types";
 
 export function getGroupColumn(config: ViewConfig, field: string): ColumnDef | undefined {
@@ -8,9 +9,10 @@ export function getGroupColumn(config: ViewConfig, field: string): ColumnDef | u
 export function getDefaultGroupOrder(config: ViewConfig, field: string): string[] {
   const col = getGroupColumn(config, field);
   if (!col) return [];
+  const displayType = getColumnDisplayType(col, config.schema.computedFields);
   const optionOrder = getColumnOptionValues(col);
   if (optionOrder.length > 0) return optionOrder;
-  if (col.type === "checkbox") return ["true", "false"];
+  if (displayType === "checkbox") return ["true", "false"];
   return [];
 }
 
@@ -19,7 +21,14 @@ export function getEffectiveGroupOrder(
   field: string,
   actualKeys: string[] = []
 ): string[] {
-  return mergeGroupOrder(config.groupOrders?.[field] || [], getDefaultGroupOrder(config, field), actualKeys);
+  const column = getGroupColumn(config, field);
+  const displayType = column ? getColumnDisplayType(column, config.schema.computedFields) : undefined;
+  const storedOrder = config.groupOrders?.[field] || [];
+  return mergeGroupOrder(
+    displayType === "checkbox" ? storedOrder.filter((key) => key === "true" || key === "false") : storedOrder,
+    getDefaultGroupOrder(config, field),
+    actualKeys,
+  );
 }
 
 export function mergeGroupOrder(...orders: string[][]): string[] {

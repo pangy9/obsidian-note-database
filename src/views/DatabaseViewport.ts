@@ -18,6 +18,18 @@ export interface EmbeddedHostViewportSnapshot {
 export type DatabaseViewportRequest = "auto" | "preserve-anchor" | "preserve-raw" | "reset-top" | "none";
 export type DatabaseViewportMode = Exclude<DatabaseViewportRequest, "auto">;
 
+export function resolveNewRecordRevealBehavior(
+  viewType: DatabaseViewType | null | undefined,
+  hasFocusCell: boolean,
+): Pick<ScrollIntoViewOptions, "block" | "inline" | "behavior"> {
+  const useNearest = hasFocusCell || viewType === "board";
+  return {
+    block: useNearest ? "nearest" : "center",
+    inline: useNearest ? "nearest" : "center",
+    behavior: useNearest ? "auto" : "smooth",
+  };
+}
+
 interface AnchorCandidate {
   id: string;
   offset: number;
@@ -27,7 +39,7 @@ interface AnchorCandidate {
 export function captureDatabaseViewport(container: HTMLElement): DatabaseViewportSnapshot {
   const bounds = container.getBoundingClientRect();
   const rowAnchor = findVisibleAnchor(container, "[data-note-database-row-path]", "noteDatabaseRowPath", bounds, "top");
-  const columnAnchor = findVisibleAnchor(container, "[data-note-database-column-key]", "noteDatabaseColumnKey", bounds, "left");
+  const columnAnchor = findVisibleAnchor(container, "th[data-note-database-column-key]", "noteDatabaseColumnKey", bounds, "left");
   return {
     top: container.scrollTop,
     left: container.scrollLeft,
@@ -50,7 +62,7 @@ export function restoreDatabaseViewport(container: HTMLElement, snapshot: Databa
   }
 
   const column = snapshot.columnAnchor
-    ? findAnchorById(container, "[data-note-database-column-key]", "noteDatabaseColumnKey", snapshot.columnAnchor.key)
+    ? findAnchorById(container, "th[data-note-database-column-key]", "noteDatabaseColumnKey", snapshot.columnAnchor.key)
     : null;
   if (column) {
     container.scrollLeft += column.getBoundingClientRect().left - bounds.left - snapshot.columnAnchor!.offset;

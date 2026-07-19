@@ -17,8 +17,14 @@ import { resolveTitleFieldDisplay } from "./TitleFieldDisplay";
 export class RowPipeline {
   private queryEngine = new QueryEngine();
 
-  build(records: NoteRecord[], config: ViewConfig, state: DatabaseViewState, app?: App): RowData[] {
-    let rows = this.buildRows(records, config, app);
+  build(
+    records: NoteRecord[],
+    config: ViewConfig,
+    state: DatabaseViewState,
+    app?: App,
+    derivedValues?: ReadonlyMap<string, Record<string, unknown>>,
+  ): RowData[] {
+    let rows = this.buildRows(records, config, app, derivedValues);
     const queryColumns = this.withComputedResultTypes(config);
 
     if (state.sortRules.length > 0) {
@@ -57,8 +63,8 @@ export class RowPipeline {
         }
         for (const col of searchCols) {
           const displayType = this.getSearchDisplayType(config, col);
-          const val = col.type === "computed"
-            ? row.computed[col.computedKey || col.key]
+          const val = col.type === "computed" || col.type === "rollup"
+            ? row.computed[col.type === "computed" ? col.computedKey || col.key : col.key]
             : isFileFieldKey(col.key)
               ? getRowFileFieldValue(row, col.key)
               : row.frontmatter[col.key];
@@ -97,7 +103,12 @@ export class RowPipeline {
     return rows;
   }
 
-  private buildRows(records: NoteRecord[], config: ViewConfig, app?: App): RowData[] {
+  private buildRows(
+    records: NoteRecord[],
+    config: ViewConfig,
+    app?: App,
+    derivedValues?: ReadonlyMap<string, Record<string, unknown>>,
+  ): RowData[] {
     const thisFile = app && config.baseThisFilePath
       ? app.vault.getAbstractFileByPath(config.baseThisFilePath)
       : null;
@@ -109,17 +120,28 @@ export class RowPipeline {
       file: record.file,
       frontmatter: record.frontmatter,
       cache: app?.metadataCache.getFileCache(record.file) ?? null,
-      computed: evaluateComputedFields(config.schema.computedFields, config.schema.columns, record.frontmatter, {
-        app,
-        file: record.file,
-        thisFile: thisFile instanceof TFile ? thisFile : undefined,
-        thisFrontmatter,
-      }),
+      computed: {
+        ...evaluateComputedFields(config.schema.computedFields, config.schema.columns, record.frontmatter, {
+          app,
+          file: record.file,
+          thisFile: thisFile instanceof TFile ? thisFile : undefined,
+          thisFrontmatter,
+        }),
+        ...(derivedValues?.get(record.file.path) || {}),
+      },
     }));
   }
 
   private withComputedResultTypes(config: ViewConfig): ColumnDef[] {
     return config.schema.columns.map((col) => {
+      if (col.type === "rollup") {
+        const type = col.rollupConfig?.aggregation === "count" ||
+          col.rollupConfig?.aggregation === "sum" ||
+          col.rollupConfig?.aggregation === "avg"
+          ? "number"
+          : "text";
+        return { ...col, type };
+      }
       if (col.type !== "computed") return col;
       const computedKey = col.computedKey || col.key;
       const computedType = config.schema.computedFields.find((field) => field.key === computedKey)?.type;
@@ -146,7 +168,9 @@ export class RowPipeline {
 
   private getSearchFieldValue(row: RowData, config: ViewConfig, field: string): unknown {
     const column = config.schema.columns.find((col) => col.key === field);
-    if (column?.type === "computed") return row.computed[column.computedKey || column.key];
+    if (column?.type === "computed" || column?.type === "rollup") {
+      return row.computed[column.type === "computed" ? column.computedKey || column.key : column.key];
+    }
     if (isFileFieldKey(field)) {
       if (field === "file.name" || field === "file.basename") {
         return row.file.basename || row.file.name.replace(/\.md$/i, "");

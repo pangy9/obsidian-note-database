@@ -11,6 +11,10 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Seven database views**: switch the same notes between table, board, gallery, list, chart, calendar, and timeline layouts.
 - **Markdown-first storage**: every database is saved as a normal `db_view: true` Markdown file in your vault.
 - **Inline property editing**: edit text, numbers, dates, currency, checkboxes, selects, multi-selects, statuses, and file names directly from the view.
+- **Spreadsheet-style table workflows**: navigate and select cells with the keyboard, fill or paste ranges, create overflow rows, rename files safely, and undo multi-cell operations as one transaction.
+- **Typed bulk editing**: edit one property across many records with native field editors, impact previews, confirmation for risky changes, rollback, and single-step undo.
+- **Database and record icons**: use Unicode Emoji or Lucide icons for databases and records, with database defaults and per-view record-icon fields.
+- **Source-aware record creation**: create or insert notes while preserving writable source rules, visible group context, and manual order.
 - **Inline markdown in text properties**: render bold, italic, highlight, strikethrough, inline code, links, wikilinks, and LaTeX inside any text column, with a floating format toolbar while editing.
 - **Number display styles**: show number fields as a rating (stars or emoji), a progress bar, or a progress ring.
 - **Flexible filtering and grouping**: combine filters, sorting, grouping, hidden fields, title fields, manual order, and per-view layout settings.
@@ -24,21 +28,26 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 - **Import, export, and Bases conversion**: move data with CSV + Markdown ZIP files or convert Obsidian `.base` files.
 - **Local and private**: vault content, metadata, formulas, and settings stay on your device.
 
-## What's New In 1.2.5
+## What's New In 1.2.6
 
-- **Database and record icons**: assign Unicode Emoji or Lucide icons to databases and individual records, with a database-wide default, per-view field overrides, and a shared icon picker.
+- **Database covers**: add a local image cover to a database and drag it vertically to choose the visible crop.
 
-![Database and record icons](assets/screenshots/en-database-icons.png)
+![Note Database 1.2.6 overview with cover, conditional formatting, group summaries, relations, and rollups](assets/screenshots/en-1.2.6-overview.png)
 
-- **Typed bulk editing**: edit the same field across many records at once using native typed editors, with impact previews, risk confirmation, transactional rollback, and single-step undo.
+- **View-level conditional formatting**: color records or the matching property by rules based on numbers, dates, checkboxes, options, text, and empty values.
 
-![Typed bulk editing](assets/screenshots/en-bulk-edit.png)
+![View-level conditional formatting rules](assets/screenshots/en-conditional-format.png)
 
-- **Source-rule-aware record creation**: new notes derive writable file names, folders, tags, properties, and supported boundaries from active database and view source rules, with clear warnings when a rule cannot be guaranteed.
+- **Group summaries**: show multiple reorderable count, sum, average, min/max, and other summaries in grouped table, board, gallery, list, and timeline views.
+![Board group titles and group summaries](assets/screenshots/en-board-groups-summaries.png)
 
-- **Insert records above or below**: row-menu actions to insert a record above or below the current visible row, preserving group, subgroup, and manual-order context.
+- **New-record templates**: apply an Obsidian Markdown template or Templater template when creating records, while preserving explicit view and source-rule defaults.
 
-- **Dashboard and editing polish**: dashboards refresh immediately after settings changes; automatic column width measures rendered Markdown, links, code, and MathJax; and `file.*` fields, title editing, Cmd/Ctrl+F search focus, mobile database-list layout, and grouped insertion stability are improved.
+- **Local-first relations and rollups**: store relations as native Obsidian wikilinks and calculate read-only count, sum, average, or list rollups from linked notes within the selected database scope.
+
+- **Board group creation**: create colored select, status, or multi-select groups directly from the end of a board, with option-colored group titles.
+
+- **Faster, steadier editing**: incremental refreshes update affected rows when safe, inline editors respond sooner, and table/board focus and viewport positions are preserved more consistently.
 
 ## Views
 
@@ -63,6 +72,18 @@ Note Database turns Markdown files and frontmatter properties into editable tabl
 | Month-level scheduling for all-day spans, multi-day plans, and direct drag or resize date changes. | Near-term scheduling with an all-day lane and a time grid for date and datetime events. |
 
 Each view can keep its own filters, sorting, grouping, visible fields, title field, and layout settings.
+
+## Editing, Icons, And Record Creation
+
+Table, board, gallery, and list views support typed bulk editing with the same editors used for individual properties. Before risky changes, Note Database previews the affected records, confirms the operation, and keeps rollback and undo within one transaction.
+
+![Typed bulk editing](assets/screenshots/en-bulk-edit.png)
+
+Databases and records can use Unicode Emoji or Lucide icons. A database can define the default record-icon property, while each view may override it when the same notes need a different visual role.
+
+![Database and record icons](assets/screenshots/en-database-icons.png)
+
+New notes are planned from the active source rules. Group buttons, row insertion, and other creation entry points preserve supported folder, tag, property, group, subgroup, and manual-order context, and warn instead of silently creating a note outside the database.
 
 ## Text Properties And Inline Markdown
 
@@ -252,6 +273,14 @@ If Note Database helps you, a star or donation helps support continued developme
 <img src="assets/screenshots/wechat_sponsor.jpg" width="300" alt="Sponsor on WeChat">
 
 ## Changelog
+
+### 1.2.6
+
+- Added database covers with adjustable image positioning, view-level conditional formatting, cross-view group summaries, new-record templates, and local-first relation/rollup fields backed by Obsidian wikilinks.
+- Added direct colored group creation for select, status, and multi-select board groups.
+- Expanded spreadsheet-style table keyboard navigation, range selection, fill, paste, overflow row creation, transactional file renaming, and focus restoration.
+- Added incremental record refresh and local DOM updates for smoother inline editing, with safer editor, selection, and viewport preservation.
+- Improved record icons, checkbox grouping, calendar/timeline overflow panels, all-day icons, new-entry overlay guards, column insertion, multi-select refresh, and board summary truncation.
 
 ### 1.2.5
 

@@ -1,4 +1,5 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, setIcon, setTooltip } from "obsidian";
+import { makeModalDraggable } from "./views/modals/ModalDrag";
 import NoteDatabasePlugin from "./main";
 import { DatabaseConfig, PluginSettings, TrashedDatabase } from "./data/types";
 import { LocaleCode, setLocale, t } from "./i18n";
@@ -498,6 +499,7 @@ class TrashManagerModal extends Modal {
     contentEl.empty();
     contentEl.addClass("note-database-modal");
     contentEl.createEl("h3", { text: t("settings.trash.manageTitle") });
+    makeModalDraggable(this);
     contentEl.createDiv({ cls: "db-delete-modal-info", text: t("settings.trash.manageDesc") });
 
     const trash = this.plugin.settings.trashedDatabases;
@@ -577,6 +579,7 @@ class TrashManagerModal extends Modal {
         this.contentEl.empty();
         this.contentEl.addClass("note-database-modal");
         this.contentEl.createEl("h3", { text: t("settings.trash.restoreTitle", { name: item.database.name || t("common.untitled") }) });
+        makeModalDraggable(this);
         this.contentEl.createDiv({ cls: "db-delete-modal-info", text: t("settings.trash.restoreDesc") });
 
         const btnRow = this.contentEl.createDiv({ cls: "db-delete-modal-buttons" });

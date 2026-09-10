@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 import { ColumnDef, DatabaseConfig, StatusPresetDef, ViewConfig, generateId } from "../../data/types";
 import { normalizeStatusPresets } from "../../data/ColumnTypes";
@@ -58,6 +59,7 @@ export class AddDatabaseModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h3", { text: t("addDatabase.title") });
 
+    makeModalDraggable(this);
     // Wrap the globals in `.note-database-container` so the scoped `db-view-config-*`
     // styles (which key off that ancestor) apply unchanged — the base selector only sets
     // CSS variables, so this is safe inside a modal. The same renderer powers the settings

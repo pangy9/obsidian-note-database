@@ -1,7 +1,7 @@
 import { FORMULA_BUILTIN_CONSTANTS, scanFormulaSegments } from "./FormulaTokenizer";
 import { FORMULA_FILE_FIELDS } from "./FormulaFields";
 import { ColumnDef, ComputedFieldDef } from "./types";
-import { safeEval } from "./SafeEval";
+import { safeEval, createSafeBuiltin } from "./SafeEval";
 import { safeString } from "./SafeString";
 import { hasDateTimeValue } from "./DateTimeFormat";
 import type { MomentConstructor, MomentLike } from "./MomentTypes";
@@ -387,16 +387,30 @@ export class ComputedFieldEngine {
    * （内置 pi/today/note 等不计）。修复 Bug Z：原先只匹配 field("...")，漏掉默认形式 [field]
    * 与裸标识符，导致 automatic 模式增量保存漏算依赖列、computed 存储值停留旧值。
    */
+  static normalizeFormulaExpression(expr: string, knownFields: ReadonlySet<string>): string {
+    let formula = expr.trim();
+    if (formula.startsWith("=")) formula = formula.slice(1).trim();
+    const segments = scanFormulaSegments(formula, knownFields);
+    const bracketRefs = segments.filter((s) => s.kind === "bracket-ref");
+    for (let i = bracketRefs.length - 1; i >= 0; i--) {
+      const seg = bracketRefs[i];
+      const name = formula.slice(seg.start + 1, seg.end - 1).trim();
+      formula = formula.slice(0, seg.start) + `field(${JSON.stringify(name)})` + formula.slice(seg.end);
+    }
+    return formula;
+  }
+
   static extractDependencies(expression: string, columns: ColumnDef[] = []): string[] {
     const allColumns = [...columns, ...FORMULA_FILE_FIELDS];
     const byKey = new Map(allColumns.map((c) => [c.key, c]));
     const byLabel = new Map(allColumns.map((c) => [c.label, c]));
+    const knownFields = new Set<string>([...byKey.keys(), ...byLabel.keys()]);
     const deps: string[] = [];
     const add = (name: string): void => {
       const col = byKey.get(name) || byLabel.get(name);
       if (col && !deps.includes(col.key)) deps.push(col.key);
     };
-    for (const seg of scanFormulaSegments(expression)) {
+    for (const seg of scanFormulaSegments(expression, knownFields)) {
       if (seg.kind === "bracket-ref" || seg.kind === "field-call") add(seg.name);
       else if (seg.kind === "member-ref" && seg.object === "formula") {
         // Bases formulas address derived fields as formula.<key>. Resolve only
@@ -429,9 +443,13 @@ export class ComputedFieldEngine {
     const securityError = this.validateFormulaSecurity(normalizedExpr);
     if (securityError) return { value: null, error: securityError };
 
-    // Build scope from context with common globals
+    // Build scope from context with common globals, wrapped to prevent
+    // sandbox escape via reflection APIs (getOwnPropertyDescriptor, etc.).
     const scope: Record<string, unknown> = {
-      Math, Number, String, Boolean, Array, Object, JSON, Date,
+      Math: createSafeBuiltin(Math), Number: createSafeBuiltin(Number),
+      String: createSafeBuiltin(String), Boolean: createSafeBuiltin(Boolean),
+      Array: createSafeBuiltin(Array), Object: createSafeBuiltin(Object),
+      JSON: createSafeBuiltin(JSON), Date: createSafeBuiltin(Date),
       isNaN, isFinite, parseFloat, parseInt,
       ...context,
     };
@@ -546,12 +564,22 @@ export class ComputedFieldEngine {
     return t("formula.error.genericShort");
   }
 
+  /**
+   * Schema-aware 字段名集合（列 key/label + 文件字段 key/label）。
+   * 与 normalizeFormulaExpression / extractDependencies 使用同一份集合，保证
+   * [2024 Revenue] 等多词字段在归一化时被识别为整体引用而非数组。
+   */
+  private getKnownFormulaFields(): ReadonlySet<string> {
+    const fields = new Set<string>();
+    for (const col of [...this.columns, ...FORMULA_FILE_FIELDS]) {
+      fields.add(col.key);
+      if (col.label) fields.add(col.label);
+    }
+    return fields;
+  }
+
   private normalizeFormula(expr: string): string {
-    let formula = expr.trim();
-    if (formula.startsWith("=")) formula = formula.slice(1).trim();
-    return formula.replace(/\[([^\]]+)\]/g, (_match, name: string) =>
-      `field(${JSON.stringify(String(name).trim())})`
-    );
+    return ComputedFieldEngine.normalizeFormulaExpression(expr, this.getKnownFormulaFields());
   }
 
   private getFieldValue(

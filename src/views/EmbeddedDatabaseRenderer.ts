@@ -7,10 +7,10 @@ import { ensureColumnOrder, getColumnsInOrder, getVisibleColumns } from "../data
 import { QueryEngine } from "../data/QueryEngine";
 import { RowPipeline } from "../data/RowPipeline";
 import { buildRelationRollups } from "../data/RelationRollup";
+import { parseRelationValues } from "../data/RelationLinks";
+import { collectRelationReferenceDeps, isRelationDependencyChange, resolvesRelationMissingTarget, type RelationMissingRef } from "../data/RelationDependency";
 import { ColumnDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId, NumberDisplayStyle } from "../data/types";
-import { ComputedFieldEngine } from "../data/ComputedField";
 import { setDateDisplayMode } from "../data/DateTimeFormat";
-import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import {
   isObsidianTagsKey,
   normalizeObsidianTagValue,
@@ -64,6 +64,7 @@ import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { TableRenderer } from "./TableRenderer";
 import { isHTMLElement } from "./DomGuards";
 import { ToolbarRenderer } from "./ToolbarRenderer";
+import { replaceToolbarBadge } from "./ToolbarBadge";
 import { ActiveViewControlsRenderer } from "./ActiveViewControlsRenderer";
 import { ActiveRulePopoverRenderer } from "./ActiveRulePopoverRenderer";
 import { removeFilterRuleAt, removeSortRuleAt } from "./ViewRuleOperations";
@@ -76,8 +77,7 @@ import { createRenderedTextWidthMeasurer } from "./InlineMarkdownRenderer";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
-import { normalizeComputedSyncMode } from "../data/ComputedSync";
-import { getComputedStorageKey, isNumberDisplayColumn } from "../data/ColumnDisplay";
+import { isNumberDisplayColumn } from "../data/ColumnDisplay";
 import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, mergeDbAndViewSourceRuleTrees } from "../data/SourceRules";
 import { getRowFileFieldValue, isFileFieldKey } from "../data/FileFields";
 import { applyRangeSelection } from "../data/RangeSelection";
@@ -176,6 +176,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       config,
       app: this.app,
       actions: {
+        getRelationScopePaths: (col) => this.getRelationScopePaths(col),
         editCell: () => {},
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
@@ -209,14 +210,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private currentDbConfig?: DatabaseConfig;
   private currentSourcePath = "";
   private currentViewIndex = 0;
-  private viewIndexOverride: number | null = null;
+  private viewIdOverride: string | null = null;
   private selectedRows = new Set<string>();
   private lastSelectedRowPath: string | null = null;
   private cellSelection: { anchor: CellAddress; focus: CellAddress } | null = null;
   private isSelectingCells = false;
-  private syncingComputed = false;
-  private computedSyncTimer: number | null = null;
-  private pendingDataChange = false;
   private suppressDataReloadUntil = 0;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
   private readonly handleWindowFocusBound = () => this.handleWindowFocus();
@@ -264,7 +262,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       this.app,
       undefined,
       undefined,
-      this.instanceId
+      this.instanceId,
+      undefined,
+      (col) => this.getRelationScopePaths(col),
     );
     this.rowMenu = new RowMenu({
       app: this.app,
@@ -307,6 +307,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       isReadOnly: isCodeBlock,
     });
     this.boardRenderer = new BoardRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       updateGroup: (row, field, value) => this.updateBoardGroup(row, field, value),
@@ -333,6 +334,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
@@ -355,6 +357,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
@@ -378,16 +381,26 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.refreshCoordinator = new RefreshCoordinator({
       isBlocked: () => this.cellRenderer.hasActiveEditor(this.containerEl) ||
         isRefreshBlockedByDrag(this.containerEl) ||
-        this.syncingComputed ||
         Date.now() < this.suppressDataReloadUntil,
       isEligible: () => this.containerEl.isConnected && (!this.hasObservedVisibility || this.isIntersecting),
       onRefresh: (request) => {
         const forceReload = request.manual;
-        if (forceReload) this.dataSource.invalidateRecordCache();
+        if (forceReload) {
+          // 与 Dashboard 相同的手动刷新恢复链：磁盘对账（定义文件 + 来源范围候选
+          // + relation/rollup 目标）后再重建，metadataCache 过期也能纠正。
+          // 返回 Promise 交协调器 await，等待期间新请求正确合并。
+          return this.reconcileFromDiskThenRebuild();
+        }
+        const relationDependencyRefresh = this.pendingRelationRefresh;
+        this.pendingRelationRefresh = false;
         const reloadSource = this.pendingSourceReload || forceReload;
-        if (!reloadSource && !request.unknown) {
+        if (!reloadSource && !request.unknown && !relationDependencyRefresh) {
           if (this.tryUpdateChangedChartData(request.paths)) return;
           if (this.tryPatchChangedTableRows(request.paths)) return;
+        }
+        if (relationDependencyRefresh) {
+          // 目标依赖事件不在源行 changedPaths 内：绕过 patch，清 scope memo 后完整刷新。
+          this.relationScopeMemo.clear();
         }
         this.refreshChangedData(reloadSource);
         this.pendingSourceReload = false;
@@ -433,11 +446,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   onunload(): void {
     this.refreshCoordinator.destroy();
     this.chartRenderer.destroy();
+    this.calendarRenderer.destroy();
     this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免卸载后泄漏
     this.calendarTimelineRenderer.destroy();
     this.chartToolbarRenderer.closePopover();
-    this.clearComputedSyncTimer();
     this.removeHeaderPopoverAutoClose?.();
     this.removeHeaderPopoverAutoClose = undefined;
     this.closeGroupOrderPopover();
@@ -592,31 +605,41 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (observable.length === 0) return;
     const rowPaths = new Set(this.rows.map((row) => row.file.path));
     const database = this.currentDbConfig;
+    let relationDependencyChanged = false;
     const relevant = observable.filter((change) => {
       const sourceConfigEcho = change.origin === "plugin" &&
         Boolean(change.sourceInstanceId) &&
         (change.path === this.currentSourcePath || change.oldPath === this.currentSourcePath);
       if (sourceConfigEcho) return false;
-      return change.path === this.currentSourcePath ||
-        change.oldPath === this.currentSourcePath ||
-        rowPaths.has(change.path) ||
-        (change.oldPath ? rowPaths.has(change.oldPath) : false) ||
-        this.relationTargetPaths.has(change.path) ||
-        (change.oldPath ? this.relationTargetPaths.has(change.oldPath) : false) ||
-        this.relationTargetDatabasePaths.has(change.path) ||
-        (change.oldPath ? this.relationTargetDatabasePaths.has(change.oldPath) : false) ||
-        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
-          this.relationTargetDatabases.some((targetDatabase) => {
-            const record = this.dataSource.getRecordSnapshot(change.path);
-            return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
-          })) ||
-        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
-          database != null &&
-          (() => {
-            const record = this.dataSource.getRecordSnapshot(change.path);
-            return record != null && this.dataSource.matchesRecordForDatabase(record, database);
-          })());
+      if (change.path === this.currentSourcePath || change.oldPath === this.currentSourcePath) return true;
+      // relation 依赖判定先于普通行命中（同库记录可同时是行与目标，先返回行身份会漏设标志）。
+      if (isRelationDependencyChange(
+        change,
+        {
+          targetPaths: this.relationTargetPaths,
+          targetDatabasePaths: this.relationTargetDatabasePaths,
+          referencedPaths: this.relationReferencedPaths,
+        },
+        (path) => this.resolvesRelationMissingTarget(path)
+      ) || (
+        (change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+        this.relationTargetDatabases.some((targetDatabase) => {
+          const record = this.dataSource.getRecordSnapshot(change.path);
+          return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
+        })
+      )) {
+        relationDependencyChanged = true;
+        return true;
+      }
+      if (rowPaths.has(change.path) || (change.oldPath ? rowPaths.has(change.oldPath) : false)) return true;
+      return (change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+        database != null &&
+        (() => {
+          const record = this.dataSource.getRecordSnapshot(change.path);
+          return record != null && this.dataSource.matchesRecordForDatabase(record, database);
+        })();
     });
+    if (relationDependencyChanged) this.pendingRelationRefresh = true;
     if (relevant.length === 0) return;
     if (relevant.some((change) => change.path === this.currentSourcePath || change.oldPath === this.currentSourcePath)) {
       this.pendingSourceReload = true;
@@ -625,6 +648,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private refreshChangedData(reloadSource: boolean): void {
+    this.relationScopeMemo.clear();
     if (reloadSource) {
       this.config = undefined;
       this.currentDbConfig = undefined;
@@ -652,10 +676,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       true,
     );
     this.timelineInvalidRowsVersion += 1;
-    this.scheduleComputedSync(
-      config,
-      this.getIncrementalComputedSyncRows(config, this.rows, new Set(paths))
-    );
     this.chartRenderer.render(
       this.containerEl,
       this.getStatefulConfig(config),
@@ -679,19 +699,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       },
     });
     return true;
-  }
-
-  private getIncrementalComputedSyncRows(
-    config: ViewConfig,
-    rows: RowData[],
-    changedPaths: ReadonlySet<string>
-  ): RowData[] {
-    if ((config.schema.computedFields || []).some((definition) =>
-      /\bbacklinks\b/i.test(definition.expression)
-    )) {
-      return rows;
-    }
-    return rows.filter((row) => changedPaths.has(row.file.path));
   }
 
   /**
@@ -769,11 +776,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!patched) return false;
 
     this.rows = nextRows;
+    this.updateRelationReferenceDeps(this.rows, this.currentDbConfig);
     this.timelineInvalidRowsVersion += 1;
-    this.scheduleComputedSync(
-      config,
-      this.getIncrementalComputedSyncRows(config, this.rows, changedPaths)
-    );
     this.summaryRenderer.render(this.containerEl, this.rows, config, this.currentDbConfig, {
       onChange: () => {
         this.persistEmbeddedConfigLocally(config);
@@ -955,7 +959,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(config), this.currentDbConfig, true);
     this.timelineInvalidRowsVersion += 1;
-    this.scheduleComputedSync(config, this.rows);
     if (config.viewType !== "chart") {
       this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig, {
         onChange: () => {
@@ -1207,7 +1210,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         const descriptionScroll = this.saveDescriptionScroll();
         this.closePopovers();
         this.currentViewIndex = viewIndex;
-        this.viewIndexOverride = viewIndex;
+        this.viewIdOverride = this.currentDbConfig.views[viewIndex]?.id ?? null;
         this.config = undefined;
         this.state = undefined;
         const newConfig = this.getEmbeddedConfig()!;
@@ -1226,6 +1229,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         if (!this.currentDbConfig || this.currentDbConfig.views.length <= 1) return;
         // Only switch away from the deleted view in embedded mode; don't modify the source
         this.currentViewIndex = Math.min(viewIndex, this.currentDbConfig.views.length - 2);
+        // Sync viewIdOverride so resolveConfig uses the updated current view.
+        this.viewIdOverride = this.currentDbConfig?.views[this.currentViewIndex]?.id ?? null;
         this.config = undefined;
         this.rerenderToolbar(config);
         this.renderResults(this.getEmbeddedConfig()!, { viewport: "reset-top" });
@@ -1345,9 +1350,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         }
         void this.openFullDatabaseView(config);
       },
-      syncComputedFields: this.persistMode === "codeblock"
-        ? undefined
-        : () => { this.syncComputedFieldsInBackground(config, this.rows, true, true); },
+      syncComputedFields: undefined,
       refreshDatabase: () => this.refreshCoordinator.refreshNow(),
       pendingRefreshCount: this.refreshCoordinator.getState().pendingCount,
       pendingRefreshUnknown: this.refreshCoordinator.getState().pendingUnknown,
@@ -1357,7 +1360,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover(config, "view", anchorEl),
       closeToolbarPopovers: () => this.closePopovers(),
       openFullView: () => { void this.openFullDatabaseView(config); },
-      toggleHeaderChrome: (hidden) => this.toggleHeaderChrome(config, hidden),
       copyViewCode: () => { void this.copyEmbeddedViewCode(config); },
       exportData: (format) => this.exportData(config, format),
       exportCsvMarkdownZip: () => { void this.exportCsvMarkdownZip(); },
@@ -1471,7 +1473,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         "aria-label": label,
       },
     });
-    setIcon(button, hidden ? "chevron-down" : "chevron-up");
+    setIcon(button.createSpan({ cls: "db-toolbar-button-icon" }), hidden ? "chevron-down" : "chevron-up");
     button.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1831,9 +1833,17 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private setEmbeddedViewType(config: ViewConfig, value: NonNullable<ViewConfig["viewType"]>): void {
     if (config.viewType === "chart" && value !== "chart") this.chartRenderer.destroy();
+    if (config.viewType === "calendar" && value !== "calendar") this.calendarRenderer.destroy();
+    // Find the target view index by id, not by reference — config may be a
+    // clone (from getEmbeddedConfig) so indexOf would return -1.
+    const dbIndex = 0;
+    const viewIndex = this.currentDbConfig
+      ? this.currentDbConfig.views.findIndex((v) => v.id === config.id)
+      : -1;
+    const effectiveIndex = viewIndex >= 0 ? viewIndex : this.currentViewIndex;
     this.stateStore.persist(config, this.vs(config));
     config.viewType = value;
-    this.stateStore.delete(0, this.currentViewIndex);
+    this.stateStore.delete(dbIndex, effectiveIndex);
     this.state = undefined;
   }
 
@@ -1899,12 +1909,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const entry = this.resolveDatabaseEntry(ref);
     if (!entry) return undefined;
     const db = entry.config;
-    let view = this.viewIndexOverride != null
-      ? db.views[this.viewIndexOverride]
-      : ref.viewId
-      ? db.views.find((candidate) => candidate.id === ref.viewId)
-      : db.views[this.currentViewIndex] || db.views[0];
-    if (!view) return undefined;
+    if (db.views.length === 0) return undefined;
+    // Try viewIdOverride (stable ID) first, then viewId, then currentViewIndex, then views[0].
+    let view: ViewConfig | undefined;
+    if (this.viewIdOverride) {
+      view = db.views.find((candidate) => candidate.id === this.viewIdOverride);
+    }
+    if (!view && ref.viewId) {
+      view = db.views.find((candidate) => candidate.id === ref.viewId);
+    }
+    if (!view) {
+      view = db.views[Math.min(this.currentViewIndex, db.views.length - 1)] || db.views[0];
+    }
     this.currentDbConfig = db;
     this.currentSourcePath = entry.sourcePath;
     this.currentViewIndex = db.views.indexOf(view);
@@ -1981,6 +1997,37 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private isFalseOption(value: string | undefined): boolean {
     return /^(false|no|0)$/i.test(value || "");
+  }
+
+  /** 手动刷新恢复链：对账后重建（范围收集与 Dashboard 同规则）。 */
+  private async reconcileFromDiskThenRebuild(): Promise<void> {
+    try {
+      // 捕获本次恢复请求对应的库：等待期间宿主可能切换了引用的数据库。
+      const requestSourcePath = this.currentSourcePath;
+      this.dataSource.invalidateRecordCache();
+      const paths: string[] = [];
+      if (this.currentSourcePath) paths.push(this.currentSourcePath);
+      if (this.currentDbConfig) {
+        paths.push(...this.dataSource.getSourceCandidatePaths(this.currentDbConfig));
+        paths.push(...this.relationTargetDatabasePaths);
+        for (const target of this.relationTargetDatabases) {
+          paths.push(...this.dataSource.getSourceCandidatePaths(target));
+        }
+      }
+      const { failed } = await this.dataSource.reconcilePathsFromDisk(paths);
+      if (failed.length > 0) {
+        console.error("Note Database: embedded manual refresh failed to reconcile files", failed);
+        new Notice(t("notice.refreshReconcileFailed", { count: failed.length, paths: failed.slice(0, 3).join(", ") }));
+      }
+      // 等待期间 Embedded 已卸载/脱离文档，或宿主切换到了其他数据库：放弃重建。
+      if (!this.containerEl.isConnected) return;
+      if (this.currentSourcePath !== requestSourcePath) return;
+      this.pendingSourceReload = false;
+      this.refreshChangedData(true);
+    } catch (error) {
+      console.error("Note Database: embedded manual refresh from disk failed", error);
+      new Notice(t("errors.refreshFailed"));
+    }
   }
 
   private getDatabaseEntries(): EmbeddedDatabaseEntry[] {
@@ -2713,7 +2760,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const db: DatabaseConfig = {
       id: "embedded",
       name: config.name,
-      baseThisFilePath: this.sourcePath,
+      // A referenced database keeps one canonical `this` context across every
+      // host note; otherwise two embeds could display different values from the
+      // database-level result saved by the central computed-sync service.
+      baseThisFilePath: this.currentSourcePath || this.sourcePath,
       sourceFolder: this.normalizeVaultFolder(dbSourceFolder || config.sourceFolder || ""),
       sourceRules: dbSourceRules || (viewEnabled ? config.sourceRules : undefined),
       sourceLogic: dbSourceLogic || (viewEnabled ? config.sourceLogic : undefined),
@@ -2731,7 +2781,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private withBaseThisContext(config: ViewConfig): ViewConfig {
     return {
       ...config,
-      baseThisFilePath: this.sourcePath,
+      baseThisFilePath: this.currentSourcePath || config.baseThisFilePath || this.sourcePath,
     };
   }
 
@@ -2808,126 +2858,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.lastSelectedRowPath = null;
   }
 
-  private scheduleComputedSync(config: ViewConfig, rows: RowData[]): void {
-    this.clearComputedSyncTimer();
-    if (this.persistMode === "codeblock") return;
-    if (!this.isAutomaticComputedSync() || config.schema.computedFields.length === 0) return;
-    this.computedSyncTimer = this.getRefreshWindow().setTimeout(() => {
-      this.computedSyncTimer = null;
-      this.syncComputedFieldsInBackground(config, rows);
-    }, 5000);
-  }
-
-  private clearComputedSyncTimer(): void {
-    if (this.computedSyncTimer === null) return;
-    this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
-    this.computedSyncTimer = null;
-  }
-
-  private async syncComputedForFile(
-    file: TFile,
-    frontmatter: Record<string, unknown>,
-    config: ViewConfig,
-    affectedFields?: string[]
-  ): Promise<void> {
-    if (this.persistMode === "codeblock") return;
-    if (!config.schema.computedFields.length || !this.isAutomaticComputedSync()) return;
-
-    const computed = evaluateComputedFields(
-      config.schema.computedFields,
-      config.schema.columns,
-      frontmatter,
-      this.getBaseComputedEvaluationContext(file, config)
-    );
-
-    const computedColumns = config.schema.columns.filter(col => col.type === "computed");
-    const updates: Record<string, unknown> = {};
-
-    for (const col of computedColumns) {
-      if (affectedFields?.length) {
-        const deps = ComputedFieldEngine.extractDependencies(
-          config.schema.computedFields.find(cf => cf.key === (col.computedKey || col.key))?.expression || "",
-          config.schema.columns
-        );
-        const allRelevant = [...affectedFields, ...computedColumns.flatMap(c => [c.key, getComputedStorageKey(c)])];
-        if (!deps.some(d => allRelevant.includes(d))) continue;
-      }
-      const key = getComputedStorageKey(col);
-      const value = computed[key];
-      const nextValue = value == null ? "" : value;
-      if (safeString(frontmatter[key]) !== safeString(nextValue)) {
-        updates[key] = nextValue;
-      }
-    }
-
-    if (Object.keys(updates).length > 0) {
-      await this.dataSource.updateFrontmatter(file, updates, { sourceInstanceId: this.instanceId });
-    }
-  }
-
-  private async syncComputedFields(config: ViewConfig, rows: RowData[], notify = false, force = false): Promise<void> {
-    if (this.persistMode === "codeblock") {
-      if (notify) new Notice(t("notice.embedReadonly", { action: t("viewConfig.saveComputedResults") }));
-      return;
-    }
-    if ((!force && !this.isAutomaticComputedSync()) || this.syncingComputed) return;
-    this.syncingComputed = true;
-    try {
-      const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
-      let changed = 0;
-      for (const row of rows) {
-        const updates: Record<string, unknown> = {};
-        for (const col of computedColumns) {
-          const key = getComputedStorageKey(col);
-          const value = row.computed[key];
-          const next = value == null ? "" : value;
-          if (safeString(row.frontmatter[key]) !== safeString(next)) updates[key] = next;
-        }
-        if (Object.keys(updates).length > 0) {
-          await this.dataSource.updateFrontmatter(row.file, updates, { sourceInstanceId: this.instanceId });
-          changed += 1;
-        }
-      }
-      if (notify) new Notice(t("notice.syncedFormulas", { count: changed }));
-    } finally {
-      this.syncingComputed = false;
-      this.suppressDataReload(500);
-      if (this.pendingDataChange) {
-        this.pendingDataChange = false;
-        this.render();
-      }
-    }
-  }
-
-  private syncComputedFieldsInBackground(config: ViewConfig, rows: RowData[], notify = false, force = false): void {
-    void this.syncComputedFields(config, rows, notify, force).catch((err) => {
-      console.error("Note Database: failed to sync embedded computed fields", err);
-      new Notice(t("errors.updateFailed", { error: String(err) }));
-    });
-  }
-
-  private isAutomaticComputedSync(): boolean {
-    return normalizeComputedSyncMode(this.currentDbConfig?.computedSyncMode) === "automatic";
-  }
-
-  private getBaseComputedEvaluationContext(file: TFile, config?: ViewConfig): {
-    app: App;
-    file: TFile;
-    thisFile?: TFile;
-    thisFrontmatter?: Record<string, unknown>;
-  } {
-    const sourcePath = config?.baseThisFilePath || this.sourcePath;
-    const thisFile = sourcePath ? this.app.vault.getAbstractFileByPath(sourcePath) : null;
-    return {
-      app: this.app,
-      file,
-      thisFile: thisFile instanceof TFile ? thisFile : undefined,
-      thisFrontmatter: thisFile instanceof TFile
-        ? this.app.metadataCache.getFileCache(thisFile)?.frontmatter
-        : undefined,
-    };
-  }
-
   private persistEmbeddedConfigLocally(config = this.config): void {
     if (!config) return;
     const before = this.persistMode === "frontmatter" && this.currentDbConfig
@@ -2969,9 +2899,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private updateToolbarBadge(button: HTMLElement, count: number): void {
-    button.querySelector(".db-toolbar-badge")?.remove();
-    if (count <= 0) return;
-    button.createSpan({ cls: "db-toolbar-badge", text: String(count) });
+    replaceToolbarBadge(button, "db-toolbar-badge", count > 0 ? String(count) : undefined);
   }
 
   private persistEmbeddedConfigToSource(): void {
@@ -3187,6 +3115,87 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   /** Build the correct filtered and sorted row set for each CSV included in an embedded ZIP export. */
+  /** 无 rollup 时的 relation 目标依赖收集（U1-REL-1，与 DatabaseView 同规则）。 */
+  private refreshRelationTargetCaches(configured: DatabaseConfig | null | undefined, enabled: boolean): void {
+    const relationIds = new Set(
+      (configured?.schema.columns || [])
+        .filter((column) => column.type === "relation" && column.relationConfig?.targetDatabaseId)
+        .map((column) => column.relationConfig!.targetDatabaseId)
+    );
+    if (!enabled || relationIds.size === 0) {
+      this.relationTargetPaths.clear();
+      this.relationTargetDatabases = [];
+      this.relationTargetDatabasePaths.clear();
+      return;
+    }
+    const entries = this.getDatabaseEntries();
+    const targets = entries.map((entry) => entry.config).filter((db) => relationIds.has(db.id));
+    this.relationTargetDatabases = targets;
+    this.relationTargetDatabasePaths = new Set(
+      entries.filter((entry) => relationIds.has(entry.config.id)).map((entry) => entry.sourcePath)
+    );
+    const paths = new Set<string>();
+    for (const target of targets) {
+      for (const record of this.dataSource.getRecordsForDatabase(target)) paths.add(record.file.path);
+    }
+    this.relationTargetPaths = paths;
+  }
+
+  /** 收集实际引用依赖（U1-REL-1，与 DatabaseView 同规则：record.file.path 逐记录解析）。 */
+  private updateRelationReferenceDeps(records: NoteRecord[], configured: DatabaseConfig | null | undefined): void {
+    const relationColumns = (configured?.schema.columns || []).filter((column) => column.type === "relation");
+    if (relationColumns.length === 0) {
+      this.relationReferencedPaths = new Set();
+      this.relationMissingRefs = [];
+      return;
+    }
+    const linkSources: Array<{ sourcePath: string; targets: string[] }> = [];
+    for (const record of records) {
+      const targets: string[] = [];
+      for (const column of relationColumns) {
+        const value = record.frontmatter[column.key];
+        if (value == null || value === "") continue;
+        for (const link of parseRelationValues(value)) targets.push(link.target);
+      }
+      if (targets.length > 0) linkSources.push({ sourcePath: record.file.path, targets });
+    }
+    const deps = collectRelationReferenceDeps(linkSources, (target, sourcePath) => {
+      const dest = this.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+      return dest?.path;
+    });
+    this.relationReferencedPaths = new Set(deps.referencedPaths);
+    this.relationMissingRefs = deps.missingRefs;
+  }
+
+  /** 变更路径是否使某个当前未解析的引用恢复（用各引用自己的 sourcePath 解析）。 */
+  private resolvesRelationMissingTarget(path: string): boolean {
+    return resolvesRelationMissingTarget(this.relationMissingRefs, path, (target, sourcePath) => {
+      const dest = this.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+      return dest?.path;
+    });
+  }
+
+  /** U1-REL-1：relation 状态判定所需的目标库条目路径集合（按目标库 id 记忆化）。 */
+  private relationScopeMemo = new Map<string, ReadonlySet<string>>();
+  /** 实际被 relation 单元格引用的目标解析路径（含范围外）与未解析引用（保留原 sourcePath）。 */
+  private relationReferencedPaths = new Set<string>();
+  private relationMissingRefs: RelationMissingRef[] = [];
+  /** 目标依赖事件到达：绕过 changed-path-only patch，清 scope memo 后完整刷新。 */
+  private pendingRelationRefresh = false;
+
+  private getRelationScopePaths(col: ColumnDef): ReadonlySet<string> | undefined {
+    const targetId = col.relationConfig?.targetDatabaseId;
+    if (!targetId) return undefined;
+    const memo = this.relationScopeMemo.get(targetId);
+    if (memo) return memo;
+    const database = this.relationTargetDatabases.find((candidate) => candidate.id === targetId)
+      ?? this.getDatabaseEntries().map((entry) => entry.config).find((candidate) => candidate.id === targetId);
+    if (!database) return undefined;
+    const paths = new Set(this.dataSource.getRecordsForDatabase(database).map((record) => record.file.path));
+    this.relationScopeMemo.set(targetId, paths);
+    return paths;
+  }
+
   private buildRowsWithRelations(
     records: NoteRecord[],
     view: ViewConfig,
@@ -3197,8 +3206,18 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     let derived: Map<string, Record<string, unknown>> | undefined;
     if (database?.schema.columns.some((column) => column.type === "rollup")) {
       const entries = this.getDatabaseEntries();
-      const databases = entries.map((entry) => entry.config);
-      if (!databases.some((candidate) => candidate.id === database.id)) databases.push(database);
+      // 与 DatabaseComputedSyncService 相同的规范化：目标库 config 带定义文件路径，
+      // rollup 读目标库 computed 列时 this 上下文与后台保存一致。
+      const databases: DatabaseConfig[] = entries.map((entry) => ({
+        ...entry.config,
+        baseThisFilePath: entry.sourcePath,
+      }));
+      if (!databases.some((candidate) => candidate.id === database.id)) {
+        databases.push({
+          ...database,
+          baseThisFilePath: this.currentSourcePath || database.baseThisFilePath || this.sourcePath,
+        });
+      }
       const result = buildRelationRollups({
         app: this.app,
         sourceRecords: records,
@@ -3221,10 +3240,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         );
       }
     } else if (cacheTargets) {
-      this.relationTargetPaths.clear();
-      this.relationTargetDatabases = [];
-      this.relationTargetDatabasePaths.clear();
+      // U1-OL-1 parity：仅 relation 无 rollup 时也建立目标依赖（同 DatabaseView）。
+      this.refreshRelationTargetCaches(database, cacheTargets);
     }
+    if (cacheTargets) this.updateRelationReferenceDeps(records, database);
     return this.rowPipeline.build(
       records,
       this.withBaseThisContext(view),
@@ -3249,7 +3268,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const [view] = views.splice(fromIndex, 1);
     views.splice(toIndex, 0, view);
     this.currentViewIndex = this.getMovedIndex(this.currentViewIndex, fromIndex, toIndex);
-    this.viewIndexOverride = this.currentViewIndex;
+    this.viewIdOverride = views[this.currentViewIndex]?.id ?? null;
     this.config = undefined;
     const nextConfig = this.getEmbeddedConfig();
     if (!nextConfig) return;

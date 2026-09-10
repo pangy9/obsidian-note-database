@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import {
   filterDraftChangesToResolvedConflicts,
   getDraftObservableType,
@@ -86,6 +87,7 @@ export class PropertyTypeConflictModal extends Modal {
     this.modalEl.addClass("property-conflict-modal-host");
     contentEl.addClass("note-database-modal", "db-property-conflict-modal");
     contentEl.createEl("h3", { text: t("propertyConflict.title") });
+    makeModalDraggable(this);
     contentEl.createDiv({
       cls: "db-modal-help",
       text: t("propertyConflict.desc", { count: this.options.conflicts.length }),

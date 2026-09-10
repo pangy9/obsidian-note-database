@@ -84,11 +84,25 @@ export class CalendarRenderer {
 	private pendingFlashDateKey: string | null = null;
 	private calendarRoot: HTMLElement | null = null;
 	private currentVisibleRange: CalendarTimelineSearchVisibleRange | null = null;
+	private ownerWindow: Window = window;
 
 	constructor(private actions: CalendarRendererActions) {}
 
-	render(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
+	/**
+	 * Destroy the renderer and release the current-time interval timer.
+	 * Must be called by the owning view when switching away from a calendar
+	 * view type and in onClose/onunload to prevent interval leaks.
+	 */
+	destroy(): void {
 		this.cleanupCurrentTimeTimer();
+	}
+
+	render(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
+		// Cleanup the old timer BEFORE updating ownerWindow — the timer was
+		// created by the previous window's setInterval, so it must be cleared
+		// from that same window.
+		this.cleanupCurrentTimeTimer();
+		this.ownerWindow = container.ownerDocument.defaultView || window;
 		this.closeMiniCalendar();
 		this.closeCalendarScaleMenu();
 		this.calendarRoot = null;
@@ -1222,7 +1236,7 @@ export class CalendarRenderer {
 		};
 		update();
 		if (this.currentTimeTimer == null) {
-			this.currentTimeTimer = window.setInterval(update, 60000);
+			this.currentTimeTimer = this.ownerWindow.setInterval(update, 60000);
 		}
 	}
 
@@ -1841,7 +1855,7 @@ export class CalendarRenderer {
 
 	private cleanupCurrentTimeTimer(): void {
 		if (this.currentTimeTimer != null) {
-			window.clearInterval(this.currentTimeTimer);
+			this.ownerWindow.clearInterval(this.currentTimeTimer);
 			this.currentTimeTimer = null;
 		}
 	}

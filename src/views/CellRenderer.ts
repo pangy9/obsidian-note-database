@@ -10,7 +10,10 @@ import {
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
+import { computeMobileInlineOverlayPosition } from "../data/MobileInlineOverlay";
 import { parseRelationValues } from "../data/RelationLinks";
+import { serializeRelationEditorSelection } from "../data/RelationItemState";
+import { suppressClickWhileTextSelected } from "./modals/ModalDrag";
 import { renderRelationValue } from "./RelationValueRenderer";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { DataSource } from "../data/DataSource";
@@ -95,6 +98,7 @@ export class CellRenderer {
     private renameFile?: (row: RowData, newName: string) => Promise<boolean>,
     private sourceInstanceId?: string,
     private editRelationRollup?: (col: ColumnDef, row: RowData) => void,
+    private getRelationScopePaths?: (col: ColumnDef) => ReadonlySet<string> | undefined,
   ) {}
 
   private finishInlineEdit(
@@ -190,7 +194,7 @@ export class CellRenderer {
         this.renderMultiSelect(td, col, value);
         break;
       case "relation":
-        this.renderRelation(td, row, value);
+        this.renderRelation(td, row, value, col);
         break;
       case "currency": {
         const num = typeof value === "number" ? value : parseFloat(String(value));
@@ -327,8 +331,15 @@ export class CellRenderer {
     }
   }
 
-  private renderRelation(td: HTMLElement, row: RowData, value: unknown): void {
-    renderRelationValue(td, this.app, row, value);
+  private renderRelation(td: HTMLElement, row: RowData, value: unknown, col?: ColumnDef): void {
+    const scopePaths = col ? this.getRelationScopePaths?.(col) : undefined;
+    renderRelationValue(td, this.app, row, value, false, {
+      scopePaths,
+      // 点击失效链接：不创建文件，改为打开编辑器供用户查看/移除失效项。
+      onInvalidClick: col && !this.isReadOnly
+        ? () => { this.editRelationPopover(td, row, col, value); }
+        : undefined,
+    });
   }
 
   private getTooltipValue(col: ColumnDef, value: unknown): unknown {
@@ -684,19 +695,31 @@ export class CellRenderer {
     const selectedPaths = new Set<string>();
     const selectedOrder: string[] = [];
     const existingRawByPath = new Map<string, string>();
-    const unresolved: string[] = [];
+    // Ordered items preserve the original interleaved order of resolved and
+    // unresolved links so that saving without modifications produces an
+    // equivalent array (no silent reordering).
+    // U1-REL-1：失效项带 state（missing=文件已删除 / out-of-scope=存在但不在目标库
+    // 范围），在列表中可见、可搜索（按 raw/target）、可逐项取消，保存时被取消的失效
+    // 项不写回。
+    const orderedItems: { raw: string; target: string; resolvedPath?: string; selected: boolean; state: "valid" | "missing" | "out-of-scope" }[] = [];
+    const scopePaths = new Set(records.map((record) => record.file.path));
     for (const link of parseRelationValues(currentValue)) {
       const resolved = this.app?.metadataCache.getFirstLinkpathDest(link.target, row.file.path);
-      if (resolved && records.some((record) => record.file.path === resolved.path)) {
+      if (resolved && scopePaths.has(resolved.path)) {
         if (!selectedPaths.has(resolved.path)) selectedOrder.push(resolved.path);
         selectedPaths.add(resolved.path);
         existingRawByPath.set(resolved.path, link.raw);
+        orderedItems.push({ raw: link.raw, target: link.target, resolvedPath: resolved.path, selected: true, state: "valid" });
+      } else if (resolved) {
+        orderedItems.push({ raw: link.raw, target: link.target, resolvedPath: resolved.path, selected: true, state: "out-of-scope" });
+      } else {
+        orderedItems.push({ raw: link.raw, target: link.target, resolvedPath: undefined, selected: true, state: "missing" });
       }
-      else unresolved.push(link.raw);
     }
 
     const host = target.closest<HTMLElement>(".note-database-container") || window.activeDocument.body;
     const popover = host.createDiv({ cls: "db-cell-option-popover db-relation-popover" });
+    suppressClickWhileTextSelected(popover);
     const header = popover.createDiv({ cls: "db-relation-popover-header" });
     header.createDiv({ cls: "db-relation-popover-title", text: col.label || col.key });
     const search = header.createEl("input", {
@@ -727,6 +750,27 @@ export class CellRenderer {
     const renderList = () => {
       list.empty();
       const query = search.value.trim().toLowerCase();
+      // 失效项（missing / out-of-scope）与有效项同一滚动列表：置顶显示、按状态着色、
+      // 可逐项取消（取消后保存时不再写回）；搜索按 raw/target 命中。
+      for (const item of orderedItems) {
+        if (item.state === "valid") continue;
+        const haystack = `${item.raw} ${item.target}`.toLowerCase();
+        if (query && !haystack.includes(query)) continue;
+        const option = list.createEl("button", {
+          cls: `db-cell-option-item db-relation-option-item is-invalid is-${item.state}${item.selected ? " is-selected" : ""}`,
+          attr: { type: "button" },
+        });
+        const icon = option.createSpan({ cls: "db-relation-option-icon" });
+        setIcon(icon, item.state === "missing" ? "triangle-alert" : "file-question");
+        option.createSpan({ cls: "db-dropdown-option-label", text: item.target });
+        option.createSpan({ cls: "db-relation-invalid-hint", text: t(`relation.stateShort.${item.state}`) });
+        const check = option.createSpan({ cls: "db-option-check db-relation-option-check" });
+        if (item.selected) setIcon(check, "check");
+        option.onclick = () => {
+          item.selected = !item.selected;
+          renderList();
+        };
+      }
       for (const record of records) {
         const title = record.file.basename || record.file.name.replace(/\.md$/i, "");
         const haystack = `${title} ${record.file.path}`.toLowerCase();
@@ -747,17 +791,28 @@ export class CellRenderer {
             selectedPaths.delete(record.file.path);
             const index = selectedOrder.indexOf(record.file.path);
             if (index >= 0) selectedOrder.splice(index, 1);
+            // Sync orderedItems: mark the matching resolved item as deselected.
+            for (const item of orderedItems) {
+              if (item.resolvedPath === record.file.path) item.selected = false;
+            }
           } else {
             selectedPaths.add(record.file.path);
             selectedOrder.push(record.file.path);
+            // Sync orderedItems: mark the matching resolved item as selected,
+            // or do nothing (newly added items are handled via selectedOrder).
+            for (const item of orderedItems) {
+              if (item.resolvedPath === record.file.path) item.selected = true;
+            }
           }
           renderList();
         };
       }
-      count.textContent = t("relation.selectedCount", { count: selectedPaths.size });
+      const invalidSelected = orderedItems.filter((item) => item.state !== "valid" && item.selected).length;
+      count.textContent = t("relation.selectedCount", { count: selectedPaths.size + invalidSelected });
     };
     search.oninput = renderList;
     search.onkeydown = (event) => {
+      if (isImeComposing(event)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       close();
@@ -765,14 +820,14 @@ export class CellRenderer {
     clear.onclick = () => {
       selectedPaths.clear();
       selectedOrder.splice(0, selectedOrder.length);
-      unresolved.splice(0, unresolved.length);
+      orderedItems.forEach((item) => { item.selected = false; });
       renderList();
     };
     apply.onclick = () => {
-      const values = [
-        ...unresolved,
-        ...selectedOrder.map((path) => existingRawByPath.get(path) || `[[${path.replace(/\.md$/i, "")}]]`),
-      ];
+      // 序列化走纯函数（serializeRelationEditorSelection，行为测试覆盖）：
+      // valid 按 selectedPaths；missing/out-of-scope 按自身 selected——打开编辑器
+      // 不做修改直接保存必须得到等价数组，不得误删仍被勾选的失效引用。
+      const values = serializeRelationEditorSelection(orderedItems, selectedPaths, selectedOrder, existingRawByPath);
       void this.commitEditedValue(row, col, values, session, values.length ? "replace" : "clear")
         .then(() => {
           close();
@@ -817,6 +872,7 @@ export class CellRenderer {
       : [normalizeOptionValueForKey(optionKey, currentValue)].filter(Boolean);
     const selected = new Set(originalValues);
     const popover = host.createDiv({ cls: "db-cell-option-popover" });
+    suppressClickWhileTextSelected(popover);
     let activeOptionIndex = 0;
     let closed = false;
     let sessionClose: (() => void) | undefined;
@@ -1513,10 +1569,18 @@ export class CellRenderer {
 
       const containerRect = editScrollContainer.getBoundingClientRect();
       const tdRect = this.bulkAnchorRect(session) ?? td.getBoundingClientRect();
-      const scrollTop = editScrollContainer.scrollTop || 0;
-      const relativeTop = tdRect.top - containerRect.top + scrollTop;
-
-      popover.setCssProps({ position: "absolute", left: "0", right: "0", top: `${relativeTop + tdRect.height + 2}px`, zIndex: "1000" });
+      // left 必须换算到滚动内容坐标（scrollLeft）：容器横向可滚，left:0 是内容最左端
+      // 而非视口左缘——否则弹层出现在画面最左，用户需滑回原位。合适宽度、水平居中
+      // 于当前视口（日期分段输入紧凑，300 足够）；弹层留在内容流中随单元格滚动。
+      const overlayPos = computeMobileInlineOverlayPosition({
+        tdRect,
+        containerRect,
+        scrollTop: editScrollContainer.scrollTop || 0,
+        scrollLeft: editScrollContainer.scrollLeft || 0,
+        clientWidth: editScrollContainer.clientWidth,
+        maxWidth: 300,
+      });
+      popover.setCssProps({ position: "absolute", left: `${overlayPos.left}px`, width: `${overlayPos.width}px`, top: `${overlayPos.top}px`, zIndex: "1000" });
 
       closeBtn = popover.createEl("button", {
         cls: "db-cell-edit-close",
@@ -1999,17 +2063,23 @@ export class CellRenderer {
       
       // 创建内联编辑器包装器
       popover = editScrollContainer.createDiv({ cls: "db-cell-edit-popover is-mobile is-inline-overlay" });
-      
-      // 计算相对于滚动容器的位置
+
+      // 计算相对于滚动容器的位置；left 换算到滚动内容坐标（scrollLeft），
+      // 否则弹层出现在滚动内容最左端（画面最左），用户需右滑回原位。
+      // 文本编辑区取合适宽度（400 上限），水平居中于当前视口，不铺满整屏。
       const containerRect = editScrollContainer.getBoundingClientRect();
       const tdRect = this.bulkAnchorRect(session) ?? td.getBoundingClientRect();
-      const scrollTop = editScrollContainer.scrollTop || 0;
-      
-      // 相对位置 = 单元格顶部 - 容器顶部 + 容器滚动偏移
-      const relativeTop = tdRect.top - containerRect.top + scrollTop;
-      
-      // 定位在单元格正下方
-      popover.setCssProps({ position: "absolute", left: "0", right: "0", top: `${relativeTop + tdRect.height + 2}px`, zIndex: "1000" });
+      const overlayPos = computeMobileInlineOverlayPosition({
+        tdRect,
+        containerRect,
+        scrollTop: editScrollContainer.scrollTop || 0,
+        scrollLeft: editScrollContainer.scrollLeft || 0,
+        clientWidth: editScrollContainer.clientWidth,
+        maxWidth: 400,
+      });
+
+      // 定位在单元格正下方、横向铺满当前视口
+      popover.setCssProps({ position: "absolute", left: `${overlayPos.left}px`, width: `${overlayPos.width}px`, top: `${overlayPos.top}px`, zIndex: "1000" });
       
       // 关闭按钮
       closeBtn = popover.createEl("button", {

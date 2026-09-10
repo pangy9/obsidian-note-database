@@ -6,8 +6,7 @@ import { evaluateBaseFilterExpression } from "../data/BaseExpression";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
 import { QueryEngine } from "../data/QueryEngine";
 import { PropertyService } from "../data/PropertyService";
-import { ComputedFieldEngine } from "../data/ComputedField";
-import { evaluateComputedFields, hasRollupComputedDependency } from "../data/ComputedEvaluator";
+import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import { applyRangeSelection } from "../data/RangeSelection";
 import { installNoteHoverPreview } from "./HoverLinkPreview";
 import { resolveViewSelection } from "../data/ViewSelection";
@@ -15,6 +14,7 @@ import {
   ensureColumnOrder,
   getColumnsInOrder,
   getVisibleColumns,
+  linkDatabaseSchema,
 } from "../data/ColumnConfig";
 import { RowPipeline } from "../data/RowPipeline";
 import { buildRelationRollups } from "../data/RelationRollup";
@@ -68,11 +68,15 @@ import { FilterPanelRenderer } from "./FilterPanelRenderer";
 import { ColumnManagerRenderer } from "./ColumnManagerRenderer";
 import { SortPanelRenderer } from "./SortPanelRenderer";
 import { ToolbarRenderer } from "./ToolbarRenderer";
+import { replaceToolbarBadge } from "./ToolbarBadge";
 import { ActiveViewControlsRenderer } from "./ActiveViewControlsRenderer";
 import { ActiveRulePopoverRenderer } from "./ActiveRulePopoverRenderer";
 import { removeFilterRuleAt, removeSortRuleAt } from "./ViewRuleOperations";
 import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { ColumnOperations, FrontmatterValueChange } from "./ColumnOperations";
+import { DataSourceTransactionWriter } from "../data/DataSourceTransactionWriter";
+import { executeRenameTransaction, rebaseRenameHistoryForUndo } from "../data/RenameTransaction";
+import type { RenameHistoryEntry, RenamePlan } from "../data/RenameTransaction";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
@@ -96,7 +100,10 @@ import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
 import { buildDatabaseWithInferredColumns } from "./modals/AddDatabaseFlow";
-import { ComputedSyncQueue, ComputedSyncScope, normalizeComputedSyncMode } from "../data/ComputedSync";
+import { normalizeComputedSyncMode } from "../data/ComputedSync";
+import { applyFrontmatterChangeToRows as applyChangeToRenderedRows } from "../data/RenderedRowUpdate";
+import { parseRelationValues } from "../data/RelationLinks";
+import { collectRelationReferenceDeps, isRelationDependencyChange, resolvesRelationMissingTarget, type RelationMissingRef } from "../data/RelationDependency";
 import { getComputedFrontmatterCleanupOptions } from "../data/ComputedCleanup";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
 import { getColumnDisplayType, getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
@@ -295,7 +302,7 @@ interface PendingCellCut {
   clipboardText: string;
 }
 
-type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry;
+type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry | RenameHistoryEntry;
 
 interface ViewEntry {
   config: DatabaseConfig;
@@ -451,8 +458,10 @@ export class DatabaseView extends FileView {
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
   private configSaveTimer: number | null = null;
   private pendingConfigSave: PendingConfigSave | null = null;
-  private computedSyncTimer: number | null = null;
-  private pendingComputedSync = new ComputedSyncQueue<RowData>();
+  /** 每次 UI 调度 config mutation 时递增；rename transaction 用它检测等待 IO 期间的并发修改。 */
+  private configMutationVersion = 0;
+  /** rename 事务期间继续合并 pending save，但暂停定时落盘，避免普通保存穿插 CAS 链。 */
+  private renameConfigTransactionActive = false;
   private syncingComputed = false;
   private propertyTypeConflictModalOpen = false;
   private suppressDataReloadUntil = 0;
@@ -519,6 +528,7 @@ export class DatabaseView extends FileView {
       (row, newName) => this.renameFileWithHistory(row, newName),
       this.instanceId,
       (col, row) => this.showRelationRollupConfigModal(col, row),
+      (col) => this.getRelationScopePaths(col),
     );
     this.columnOperations = new ColumnOperations({
       app: this.app,
@@ -530,10 +540,27 @@ export class DatabaseView extends FileView {
       getActiveDb: () => this.getActiveDb(),
       getState: () => this.vs(),
       getFilesForConfig: (config) => this.getFilesForConfig(config),
+      getActiveDatabaseSourcePath: () => this.getCurrentEntry()?.sourcePath,
+      getConfigMutationVersion: () => this.configMutationVersion,
+      getDatabaseMutation: (path, database, viewId) => ({
+        dbId: database.id,
+        dbPath: path,
+        viewId,
+        sourceInstanceId: this.instanceId,
+      }),
+      beginRenameConfigTransaction: () => {
+        if (this.renameConfigTransactionActive) throw new Error("rename config transaction already active");
+        this.renameConfigTransactionActive = true;
+        this.suppressDataReload(5000);
+      },
+      endRenameConfigTransaction: () => {
+        this.renameConfigTransactionActive = false;
+        this.armPendingConfigSaveTimer();
+      },
       saveConfigImmediately: () => this.saveConfigImmediately(),
-      saveCurrentViewConfig: () => this.saveCurrentViewConfig(),
       scheduleConfigSave: () => this.scheduleConfigSave(),
       refresh: () => this.refresh(),
+      hasActiveEditor: () => this.cellRenderer.hasActiveEditor(this.containerEl_),
       refreshSchemaChanged: (options) => this.refreshSchemaChanged(options),
       refreshAfterSave: () => this.refreshAfterSave(),
       markPendingColumn: (key) => this.markPendingColumn(key),
@@ -543,6 +570,10 @@ export class DatabaseView extends FileView {
       setPendingUndoLabel: (label) => { this.pendingUndoLabel = label; },
       setPendingConfigCellChanges: (changes) => {
         this.pendingConfigCellChanges = changes.map((change) => this.normalizeFrontmatterValueChange(change));
+      },
+      applyRenameTransactionSuccess: (plan, stateAfter, history, label) => {
+        this.applyRenamePlanToMemory(plan, stateAfter);
+        this.pushHistory({ type: "rename", label, payload: history });
       },
       getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
       getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
@@ -599,6 +630,7 @@ export class DatabaseView extends FileView {
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.boardRenderer = new BoardRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       createGroup: (field, name, color) => this.createBoardGroup(field, name, color),
@@ -630,6 +662,7 @@ export class DatabaseView extends FileView {
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
@@ -658,6 +691,7 @@ export class DatabaseView extends FileView {
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
+      getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
       createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
@@ -715,16 +749,28 @@ export class DatabaseView extends FileView {
       isEligible: () => this.isRefreshEligible(),
       onRefresh: (request) => {
         const forceReload = request.manual;
-        if (forceReload) this.dataSource.invalidateRecordCache();
+        if (forceReload) {
+          // 手动刷新必须真正读取文件：invalidate 后由磁盘对账填充真值，
+          // 再重建显示——metadataCache 过期/被污染时仅靠它刷新多少次都是旧值。
+          // 返回 Promise：协调器 await 整个恢复过程，期间的新请求正确合并。
+          return this.reconcileFromDiskThenRebuild();
+        }
+        const relationDependencyRefresh = this.pendingRelationRefresh;
+        this.pendingRelationRefresh = false;
         const reloadSource = this.pendingSourceReload || forceReload;
         if (reloadSource) {
           this.rebuildViewEntries();
           this.rerenderToolbar();
           this.pendingSourceReload = false;
         }
-        if (!reloadSource && !request.unknown) {
+        if (!reloadSource && !request.unknown && !relationDependencyRefresh) {
           if (this.tryUpdateExternalChartData(request.paths)) return;
           if (this.tryPatchExternalTableRows(request.paths)) return;
+        }
+        if (relationDependencyRefresh) {
+          // 目标依赖事件（删除/恢复/移出范围的另一库记录）不在源行 changedPaths 内：
+          // 绕过 changed-path-only patch，清 scope memo 后完整刷新，更新引用行的标识。
+          this.invalidateRelationScopeMemo();
         }
         this.refresh();
       },
@@ -884,7 +930,14 @@ export class DatabaseView extends FileView {
       return;
     }
     this.suppressDataReload(1000);
-    this.hardRefreshFromSource(mutation.database);
+    if (this.cellRenderer.hasActiveEditor(this.containerEl_)) {
+      // Defer the hard refresh until the editor closes.  Doing it now would
+      // tear out the table DOM and lose the user's draft.
+      this.pendingSourceReload = true;
+      this.refreshCoordinator.mark([mutation.dbPath || this.getCurrentEntry()?.sourcePath || ""]);
+    } else {
+      this.hardRefreshFromSource(mutation.database);
+    }
   }
 
   private matchesCurrentView(mutation: ViewConfigMutation): boolean {
@@ -1239,6 +1292,7 @@ export class DatabaseView extends FileView {
   async onClose(): Promise<void> {
     this.refreshCoordinator.destroy();
     this.chartRenderer.destroy();
+    this.calendarRenderer.destroy();
     this.closeCalendarTimelineSearchResultsPanel();
     // 清理时间线渲染器的 observer/popover/定时器和进行中的拖拽监听，避免视图关闭后泄漏
     this.calendarTimelineRenderer.destroy();
@@ -1253,11 +1307,6 @@ export class DatabaseView extends FileView {
       window.clearTimeout(this.scrollbarIdleTimer);
       this.scrollbarIdleTimer = null;
     }
-    if (this.computedSyncTimer !== null) {
-      this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
-      this.computedSyncTimer = null;
-    }
-    this.pendingComputedSync.clear();
     if (this.configSaveTimer !== null) {
       await this.saveConfigImmediately();
     }
@@ -1413,6 +1462,7 @@ export class DatabaseView extends FileView {
 
   private handleDatabaseKeydown(event: KeyboardEvent): void {
     if (!this.containerEl_?.isConnected) return;
+    if (isImeComposing(event)) return;
     const active = window.activeDocument.activeElement;
     const target = event.target;
     const eventTarget = isHTMLElement(target) ? target : null;
@@ -2098,12 +2148,59 @@ export class DatabaseView extends FileView {
     window.requestAnimationFrame(update);
   }
 
+  /**
+   * 手动刷新恢复链：收集范围（当前库定义文件 + 有效来源范围全部候选笔记——含被
+   * 筛选隐藏/尚未进入结果集的，不用可能过期的缓存按规则筛—— + relation/rollup
+   * 目标库定义文件与目标范围）→ 有界并发磁盘对账 → invalidate 重建显示。
+   * 读取失败明确提示，不静默显示"刷新成功"。
+   */
+  private async reconcileFromDiskThenRebuild(): Promise<void> {
+    try {
+      // 捕获本次恢复请求对应的库：等待期间用户可能切换数据库，容器仍连接，
+      // 但旧库的对账结果不应重建新库、也不应清掉新库的 pendingSourceReload。
+      const requestSourcePath = this.viewEntries[this.currentDbIndex]?.sourcePath;
+      this.dataSource.invalidateRecordCache();
+      const paths = this.collectDiskReconcilePaths();
+      const { failed } = await this.dataSource.reconcilePathsFromDisk(paths);
+      if (failed.length > 0) {
+        console.error("Note Database: manual refresh failed to reconcile files", failed);
+        new Notice(t("notice.refreshReconcileFailed", { count: failed.length, paths: failed.slice(0, 3).join(", ") }));
+      }
+      // 等待期间视图被关闭，或已切换到其他数据库/视图：放弃本次重建。
+      if (!this.containerEl_?.isConnected) return;
+      if (this.viewEntries[this.currentDbIndex]?.sourcePath !== requestSourcePath) return;
+      this.rebuildViewEntries();
+      this.rerenderToolbar();
+      this.pendingSourceReload = false;
+      this.refresh();
+    } catch (error) {
+      console.error("Note Database: manual refresh from disk failed", error);
+      new Notice(t("errors.refreshFailed"));
+    }
+  }
+
+  private collectDiskReconcilePaths(): string[] {
+    const entry = this.viewEntries[this.currentDbIndex];
+    const paths: string[] = [];
+    if (entry) {
+      paths.push(entry.sourcePath);
+      paths.push(...this.dataSource.getSourceCandidatePaths(entry.config));
+      // relation/rollup 目标库：定义文件 + 目标来源范围（依赖刷新，深度一层）。
+      paths.push(...this.relationTargetDatabasePaths);
+      for (const target of this.relationTargetDatabases) {
+        paths.push(...this.dataSource.getSourceCandidatePaths(target));
+      }
+    }
+    return paths;
+  }
+
   private handleDataChangeBatch(batch: DataChangeBatch): void {
     const observable = batch.changes.filter((change) => change.sourceInstanceId !== this.instanceId);
     if (observable.length === 0) return;
     const rowPaths = new Set(this.rows.map((row) => row.file.path));
     const sourcePath = this.viewEntries[this.currentDbIndex]?.sourcePath;
     const database = this.hasActiveDatabase() ? this.getActiveDb() : null;
+    let relationDependencyChanged = false;
     const relevant = observable.filter((change) => {
       const sourceConfigEcho = change.origin === "plugin" &&
         Boolean(change.sourceInstanceId) &&
@@ -2113,26 +2210,36 @@ export class DatabaseView extends FileView {
         // onViewConfigChanged; replaying its file event would refresh peers twice.
         return false;
       }
-      return change.path === sourcePath ||
-        change.oldPath === sourcePath ||
-        rowPaths.has(change.path) ||
-        (change.oldPath ? rowPaths.has(change.oldPath) : false) ||
-        this.relationTargetPaths.has(change.path) ||
-        (change.oldPath ? this.relationTargetPaths.has(change.oldPath) : false) ||
-        this.relationTargetDatabasePaths.has(change.path) ||
-        (change.oldPath ? this.relationTargetDatabasePaths.has(change.oldPath) : false) ||
-        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
-          this.relationTargetDatabases.some((targetDatabase) => {
-            const record = this.dataSource.getRecordSnapshot(change.path);
-            return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
-          })) ||
-        ((change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
-          database != null &&
-          (() => {
-            const record = this.dataSource.getRecordSnapshot(change.path);
-            return record != null && this.dataSource.matchesRecordForDatabase(record, database);
-          })());
+      if (change.path === sourcePath || change.oldPath === sourcePath) return true;
+      // relation 依赖判定必须先于普通行命中：同库记录可同时是表格行与 relation 目标，
+      // 行身份先返回会漏设 pendingRelationRefresh（引用它的其他行不刷新）。
+      if (isRelationDependencyChange(
+        change,
+        {
+          targetPaths: this.relationTargetPaths,
+          targetDatabasePaths: this.relationTargetDatabasePaths,
+          referencedPaths: this.relationReferencedPaths,
+        },
+        (path) => this.resolvesRelationMissingTarget(path)
+      ) || (
+        (change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+        this.relationTargetDatabases.some((targetDatabase) => {
+          const record = this.dataSource.getRecordSnapshot(change.path);
+          return record != null && this.dataSource.matchesRecordForDatabase(record, targetDatabase);
+        })
+      )) {
+        relationDependencyChanged = true;
+        return true;
+      }
+      if (rowPaths.has(change.path) || (change.oldPath ? rowPaths.has(change.oldPath) : false)) return true;
+      return (change.kind === "created" || change.kind === "changed" || change.kind === "renamed") &&
+        database != null &&
+        (() => {
+          const record = this.dataSource.getRecordSnapshot(change.path);
+          return record != null && this.dataSource.matchesRecordForDatabase(record, database);
+        })();
     });
+    if (relationDependencyChanged) this.pendingRelationRefresh = true;
     if (relevant.length === 0) return;
     if (relevant.some((change) => change.path === sourcePath || change.oldPath === sourcePath)) {
       this.pendingSourceReload = true;
@@ -2162,33 +2269,9 @@ export class DatabaseView extends FileView {
       true,
     );
     this.timelineInvalidRowsVersion += 1;
-    const computedSync = this.getIncrementalComputedSyncPlan(config, this.rows, new Set(paths));
-    this.scheduleComputedSync(
-      config,
-      computedSync.rows,
-      computedSync.scope
-    );
     this.renderChart(config);
     this.renderSummary(config);
     return true;
-  }
-
-  private getIncrementalComputedSyncPlan(
-    config: ViewConfig,
-    rows: RowData[],
-    changedPaths: ReadonlySet<string>
-  ): { rows: RowData[]; scope: ComputedSyncScope } {
-    if ((config.schema.computedFields || []).some((definition) =>
-      /\bbacklinks\b/i.test(definition.expression)
-    ) || hasRollupComputedDependency(config.schema.computedFields || [], config.schema.columns)) {
-      // Backlinks and Rollups can change because another note changed, without
-      // the source row path appearing in changedPaths. Sync the full database.
-      return { rows, scope: "database" };
-    }
-    return {
-      rows: rows.filter((row) => changedPaths.has(row.file.path)),
-      scope: "rows",
-    };
   }
 
   /**
@@ -2273,13 +2356,8 @@ export class DatabaseView extends FileView {
     }
 
     this.rows = nextRows;
+    this.updateRelationReferenceDeps(this.rows, this.getActiveDb());
     this.timelineInvalidRowsVersion += 1;
-    const computedSync = this.getIncrementalComputedSyncPlan(config, this.rows, changedPaths);
-    this.scheduleComputedSync(
-      config,
-      computedSync.rows,
-      computedSync.scope
-    );
     this.renderSummary(config);
     const summary = this.containerEl_.querySelector<HTMLElement>(":scope > .db-summary");
     const tableRoot = this.containerEl_.querySelector<HTMLElement>(
@@ -2325,6 +2403,7 @@ export class DatabaseView extends FileView {
     }
     const descriptionScroll = this.saveDescriptionScrollPosition();
     if (config.viewType === "chart" && value !== "chart") this.chartRenderer.destroy();
+    if (config.viewType === "calendar" && value !== "calendar") this.calendarRenderer.destroy();
     this.viewStateStore.persist(config, this.vs());
     config.viewType = value;
     this.viewStateStore.delete(this.currentDbIndex, this.currentViewIndex);
@@ -2908,6 +2987,10 @@ export class DatabaseView extends FileView {
   private switchView(viewIndex: number): void {
     const descriptionScroll = this.saveDescriptionScrollPosition();
     this.closeHeaderPopovers();
+    // If leaving a calendar view, clean up the current-time interval timer
+    // before switching — render() only calls calendarRenderer.render() for
+    // calendar views, so switching away wouldn't trigger cleanup.
+    if (this.getConfig()?.viewType === "calendar") this.calendarRenderer.destroy();
     this.currentViewIndex = viewIndex;
     this.clearSelection();
     this.clearCellSelection();
@@ -3372,10 +3455,11 @@ export class DatabaseView extends FileView {
         );
       }
     } else if (cacheTargets) {
-      this.relationTargetPaths.clear();
-      this.relationTargetDatabases = [];
-      this.relationTargetDatabasePaths.clear();
+      // U1-REL-1：目标依赖不能只依附 rollup——仅有 relation 列时，目标库记录的
+      // 删除/恢复/移出范围同样要触发本库重渲染以更新失效标识。
+      this.refreshRelationTargetCaches(configured, cacheTargets);
     }
+    if (cacheTargets) this.updateRelationReferenceDeps(records, configured);
     return this.rowPipeline.build(
       records,
       this.withBaseThisContext(view),
@@ -3385,11 +3469,117 @@ export class DatabaseView extends FileView {
     );
   }
 
+  /** 无 rollup 时的 relation 目标依赖收集（U1-REL-1）：目标库条目路径并入
+   * relationTargetPaths/DatabasePaths，使目标记录变化能触发数据事件相关性判定。 */
+  private refreshRelationTargetCaches(configured: DatabaseConfig | null | undefined, enabled: boolean): void {
+    const relationIds = new Set(
+      (configured?.schema.columns || [])
+        .filter((column) => column.type === "relation" && column.relationConfig?.targetDatabaseId)
+        .map((column) => column.relationConfig!.targetDatabaseId)
+    );
+    if (!enabled || relationIds.size === 0) {
+      this.relationTargetPaths.clear();
+      this.relationTargetDatabases = [];
+      this.relationTargetDatabasePaths.clear();
+      return;
+    }
+    const entries = this.viewEntries;
+    const targets = entries.map((entry) => entry.config).filter((db) => relationIds.has(db.id));
+    this.relationTargetDatabases = targets;
+    this.relationTargetDatabasePaths = new Set(
+      entries.filter((entry) => relationIds.has(entry.config.id)).map((entry) => entry.sourcePath)
+    );
+    const paths = new Set<string>();
+    for (const target of targets) {
+      for (const record of this.dataSource.getRecordsForDatabase(target)) paths.add(record.file.path);
+    }
+    this.relationTargetPaths = paths;
+  }
+
+  /**
+   * 收集实际引用依赖（U1-REL-1 完整刷新链）：
+   *   - relationReferencedPaths：当前行 relation 值解析出的目标路径——**包含范围外**
+   *     引用（refreshRelationTargetCaches 只覆盖目标库成员，范围外文件删除收不到事件）；
+   *   - relationMissingTargets：解析不到的目标名——创建/改名事件后若可解析（恢复），
+   *     经 resolvesRelationMissingTarget 命中以触发完整刷新。
+   */
+  private updateRelationReferenceDeps(records: NoteRecord[], configured: DatabaseConfig | null | undefined): void {
+    const relationColumns = (configured?.schema.columns || []).filter((column) => column.type === "relation");
+    if (relationColumns.length === 0) {
+      this.relationReferencedPaths = new Set();
+      this.relationMissingRefs = [];
+      return;
+    }
+    // 解析 sourcePath 必须用引用所在记录的路径（与显示层一致）；数据库定义文件路径
+    // 在同名笔记/相对链接场景会解析到不同文件。
+    const linkSources: Array<{ sourcePath: string; targets: string[] }> = [];
+    for (const record of records) {
+      const targets: string[] = [];
+      for (const column of relationColumns) {
+        const value = record.frontmatter[column.key];
+        if (value == null || value === "") continue;
+        for (const link of parseRelationValues(value)) targets.push(link.target);
+      }
+      if (targets.length > 0) linkSources.push({ sourcePath: record.file.path, targets });
+    }
+    const deps = collectRelationReferenceDeps(linkSources, (target, sourcePath) => {
+      const dest = this.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+      return dest?.path;
+    });
+    this.relationReferencedPaths = new Set(deps.referencedPaths);
+    this.relationMissingRefs = deps.missingRefs;
+  }
+
+  /** 变更路径是否使某个当前未解析的引用恢复（用各引用自己的 sourcePath 解析）。 */
+  private resolvesRelationMissingTarget(path: string): boolean {
+    return resolvesRelationMissingTarget(this.relationMissingRefs, path, (target, sourcePath) => {
+      const dest = this.app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+      return dest?.path;
+    });
+  }
+
+  /** U1-REL-1：relation 列的状态判定需要目标库的条目路径集合。按目标库 id 记忆化，
+   * 数据变化时（refresh/refreshChangedData）失效重算。 */
+  private relationScopeMemo = new Map<string, ReadonlySet<string>>();
+  /** 实际被 relation 单元格引用的目标解析路径（含范围外）与未解析引用（保留原 sourcePath）。 */
+  private relationReferencedPaths = new Set<string>();
+  private relationMissingRefs: RelationMissingRef[] = [];
+  /** 目标依赖事件到达：下一次刷新绕过 changed-path-only patch，清 scope memo 后完整刷新。 */
+  private pendingRelationRefresh = false;
+
+  private getRelationScopePaths(col: ColumnDef): ReadonlySet<string> | undefined {
+    const targetId = col.relationConfig?.targetDatabaseId;
+    if (!targetId) return undefined;
+    const memo = this.relationScopeMemo.get(targetId);
+    if (memo) return memo;
+    const database = this.relationTargetDatabases.find((candidate) => candidate.id === targetId)
+      ?? this.viewEntries.map((entry) => entry.config).find((candidate) => candidate.id === targetId);
+    if (!database) return undefined;
+    const paths = new Set(this.dataSource.getRecordsForDatabase(database).map((record) => record.file.path));
+    this.relationScopeMemo.set(targetId, paths);
+    return paths;
+  }
+
+  private invalidateRelationScopeMemo(): void {
+    this.relationScopeMemo.clear();
+  }
+
   private calculateRelationRollups(records: NoteRecord[], database: DatabaseConfig) {
     if (!database.schema.columns.some((column) => column.type === "rollup")) return undefined;
     const entries = this.viewEntries;
-    const databases = entries.map((entry) => entry.config);
-    if (!databases.some((candidate) => candidate.id === database.id)) databases.push(database);
+    // 目标库 config 必须带上其定义文件路径：rollup 读目标库 computed 列时以该文件为
+    // 规范 this 上下文（与 DatabaseComputedSyncService 一致），否则显示/手动保存与
+    // 自动保存对引用 this 的公式会得出不同结果。
+    const databases: DatabaseConfig[] = entries.map((entry) => ({
+      ...entry.config,
+      baseThisFilePath: entry.sourcePath,
+    }));
+    if (!databases.some((candidate) => candidate.id === database.id)) {
+      databases.push({
+        ...database,
+        baseThisFilePath: this.getCurrentEntry()?.sourcePath || database.baseThisFilePath,
+      });
+    }
     const result = buildRelationRollups({
       app: this.app,
       sourceRecords: records,
@@ -3586,9 +3776,6 @@ export class DatabaseView extends FileView {
         frontmatter: { ...plan.frontmatter },
         expiresAt: Date.now() + 8000,
       });
-      if (config.schema.computedFields.length > 0) {
-        void this.syncComputedForFile(file, plan.frontmatter, undefined, config);
-      }
       this.assignManualRankForNewEntry(config, file.path, position);
       if (registeredGroupOption) {
         try {
@@ -4139,6 +4326,38 @@ export class DatabaseView extends FileView {
     this.renderSelectionStatusBar();
   }
 
+  /**
+   * Collapse any multi-cell range selection to just the active cell after a
+   * row-set change (sort, filter, search, group, or view switch).  Without
+   * this, the old anchor/focus rectangle silently references *different*
+   * records after they are reordered, and the next Enter/Backspace/type
+   * operation edits the wrong rows.
+   *
+   * If the active record is no longer visible (filtered out), the selection
+   * is cleared entirely.
+   */
+  private collapseCellSelectionForRowSetChange(): void {
+    if (!this.cellSelection) return;
+    this.invalidateActiveBulkEditor();
+    const active = this.getCellSelectionActiveAddress();
+    const rowPaths = this.getRenderedTableRowPaths();
+    const colKeys = this.getRenderedTableColumnKeys();
+    const activeExists =
+      rowPaths.includes(active.rowPath) && colKeys.includes(active.colKey);
+    if (activeExists) {
+      // Keep the active cell, discard the range rectangle.
+      this.cellSelection = { anchor: active, focus: active, active };
+      this.isSelectingCells = false;
+      this.showCellFillInput = false;
+      this.pendingCellFillDraft = null;
+      this.bulkEditingColumnKey = undefined;
+      this.renderCellSelectionClasses();
+      this.renderSelectionStatusBar();
+    } else {
+      this.clearCellSelection();
+    }
+  }
+
   private getCellSelectionActiveAddress(): CellAddress {
     if (!this.cellSelection) throw new Error("Cell selection is not active");
     return this.cellSelection.active ?? this.cellSelection.focus;
@@ -4462,9 +4681,7 @@ export class DatabaseView extends FileView {
   }
 
   private updateToolbarBadge(button: HTMLElement, count: number): void {
-    button.querySelector(".db-toolbar-badge")?.remove();
-    if (count <= 0) return;
-    button.createSpan({ cls: "db-toolbar-badge", text: String(count) });
+    replaceToolbarBadge(button, "db-toolbar-badge", count > 0 ? String(count) : undefined);
   }
 
   /** Render column management panel below the toolbar */
@@ -4799,6 +5016,7 @@ export class DatabaseView extends FileView {
   }
 
   private updateRecordIconDOM(row: RowData, config: ViewConfig): boolean {
+    row = this.rows.find((candidate) => candidate.file.path === row.file.path) ?? row;
     if (!this.containerEl_ || config.showRecordIcon !== true) return false;
     const selector = `[data-note-database-row-path="${CSS.escape(row.file.path)}"] .db-record-icon`;
     const currentIcons = Array.from(this.containerEl_.querySelectorAll<HTMLElement>(selector));
@@ -5232,7 +5450,6 @@ export class DatabaseView extends FileView {
     }
     this.pushHistory({ type: "cells", label: t("undo.editCell"), changes: [change] });
     if (this.canApplyCellChangeOptimistically(col)) return;
-    await this.syncComputedForCellChanges([change]);
     await this.refreshAfterSave();
     this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
@@ -5595,14 +5812,12 @@ export class DatabaseView extends FileView {
     if (!config || !db || uniqueKeys.length === 0) return;
     try {
       if (normalizeComputedSyncMode(db.computedSyncMode) === "automatic") {
-        // Cancel any already queued automatic sync so the cleanup cannot be immediately recreated.
-        if (this.computedSyncTimer !== null) {
-          this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
-          this.computedSyncTimer = null;
-        }
-        this.pendingComputedSync.clear();
+        // Persist display-only before deleting values. The plugin-wide coordinator
+        // re-resolves eligible databases immediately before a run, so an already
+        // queued request will now be skipped and cannot recreate the properties.
         db.computedSyncMode = "display-only";
         this.scheduleConfigSave();
+        await this.saveConfigImmediately();
         this.rerenderToolbar();
       }
       const records = this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config));
@@ -5700,7 +5915,6 @@ export class DatabaseView extends FileView {
       viewId: config.id,
       sourceInstanceId: this.instanceId,
     });
-    await this.syncComputedFieldsNow(false, config, this.cloneDatabaseConfig(this.getEffectiveConfig(entry.config, config)));
     if (this.getCurrentEntry()?.sourcePath === entry.sourcePath) this.refresh();
   }
 
@@ -6220,6 +6434,7 @@ export class DatabaseView extends FileView {
     this.suppressDataReload(2500);
     const entry = this.getCurrentEntry();
     if (!entry) return;
+    this.configMutationVersion += 1;
     const metadata = { ...this.consumePendingConfigMetadata(), ...metadataOverride };
     const mutation = mutationOverride || this.getCurrentMutationTarget();
     if (this.pendingConfigSave && this.pendingConfigSave.entry !== entry) {
@@ -6237,6 +6452,12 @@ export class DatabaseView extends FileView {
         ...this.mergeConfigSaveMetadata(this.pendingConfigSave, metadata),
       }
       : { entry, mutation, ...metadata };
+    if (this.renameConfigTransactionActive) return;
+    this.armPendingConfigSaveTimer();
+  }
+
+  private armPendingConfigSaveTimer(): void {
+    if (!this.pendingConfigSave || this.renameConfigTransactionActive) return;
     if (this.configSaveTimer !== null) {
       window.clearTimeout(this.configSaveTimer);
     }
@@ -6312,7 +6533,6 @@ export class DatabaseView extends FileView {
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(), dbConfig, true);
     this.timelineInvalidRowsVersion += 1;
-    this.scheduleComputedSync(config, this.rows);
 
     if (config.viewType !== "chart") this.renderSummary(config);
     if (!this.containerEl_) return;
@@ -6382,6 +6602,10 @@ export class DatabaseView extends FileView {
       this.closeCalendarTimelineSearchResultsPanel();
     };
     searchInput.onkeydown = (event) => {
+      if (isImeComposing(event)) {
+        if (event.key === "Escape") event.stopPropagation();
+        return;
+      }
       if (event.key !== "Escape") return;
       if (this.calendarTimelineSearchResultsEl?.isConnected) {
         event.preventDefault();
@@ -7543,7 +7767,6 @@ export class DatabaseView extends FileView {
   }
 
   private async openRow(row: RowData): Promise<void> {
-    await this.syncComputedFieldsNow(false);
     this.dataSource.openNote(row.file);
   }
 
@@ -7955,17 +8178,18 @@ export class DatabaseView extends FileView {
     }
     this.pushHistory({ type: "cells", label, changes: [change] });
     if (!reconcileAfterWrite) return;
-    await this.syncComputedForCellChanges([change]);
     await this.refreshAfterSave();
     this.rerenderToolbar();
   }
 
   private applyFrontmatterChangeToRenderedRows(change: CellEditChange): void {
-    for (const row of this.rows) {
-      if (row.file.path !== change.path) continue;
-      if (change.newValue === null) delete row.frontmatter[change.key];
-      else row.frontmatter[change.key] = this.cloneFillValue(change.newValue);
-    }
+    // 不可变替换（绝不原地修改）：row.frontmatter 可能仍与 Obsidian metadataCache
+    // 共享对象（历史渲染的行/其他持有者），原地写入会污染缓存本身——共享该对象的
+    // 其他条目串显脏值且任何刷新都无法恢复。失败回滚同样经由本函数（回滚=一次反向 change）。
+    this.rows = applyChangeToRenderedRows(this.rows, change, (value: unknown) => this.cloneFillValue(value));
+    // Optimistic edits and their rollback both change the links currently displayed.
+    // Keep subscriptions aligned even when no full refresh follows the write.
+    this.updateRelationReferenceDeps(this.rows, this.getActiveDb());
   }
 
   private isColumnReferencedByComputedFields(colKey: string): boolean {
@@ -7984,6 +8208,8 @@ export class DatabaseView extends FileView {
 
   private updateCellDOM(row: RowData, col: ColumnDef): void {
     if (!this.containerEl_) return;
+    // 编辑器闭包及失败回滚可能持有不可变替换前的行。渲染以当前行快照为准。
+    row = this.rows.find((candidate) => candidate.file.path === row.file.path) ?? row;
     const config = this.getConfig();
     if (!config) return;
 
@@ -8031,26 +8257,28 @@ export class DatabaseView extends FileView {
   private updateTableCellDOM(row: RowData, col: ColumnDef): void {
     if (!this.containerEl_) return;
     const selector = `td[data-note-database-row-path="${CSS.escape(row.file.path)}"][data-note-database-column-key="${CSS.escape(col.key)}"]`;
-    const oldTd = this.containerEl_.querySelector<HTMLElement>(selector);
-    if (!oldTd) {
+    const oldCells = Array.from(this.containerEl_.querySelectorAll<HTMLElement>(selector));
+    if (oldCells.length === 0) {
       this.refresh();
       return;
     }
 
-    const newTd = window.activeDocument.createElement("td");
-    newTd.setAttribute("data-note-database-row-path", row.file.path);
-    newTd.setAttribute("data-note-database-column-key", col.key);
-    if (oldTd.hasClass("db-cell-range-selected")) {
-      newTd.addClass("db-cell-range-selected");
-    }
+    for (const oldTd of oldCells) {
+      const newTd = window.activeDocument.createElement("td");
+      newTd.setAttribute("data-note-database-row-path", row.file.path);
+      newTd.setAttribute("data-note-database-column-key", col.key);
+      if (oldTd.hasClass("db-cell-range-selected")) {
+        newTd.addClass("db-cell-range-selected");
+      }
 
-    oldTd.replaceWith(newTd);
-    this.cellRenderer.renderCell(newTd, row, col);
-    const config = this.getConfig();
-    if (config) applyConditionalFormat(newTd, row, config, this.getActiveDb(), col.key);
-    this.setupTableCellSelection(newTd, row, col);
-    if (!this.isPhoneLayout() && this.canFillColumn(col)) {
-      this.setupTableFillHandle(newTd, row, col);
+      oldTd.replaceWith(newTd);
+      this.cellRenderer.renderCell(newTd, row, col);
+      const config = this.getConfig();
+      if (config) applyConditionalFormat(newTd, row, config, this.getActiveDb(), col.key);
+      this.setupTableCellSelection(newTd, row, col);
+      if (!this.isPhoneLayout() && this.canFillColumn(col)) {
+        this.setupTableFillHandle(newTd, row, col);
+      }
     }
   }
 
@@ -8634,7 +8862,6 @@ export class DatabaseView extends FileView {
       fileRenames: fileRenames.map((change) => ({ ...change })),
     });
     this.remapTransientRecordPaths(fileRenames, "new");
-    await this.syncComputedForCellChanges(remappedChanges);
     await this.refreshAfterSave();
     if (this.cellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
@@ -8839,11 +9066,7 @@ export class DatabaseView extends FileView {
           frontmatter: { ...item.plan.frontmatter },
           expiresAt,
         });
-        if (config.schema.computedFields.length > 0) {
-          void this.syncComputedForFile(item.file, item.plan.frontmatter, undefined, config);
-        }
       }
-      await this.syncComputedForCellChanges(remappedChanges);
 
       this.remapTransientRecordPaths(fileRenames, "new");
       const rowPathsWithCreated = [
@@ -9102,27 +9325,10 @@ export class DatabaseView extends FileView {
     }
     if (!applied.length) return;
     this.pushHistory({ type: "cells", label, changes: applied.map((change) => this.cloneCellChange(change)) });
-    await this.syncComputedForCellChanges(applied);
     if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
     if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
     this.rerenderToolbar();
-  }
-
-  private async syncComputedForCellChanges(changes: CellEditChange[]): Promise<void> {
-    const config = this.getConfig();
-    if (!config?.schema.computedFields.length) return;
-    const affectedFields = changes.map((change) => change.key);
-    const updatesByPath = new Map<string, Record<string, unknown>>();
-    for (const change of changes) {
-      const updates = updatesByPath.get(change.path) || {};
-      updates[change.key] = change.newValue;
-      updatesByPath.set(change.path, updates);
-    }
-    for (const [path, updates] of updatesByPath) {
-      const row = this.rows.find((candidate) => candidate.file.path === path);
-      if (row) await this.syncComputedForFile(row.file, { ...row.frontmatter, ...updates }, affectedFields);
-    }
   }
 
   private async commitConfigAndCellChanges(
@@ -9191,7 +9397,6 @@ export class DatabaseView extends FileView {
       after,
       cellChanges: changes.map((change) => this.cloneCellChange(change)),
     });
-    await this.syncComputedForCellChanges(changes);
     if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
     if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
@@ -9234,17 +9439,6 @@ export class DatabaseView extends FileView {
       appliedChanges.push(...pathChanges);
     }
     this.pushHistory({ type: "cells", label, changes: appliedChanges });
-    // Sync computed fields for affected files before rendering
-    const config = this.getConfig();
-    if (config?.schema.computedFields.length) {
-      const affectedFields = effectiveChanges.map((c) => c.key);
-      for (const entry of updatesByPath.values()) {
-        const row = this.rows.find((r) => r.file.path === entry.file.path);
-        if (row) {
-          await this.syncComputedForFile(row.file, { ...row.frontmatter, ...entry.updates }, affectedFields);
-        }
-      }
-    }
     if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
     if (options.preserveCellSelection) this.restorePreservedCellSelectionAfterRefresh();
@@ -9305,6 +9499,10 @@ export class DatabaseView extends FileView {
   }
 
   private async applyHistoryEntry(entry: HistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    if (entry.type === "rename") {
+      await this.applyRenameHistoryEntry(entry, direction);
+      return;
+    }
     if (entry.type === "config") {
       await this.applyConfigHistoryEntry(entry, direction);
       // Config replay replaces view objects; close popovers holding detached references.
@@ -9316,6 +9514,41 @@ export class DatabaseView extends FileView {
       return;
     }
     await this.applyCellHistoryEntry(entry, direction);
+  }
+
+  private async applyRenameHistoryEntry(
+    entry: RenameHistoryEntry,
+    direction: "undo" | "redo"
+  ): Promise<void> {
+    let nextPayload = entry.payload;
+    if (direction === "undo" && entry.payload.forward.frontmatter.length > 0) {
+      const current = await Promise.all(entry.payload.forward.frontmatter.map(async (step) => ({
+        path: step.path,
+        values: await this.dataSource.readFrontmatterKeySnapshots(step.path, Object.keys(step.changes)),
+      })));
+      nextPayload = rebaseRenameHistoryForUndo(entry.payload, current);
+    }
+    const plan = direction === "undo" ? nextPayload.reverse : nextPayload.forward;
+    const result = await executeRenameTransaction(plan, new DataSourceTransactionWriter(this.dataSource));
+    if (!result.ok) {
+      const compensation = result.compensationErrors.map((item) => {
+        const detail = item.error instanceof Error ? item.error.message : String(item.error);
+        return `${item.kind}:${item.path}: ${detail}`;
+      });
+      const primary = result.primaryError instanceof Error
+        ? result.primaryError.message
+        : String(result.primaryError);
+      throw new Error(compensation.length > 0
+        ? `${primary}; compensation failed: ${compensation.join(" | ")}`
+        : primary);
+    }
+    // 只在事务完整成功后发布重基后的 payload；失败时 history/redo 语义保持原样。
+    entry.payload = nextPayload;
+    this.applyRenamePlanToMemory(plan);
+    this.toolbarRenderer.closePopovers();
+    this.chartToolbarRenderer.closePopover();
+    this.calendarToolbarRenderer.closePopover();
+    this.refreshSchemaChanged();
   }
 
   private async applyCellHistoryEntry(entry: CellHistoryEntry, direction: "undo" | "redo"): Promise<void> {
@@ -9333,7 +9566,6 @@ export class DatabaseView extends FileView {
     const valueDirection = direction === "undo" ? "old" : "new";
     if (entry.changes.length > 0) {
       await this.applyFrontmatterChanges(entry.changes, valueDirection);
-      await this.syncComputedForCellChanges(this.getDirectedHistoryChanges(entry.changes, direction));
     }
     if (direction === "undo") {
       for (const created of entry.createdFiles || []) await this.removeCreatedFile(created);
@@ -9445,7 +9677,6 @@ export class DatabaseView extends FileView {
           : entry.cellChanges.map((change) => this.cloneCellChange(change));
         await this.applyFrontmatterChangesAtomically(historyChanges, valueDirection);
         cellValuesApplied = true;
-        await this.syncComputedForCellChanges(this.getDirectedHistoryChanges(historyChanges, direction));
       }
       if (direction === "redo") {
         for (const created of entry.createdFiles || []) {
@@ -9515,6 +9746,51 @@ export class DatabaseView extends FileView {
       delete (target as unknown as Record<string, unknown>)[key];
     }
     Object.assign(target, this.cloneDatabaseConfig(source));
+  }
+
+  /**
+   * 事务已完整落盘后一次性发布 typed config 到已加载 viewEntries。
+   * configSnapshots 同步更新，避免下一次普通保存把 rename 再记录成伪 config history。
+   */
+  private applyRenamePlanToMemory(plan: RenamePlan, stateAfter?: DatabaseViewState): void {
+    const selectedSourcePath = this.getCurrentEntry()?.sourcePath;
+    const selectedViewId = this.getConfig()?.id;
+    const steps = [plan.primaryConfig, ...plan.externalConfigs];
+    for (const step of steps) {
+      const entry = this.viewEntries.find((candidate) => candidate.sourcePath === step.path);
+      if (!entry) continue;
+      this.replaceDatabaseConfig(entry.config, step.after as DatabaseConfig);
+      linkDatabaseSchema(entry.config);
+      this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
+    }
+    if (selectedSourcePath) {
+      const dbIndex = this.viewEntries.findIndex((entry) => entry.sourcePath === selectedSourcePath);
+      if (dbIndex >= 0) {
+        this.currentDbIndex = dbIndex;
+        const views = this.viewEntries[dbIndex].config.views;
+        const viewIndex = selectedViewId ? views.findIndex((view) => view.id === selectedViewId) : -1;
+        this.currentViewIndex = viewIndex >= 0 ? viewIndex : Math.min(this.currentViewIndex, Math.max(0, views.length - 1));
+      }
+    }
+    if (stateAfter) {
+      const state = this.vs();
+      state.searchText = stateAfter.searchText;
+      state.statusFilter = stateAfter.statusFilter;
+      state.groupByField = stateAfter.groupByField;
+      state.filters = stateAfter.filters.map((rule) => ({ ...rule }));
+      state.hiddenColumns = new Set(stateAfter.hiddenColumns);
+      state.filterLogic = stateAfter.filterLogic;
+      state.sortColumn = stateAfter.sortColumn;
+      state.sortDirection = stateAfter.sortDirection;
+      state.sortRules = stateAfter.sortRules.map((rule) => ({ ...rule }));
+    } else {
+      const searchText = this.viewState?.searchText || "";
+      this.viewStateStore.clear();
+      this.viewState = undefined;
+      this.vs().searchText = searchText;
+    }
+    this.pendingUndoLabel = null;
+    this.pendingConfigCellChanges = null;
   }
 
   private updateUndoAction(): void {
@@ -10235,121 +10511,21 @@ export class DatabaseView extends FileView {
     this.refresh();
   }
 
-  private async syncComputedForFile(
-    file: TFile,
-    frontmatter: Record<string, unknown>,
-    affectedFields?: string[],
-    config = this.getConfig()
-  ): Promise<void> {
-    if (!config?.schema.computedFields.length || !this.isAutomaticComputedSync()) return;
-    const database = this.getCurrentEntry()?.config;
-    const derivedValues = database
-      ? this.calculateRelationRollups([{ file, frontmatter }], database)?.result.valuesByPath.get(file.path)
-      : undefined;
-
-    const computed = evaluateComputedFields(
-      config.schema.computedFields,
-      config.schema.columns,
-      frontmatter,
-      { ...this.getBaseComputedEvaluationContext(file, config), derivedValues }
-    );
-
-    const computedColumns = config.schema.columns.filter(col => col.type === "computed");
-    const updates: Record<string, unknown> = {};
-
-    for (const col of computedColumns) {
-      if (affectedFields?.length) {
-        const deps = ComputedFieldEngine.extractDependencies(
-          config.schema.computedFields.find(cf => cf.key === (col.computedKey || col.key))?.expression || "",
-          config.schema.columns
-        );
-        const allRelevant = [...affectedFields, ...computedColumns.flatMap(c => [c.key, getComputedStorageKey(c)])];
-        if (!deps.some(d => allRelevant.includes(d))) continue;
-      }
-      const key = getComputedStorageKey(col);
-      const value = computed[key];
-      const nextValue = value == null ? "" : value;
-      if (safeString(frontmatter[key]) !== safeString(nextValue)) {
-        updates[key] = nextValue;
-      }
-    }
-
-    if (Object.keys(updates).length > 0) {
-      await this.dataSource.updateFrontmatter(
-        file,
-        updates,
-        { sourceInstanceId: this.instanceId }
-      );
-    }
-  }
-
-  private scheduleComputedSync(
-    config: ViewConfig,
-    rows: RowData[],
-    syncScope: ComputedSyncScope = "database"
-  ): void {
-    if (config.schema.computedFields.length === 0 || !this.isAutomaticComputedSync()) {
-      if (this.computedSyncTimer !== null) this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
-      this.computedSyncTimer = null;
-      this.pendingComputedSync.clear();
-      return;
-    }
-    // A deleted/non-matching changed path may produce no incremental rows.
-    // It must not postpone useful work already waiting in the queue.
-    if (syncScope === "rows" && rows.length === 0) return;
-    if (this.computedSyncTimer !== null) this.getRefreshWindow().clearTimeout(this.computedSyncTimer);
-    this.computedSyncTimer = null;
-    this.pendingComputedSync.merge(rows, syncScope);
-    const entry = this.getCurrentEntry();
-    const syncConfig = JSON.parse(JSON.stringify(config)) as ViewConfig;
-    const recordConfig = entry
-      ? this.cloneDatabaseConfig(this.getEffectiveConfig(entry.config, config))
-      : undefined;
-    const sourcePath = entry?.sourcePath;
-    this.computedSyncTimer = this.getRefreshWindow().setTimeout(() => {
-      this.computedSyncTimer = null;
-      if (sourcePath && this.getCurrentEntry()?.sourcePath !== sourcePath) {
-        this.pendingComputedSync.clear();
-        return;
-      }
-      const pending = this.pendingComputedSync.drain();
-      if (this.syncingComputed) {
-        this.scheduleComputedSync(syncConfig, pending.rows, pending.scope);
-        return;
-      }
-      void this.syncComputedFieldsNow(false, syncConfig, recordConfig, pending.rows, false, pending.scope).catch((err) => {
-        console.error("Note Database: failed to sync computed fields", err);
-        new Notice(t("errors.updateFailed", { error: String(err) }));
-      });
-    }, 5000);
-  }
-
   private async syncComputedFieldsNow(
     notify: boolean,
-    config = this.getConfig(),
-    recordConfig?: DatabaseConfig,
-    fallbackRows: RowData[] = this.rows,
-    force = false,
-    syncScope: ComputedSyncScope = "database"
+    config = this.getConfig()
   ): Promise<void> {
     if (!config || this.syncingComputed) return;
-    const activeDb = recordConfig || this.getCurrentEntry()?.config;
-    if (!force && !this.isAutomaticComputedSync(activeDb)) return;
+    const activeDb = this.getCurrentEntry()?.config;
     this.syncingComputed = true;
     try {
       const computedColumns = config.schema.columns.filter((col) => col.type === "computed");
       const db = activeDb;
-      const scopedRecords = fallbackRows.map((row) => ({
-        file: row.file,
-        frontmatter: row.frontmatter,
-      }));
-      const records = syncScope === "rows"
-        ? scopedRecords
-        : db
-          ? this.dataSource.getRecordsForDatabase(recordConfig || this.getEffectiveConfig(db, config))
-          : scopedRecords;
+      const records = db
+        ? this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(db, config))
+        : this.rows.map((row) => ({ file: row.file, frontmatter: row.frontmatter }));
       const rollupValues = db
-        ? this.calculateRelationRollups(records, recordConfig || db)?.result.valuesByPath
+        ? this.calculateRelationRollups(records, db)?.result.valuesByPath
         : undefined;
       let changed = 0;
       for (const record of records) {
@@ -10358,7 +10534,7 @@ export class DatabaseView extends FileView {
           config.schema.columns,
           record.frontmatter,
           {
-            ...this.getBaseComputedEvaluationContext(record.file, recordConfig || config),
+            ...this.getBaseComputedEvaluationContext(record.file, config),
             derivedValues: rollupValues?.get(record.file.path),
           }
         );
@@ -10386,10 +10562,6 @@ export class DatabaseView extends FileView {
     }
   }
 
-  private isAutomaticComputedSync(db = this.getCurrentEntry()?.config): boolean {
-    return normalizeComputedSyncMode(db?.computedSyncMode) === "automatic";
-  }
-
   private getBaseComputedEvaluationContext(file: TFile, config?: ViewConfig | DatabaseConfig): {
     app: App;
     file: TFile;
@@ -10409,7 +10581,7 @@ export class DatabaseView extends FileView {
   }
 
   private syncComputedFieldsManually(): void {
-    void this.syncComputedFieldsNow(true, this.getConfig(), undefined, this.rows, true).catch((err) => {
+    void this.syncComputedFieldsNow(true, this.getConfig()).catch((err) => {
       console.error("Note Database: failed to sync computed fields", err);
       new Notice(t("errors.updateFailed", { error: String(err) }));
     });
@@ -10428,6 +10600,7 @@ export class DatabaseView extends FileView {
       config,
       app: this.app,
       actions: {
+        getRelationScopePaths: (col) => this.getRelationScopePaths(col),
         editCell: (target, r, col, event) => this.cellRenderer.startEdit(target, r, col, event),
         editFileName: (target, r, currentName) => this.cellRenderer.editFileName(target, r, currentName),
         showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
@@ -10441,7 +10614,12 @@ export class DatabaseView extends FileView {
   }
 
   refresh(options: { viewport?: DatabaseViewportRequest } = {}): void {
+    // 数据重读后目标库成员可能变化：失效 relation 状态判定的记忆化。
+    this.invalidateRelationScopeMemo();
     if (!this.containerEl_) return;
+    // Snapshot rendered DOM row order (not this.rows) — group reordering or
+    // filtering may change the visible row order without changing this.rows.
+    const prevRenderedPaths = this.getRenderedTableRowPaths().join("\n");
     const nextViewType = this.hasActiveDatabase() ? (this.getConfig()?.viewType || "table") : "table";
     const viewportMode = resolveDatabaseViewportMode(this.lastRenderedViewType, nextViewType, options.viewport);
     const viewport = viewportMode === "preserve-anchor" ? captureDatabaseViewport(this.containerEl_) : undefined;
@@ -10456,6 +10634,13 @@ export class DatabaseView extends FileView {
     )
       .forEach(el => el.remove());
     this.render();
+    // Detect whether the rendered row order changed (sort, filter, search,
+    // group order, view switch, data reload).  Use rendered DOM paths, not
+    // this.rows, so group reordering is also detected.
+    const nextRenderedPaths = this.getRenderedTableRowPaths().join("\n");
+    if (prevRenderedPaths !== nextRenderedPaths) {
+      this.collapseCellSelectionForRowSetChange();
+    }
     if (viewport && this.containerEl_) restoreDatabaseViewport(this.containerEl_, viewport);
     if (rawViewport && this.containerEl_) {
       this.containerEl_.scrollTop = rawViewport.top;

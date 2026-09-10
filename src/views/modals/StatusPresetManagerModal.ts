@@ -1,4 +1,5 @@
 import { App, Modal, Notice, setIcon, setTooltip } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import {
   cloneStatusPreset,
   getBuiltinStatusPresets,
@@ -31,6 +32,7 @@ export class StatusPresetManagerModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: this.title });
+    makeModalDraggable(this);
     this.contentEl.createDiv({ cls: "db-modal-help", text: t("statusPresets.desc") });
     this.renderDefaultSelector();
     this.listEl = this.contentEl.createDiv({ cls: "db-status-preset-manager-list" });

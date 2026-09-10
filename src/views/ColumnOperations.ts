@@ -1,5 +1,5 @@
 import { App, Notice, TFile } from "obsidian";
-import { DataSource } from "../data/DataSource";
+import { DataSource, ViewConfigMutation } from "../data/DataSource";
 import { PropertyService } from "../data/PropertyService";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { t } from "../i18n";
@@ -8,9 +8,6 @@ import {
   ensureColumnOrder,
   linkDatabaseSchema,
   normalizeColumnOrder,
-  updateColumnKeyReferences,
-  updateSummaryFormulaReferences,
-  updateSourceRuleKeyReferences,
 } from "../data/ColumnConfig";
 import {
   removeDatabaseRecordIconFieldReference,
@@ -28,6 +25,15 @@ import { ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { ColumnPropertySync } from "./ColumnPropertySync";
+import {
+  decideFrontmatterMigrationMode,
+  requiredCandidateKeys,
+  runRenameOperation,
+} from "../data/RenamePlanBuilder";
+import type { RenamePlanInput } from "../data/RenamePlanBuilder";
+import { DataSourceTransactionWriter } from "../data/DataSourceTransactionWriter";
+import { executeRenameTransaction } from "../data/RenameTransaction";
+import type { RenameHistoryPayload, RenamePlan, TransactionFailure } from "../data/RenameTransaction";
 
 export interface FrontmatterValueChange {
   file: TFile;
@@ -48,16 +54,28 @@ export interface ColumnOperationsDeps {
   getActiveDb(): DatabaseConfig;
   getState(): DatabaseViewState;
   getFilesForConfig(config: ViewConfig): TFile[];
+  getActiveDatabaseSourcePath(): string | undefined;
+  getConfigMutationVersion(): number;
+  getDatabaseMutation(path: string, config: DatabaseConfig, viewId?: string): ViewConfigMutation;
+  beginRenameConfigTransaction(): void;
+  endRenameConfigTransaction(): void;
   saveConfigImmediately(): Promise<void>;
-  saveCurrentViewConfig(): Promise<void>;
   scheduleConfigSave(): void;
   refresh(): void;
+  /** Returns true if a cell editor or inline popover is currently open. */
+  hasActiveEditor(): boolean;
   refreshSchemaChanged(options?: { preserveViewport?: boolean }): void;
   refreshAfterSave(): Promise<void>;
   markPendingColumn(key: string): void;
   refreshColumnManager(): void;
   setPendingUndoLabel(label: string): void;
   setPendingConfigCellChanges(changes: FrontmatterValueChange[]): void;
+  applyRenameTransactionSuccess(
+    plan: RenamePlan,
+    stateAfter: DatabaseViewState,
+    history: RenameHistoryPayload,
+    label: string
+  ): void;
   getDefaultStatusOptions(): StatusOptionDef[];
   getDefaultStatusPresetId(): string | undefined;
 }
@@ -86,7 +104,7 @@ export class ColumnOperations {
     this.deps.viewStateStore.persist(config, state);
     this.deps.setPendingUndoLabel(t("undo.hideColumnsConfig"));
     this.deps.scheduleConfigSave();
-    this.deps.refresh();
+    this.guardedRefresh();
   }
 
   async renameColumn(col: ColumnDef, result: ColumnRenameResult): Promise<void> {
@@ -131,7 +149,6 @@ export class ColumnOperations {
     if (!oldIsFileField && newIsFileField && result.migrateValues) {
       new Notice(t("fileField.migrationIgnored", { key: newKey }));
     }
-    const convertingToFileField = !oldIsFileField && newIsFileField;
     const useFrontmatterMigration = !oldIsFileField && !newIsFileField && !isRollup;
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
@@ -141,107 +158,122 @@ export class ColumnOperations {
         confirmText: t("common.save"),
       })
       : false;
-    let migrationNotice = "";
-    const frontmatterChanges = convertingToFileField
-      ? this.getDeleteKeyChanges(config, oldKey)
-      : useFrontmatterMigration
-      ? this.getRenameColumnChanges(config, targetCol, oldKey, newKey, result.migrateValues, renameSavedComputedProperty, oldComputedKey, newComputedKey)
-      : [];
+    let configTransactionStarted = false;
     try {
-      if (renameSavedComputedProperty) {
-        const migration = await this.deps.propertyService.renameKey(
-          this.deps.getFilesForConfig(config),
-          oldComputedKey,
-          newComputedKey,
-          undefined,
-          true
-        );
-        migrationNotice = t("column.migratedFiles", { count: migration.moved });
-      } else if (useFrontmatterMigration && !isComputed && !isRollup && result.migrateValues) {
-        const migration = await this.propertySync.rename(config, targetCol, oldKey, newKey, true);
-        if (migration) {
-          migrationNotice = t("column.migratedFiles", { count: migration.moved });
-          if (migration.deletedStale > 0) {
-            migrationNotice += t("column.cleanedOldProps", { count: migration.deletedStale });
-          }
-        }
-      } else if (useFrontmatterMigration && !isComputed && !isRollup && oldKey !== newKey) {
-        await this.propertySync.delete(config, targetCol);
-      } else if (convertingToFileField && !isComputed) {
-        await this.propertySync.delete(config, targetCol);
-      }
+      // 先落盘此前的 pending config；rename 自身随后完全绕过 saveViewEntryConfig，
+      // 由 raw CAS transaction 写入，因此失败不会提前生成伪 history。
+      await this.deps.saveConfigImmediately();
+      this.deps.beginRenameConfigTransaction();
+      configTransactionStarted = true;
+      const sourcePath = this.deps.getActiveDatabaseSourcePath();
+      if (!sourcePath) throw new Error("rename transaction: active database path unavailable");
+      const mutationVersion = this.deps.getConfigMutationVersion();
+      const primarySnapshot = await this.deps.dataSource.readViewDefSnapshot(sourcePath);
+      const activeView = primarySnapshot.typedConfig.views.find((view) => view.id === config.id);
+      if (!activeView?.id) throw new Error(`rename transaction: active view '${config.id}' unavailable on disk`);
+      const activeViewId = activeView.id;
 
-      ensureColumnOrder(config);
-      const state = this.deps.getState();
-      let activeStateChanged = false;
-      for (const view of new Set([config, ...(db.views || [])])) {
-        const changed = updateColumnKeyReferences(
-          view,
-          view === config ? state : undefined,
-          oldKey,
-          newKey,
-          oldLabel,
-          newLabel
-        );
-        if (view === config && changed) activeStateChanged = true;
-      }
-      updateSourceRuleKeyReferences(db.sourceRules, oldKey, newKey);
-      updateSourceRuleTreeKeyReferences(db.sourceRuleTree, oldKey, newKey);
-      updateDatabaseRecordIconFieldReference(db, oldKey, newKey);
-      updateSummaryFormulaReferences(db, oldKey, newKey, oldLabel, newLabel);
-      for (const view of db.views || [config]) {
-        for (const rule of view.conditionalFormats || []) {
-          if (rule.condition.field === oldKey) rule.condition.field = newKey;
-        }
-      }
-      for (const schema of new Set([db.schema, ...(db.views || []).map((view) => view.schema)])) {
-        for (const candidate of schema?.columns || []) {
-          if (candidate.rollupConfig?.relationField === oldKey) {
-            candidate.rollupConfig.relationField = newKey;
-          }
-          if (
-            candidate.type === "rollup" &&
-            candidate.rollupConfig?.targetField === oldKey &&
-            config.schema.columns.find((column) => column.key === candidate.rollupConfig?.relationField)
-              ?.relationConfig?.targetDatabaseId === db.id
-          ) {
-            candidate.rollupConfig.targetField = newKey;
-          }
-        }
-      }
-      if (activeStateChanged) {
-        this.deps.viewStateStore.persist(config, state);
-      }
-      this.removeDuplicateSchemaColumns(db, targetCol, oldKey);
-      targetCol.key = newKey;
-      targetCol.label = newLabel;
-      targetCol.wrap = result.wrap || undefined;
-      if (newIsFileField) {
-        targetCol.type = getFileFieldFixedType(newKey);
-        targetCol.statusOptions = undefined;
-        targetCol.statusPresetId = undefined;
-      }
-      if (targetCol.type === "computed") {
-        const computed = config.schema.computedFields.find((field) => field.key === oldComputedKey);
-        if (computed) {
-          computed.key = newComputedKey;
-          computed.label = newLabel;
-        }
-        targetCol.computedKey = newComputedKey;
-      }
-      linkDatabaseSchema(db);
-      this.deps.setPendingUndoLabel(t("undo.columnRenameConfig"));
-      this.deps.setPendingConfigCellChanges(frontmatterChanges);
-      await this.deps.saveCurrentViewConfig();
+      const request = {
+        oldKey,
+        oldLabel,
+        newKey,
+        newLabel,
+        wrap: result.wrap || undefined,
+        migrateValues: result.migrateValues,
+        renameSavedComputedProperty,
+      };
+      const facts = {
+        columnType: targetCol.type,
+        oldComputedKey,
+        newComputedKey,
+        oldIsFileField,
+        newIsFileField,
+        displayOnlyComputed: displayOnly,
+      };
+      const mode = decideFrontmatterMigrationMode(facts, request);
+      const candidateKeys = requiredCandidateKeys(mode, request, facts);
+      const records = candidateKeys.length === 0
+        ? []
+        : await Promise.all(this.deps.getFilesForConfig(config).map(async (file) => ({
+          path: file.path,
+          values: await this.deps.dataSource.readFrontmatterKeySnapshots(file.path, candidateKeys),
+        })));
+      const externalConfigs: RenamePlanInput["externalConfigs"] = [];
       if (oldKey !== newKey) {
-        await this.updateDependentRollupTargetReferences(db.id, oldKey, newKey);
+        for (const entry of this.deps.dataSource.getViewDefFiles()) {
+          if (entry.file.path === sourcePath || entry.config.id === primarySnapshot.typedConfig.id) continue;
+          if (!this.hasDependentRollupTarget(entry.config, primarySnapshot.typedConfig.id, oldKey)) continue;
+          const snapshot = await this.deps.dataSource.readViewDefSnapshot(entry.file.path);
+          externalConfigs.push({
+            path: entry.file.path,
+            typedBefore: snapshot.typedConfig,
+            rawBefore: snapshot.rawPayload,
+            mutation: this.deps.getDatabaseMutation(entry.file.path, snapshot.typedConfig),
+          });
+        }
       }
+      const input: RenamePlanInput = {
+        request,
+        facts,
+        primary: {
+          path: sourcePath,
+          typedBefore: primarySnapshot.typedConfig,
+          rawBefore: primarySnapshot.rawPayload,
+          activeViewId,
+          stateBefore: this.deps.getState(),
+          mutation: this.deps.getDatabaseMutation(sourcePath, primarySnapshot.typedConfig, activeViewId),
+        },
+        records,
+        externalConfigs,
+      };
+      const assertVersion = () => {
+        if (this.deps.getConfigMutationVersion() !== mutationVersion) {
+          throw new Error("rename transaction conflict: view config changed during rename");
+        }
+      };
+      const operation = await runRenameOperation({
+        input,
+        builderDeps: {
+          updateSourceRuleTree: (tree, from, to) => updateSourceRuleTreeKeyReferences(
+            tree as Parameters<typeof updateSourceRuleTreeKeyReferences>[0],
+            from,
+            to
+          ),
+          updateRecordIcon: updateDatabaseRecordIconFieldReference,
+          serializeConfig: (value) => this.deps.dataSource.serializeDatabaseConfig(value),
+          getFileFieldFixedType,
+        },
+        writer: new DataSourceTransactionWriter(this.deps.dataSource, assertVersion),
+        undoLabel: t("undo.columnRenameConfig"),
+      });
+      if (!operation.ok) throw this.renameTransactionError(operation.transactionFailure);
+      // 最后一笔 writer resolve 到发布内存/history 之间再检查一次。若期间出现新的
+      // config mutation，反向事务恢复已完成的 rename，避免把并发内存修改覆盖掉。
+      if (this.deps.getConfigMutationVersion() !== mutationVersion) {
+        const rollback = await executeRenameTransaction(
+          operation.history.reverse,
+          new DataSourceTransactionWriter(this.deps.dataSource)
+        );
+        if (!rollback.ok) throw this.renameTransactionError(rollback);
+        throw new Error("rename transaction conflict: view config changed before publish");
+      }
+      this.deps.applyRenameTransactionSuccess(
+        operation.plan,
+        operation.stateAfter,
+        operation.history,
+        t("undo.columnRenameConfig")
+      );
+      const migrationNotice = operation.stats.moved > 0
+        ? t("column.migratedFiles", { count: operation.stats.moved })
+        : "";
       this.deps.refreshSchemaChanged();
       this.deps.refreshColumnManager();
       new Notice(t("column.updatedProperty", { label: newLabel, key: newKey, migration: migrationNotice }));
     } catch (err) {
       console.error("Note Database: failed to rename column", err);
       new Notice(t("column.renameFailed", { error: String(err) }));
+    } finally {
+      if (configTransactionStarted) this.deps.endRenameConfigTransaction();
     }
   }
 
@@ -256,7 +288,7 @@ export class ColumnOperations {
       [config.columnOrder![nextIndex], config.columnOrder![index]];
     this.deps.setPendingUndoLabel(t("undo.columnOrderConfig"));
     this.deps.scheduleConfigSave();
-    this.deps.refresh();
+    this.guardedRefresh();
   }
 
   moveColumnTo(key: string, targetKey: string, placement: "before" | "after"): void {
@@ -273,7 +305,22 @@ export class ColumnOperations {
     order.splice(insertIndex, 0, item);
     this.deps.setPendingUndoLabel(t("undo.columnOrderConfig"));
     this.deps.scheduleConfigSave();
-    this.deps.refresh();
+    this.guardedRefresh();
+  }
+
+  /**
+   * Refresh that respects active cell editors.  When an editor is open,
+   * only update the column manager UI — the full table rebuild (which
+   * would destroy the editor DOM and lose the user's draft) is deferred
+   * to the next natural refresh (editor close → refreshAfterSave, peer
+   * config sync, or manual refresh button).
+   */
+  private guardedRefresh(): void {
+    if (this.deps.hasActiveEditor()) {
+      this.deps.refreshColumnManager();
+    } else {
+      this.deps.refresh();
+    }
   }
 
   hideColumn(col: ColumnDef): void {
@@ -286,7 +333,7 @@ export class ColumnOperations {
     }
     this.deps.setPendingUndoLabel(t("undo.hideColumnsConfig"));
     this.deps.scheduleConfigSave();
-    this.deps.refresh();
+    this.guardedRefresh();
   }
 
   async deleteColumn(col: ColumnDef): Promise<void> {
@@ -448,6 +495,36 @@ export class ColumnOperations {
       }
       if (changed) await this.deps.dataSource.updateViewDefFile(entry.file, entry.config);
     }
+  }
+
+  private hasDependentRollupTarget(
+    config: DatabaseConfig,
+    targetDatabaseId: string,
+    targetField: string
+  ): boolean {
+    const relationKeys = new Set(
+      config.schema.columns
+        .filter((column) => column.type === "relation" && column.relationConfig?.targetDatabaseId === targetDatabaseId)
+        .map((column) => column.key)
+    );
+    return config.schema.columns.some((column) =>
+      column.type === "rollup" &&
+      column.rollupConfig?.targetField === targetField &&
+      relationKeys.has(column.rollupConfig.relationField)
+    );
+  }
+
+  private renameTransactionError(failure: TransactionFailure): Error {
+    const primary = failure.primaryError instanceof Error
+      ? failure.primaryError.message
+      : String(failure.primaryError);
+    const compensation = failure.compensationErrors.map((item) => {
+      const detail = item.error instanceof Error ? item.error.message : String(item.error);
+      return `${item.kind}:${item.path}: ${detail}`;
+    });
+    return new Error(compensation.length > 0
+      ? `${primary}; compensation failed: ${compensation.join(" | ")}`
+      : primary);
   }
 
   private removeColumnReferences(config: ViewConfig, key: string): void {
@@ -1017,48 +1094,8 @@ export class ColumnOperations {
       }));
   }
 
-  private getRenameColumnChanges(
-    config: ViewConfig,
-    col: ColumnDef,
-    oldKey: string,
-    newKey: string,
-    migrateValues: boolean,
-    renameSavedComputedProperty = false,
-    oldComputedKey = getComputedStorageKey(col),
-    newComputedKey = normalizeComputedStorageKey(newKey)
-  ): FrontmatterValueChange[] {
-    if (oldKey === newKey || oldKey === "file.name") return [];
-    if (col.type === "computed") return renameSavedComputedProperty ? this.getRenameKeyChanges(config, oldComputedKey, newComputedKey) : [];
-    if (!migrateValues) return this.getDeleteKeyChanges(config, oldKey);
-    return this.getRenameKeyChanges(config, oldKey, newKey);
-  }
-
   private getComputedConversionChanges(config: ViewConfig, key: string, cleanupExistingProperty = false): FrontmatterValueChange[] {
     return cleanupExistingProperty ? this.getDeleteKeyChanges(config, key) : [];
-  }
-
-  private getRenameKeyChanges(config: ViewConfig, oldKey: string, newKey: string): FrontmatterValueChange[] {
-    const changes: FrontmatterValueChange[] = [];
-    for (const record of this.getRecords(config)) {
-      if (!Object.prototype.hasOwnProperty.call(record.frontmatter, oldKey)) continue;
-      changes.push({
-        file: record.file,
-        path: record.file.path,
-        key: oldKey,
-        oldValue: this.cloneValue(record.frontmatter[oldKey]),
-        oldExists: true,
-        newValue: null,
-      });
-      changes.push({
-        file: record.file,
-        path: record.file.path,
-        key: newKey,
-        oldValue: this.cloneValue(record.frontmatter[newKey]),
-        oldExists: Object.prototype.hasOwnProperty.call(record.frontmatter, newKey),
-        newValue: this.cloneValue(record.frontmatter[oldKey]),
-      });
-    }
-    return changes;
   }
 
   private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {

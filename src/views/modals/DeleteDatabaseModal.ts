@@ -1,4 +1,5 @@
 import { App, Modal, Setting } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 
 export interface DeleteDatabaseModalResult {
@@ -33,6 +34,7 @@ export class DeleteDatabaseModal extends Modal {
     contentEl.addClass("db-delete-database-modal");
     contentEl.createEl("h3", { text: t("deleteDatabase.title", { name: this.dbName }) });
 
+    makeModalDraggable(this);
     contentEl.createDiv({
       cls: "db-delete-modal-info",
       text: t("deleteDatabase.info", { count: this.fileCount }),

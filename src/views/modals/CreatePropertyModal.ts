@@ -1,4 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 import { ColumnDef, ViewConfig } from "../../data/types";
 import { COLUMN_TYPE_LABELS, isColumnType } from "../../data/ColumnTypes";
@@ -6,6 +7,7 @@ import { isFileFieldKey } from "../../data/FileFields";
 import { createUniqueColumnKey } from "../../data/ColumnConfig";
 import { createDropdownField } from "../DropdownField";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "../PropertyTypeIcon";
+import { isImeComposing } from "../../data/KeyboardUtils";
 
 export interface CreatePropertyResult {
   key: string;
@@ -69,6 +71,7 @@ export class CreatePropertyModal extends Modal {
     contentEl.addClass("note-database-modal");
     contentEl.createEl("h3", { text: this.options.title ?? t("modal.createProperty") });
 
+    makeModalDraggable(this);
     this.renderForm();
 
     const btnRow = contentEl.createDiv({ cls: "db-modal-button-row" });
@@ -141,6 +144,7 @@ export class CreatePropertyModal extends Modal {
     input.oninput = () => onInput(input.value);
     // Enter submits the form.
     input.addEventListener("keydown", (event) => {
+      if (isImeComposing(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
         this.confirm();

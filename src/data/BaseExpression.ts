@@ -2,7 +2,7 @@ import { App, CachedMetadata, getAllTags, normalizePath, TFile } from "obsidian"
 import { hasObsidianTagValue, toObsidianTagValues } from "./ColumnTypes";
 import { ComputedFieldEngine } from "./ComputedField";
 import { isDateLikeColumnType } from "./DateTimeFormat";
-import { safeEval } from "./SafeEval";
+import { safeEval, createSafeBuiltin } from "./SafeEval";
 import { safeString } from "./SafeString";
 import { ColumnDef, ComputedFieldDef } from "./types";
 import type { MomentConstructor, MomentDurationLike } from "./MomentTypes";
@@ -985,12 +985,12 @@ function createBaseContext(context: BaseExpressionContext): Record<string, unkno
     ? createBaseFileValue(context, context.thisFile, context.thisFrontmatter)
     : file;
   const vars: Record<string, unknown> = {
-    Array,
-    Boolean,
-    Math,
-    Number,
-    Object,
-    String,
+    Array: createSafeBuiltin(Array),
+    Boolean: createSafeBuiltin(Boolean),
+    Math: createSafeBuiltin(Math),
+    Number: createSafeBuiltin(Number),
+    Object: createSafeBuiltin(Object),
+    String: createSafeBuiltin(String),
     ...Object.fromEntries(
       Object.entries(properties)
         .filter(([key]) => isIdentifierSafe(key))
@@ -1562,6 +1562,33 @@ function isBaseDurationValue(value: unknown): value is BaseDurationValue {
     typeof value === "object" &&
     typeof (value as BaseDurationValue).milliseconds === "number" &&
     typeof (value as BaseDurationValue).valueOf === "function";
+}
+
+/**
+ * Convert a Bases wrapper object to a scalar suitable for frontmatter storage.
+ * Uses instanceof / duck-type checks that survive minification (not constructor.name).
+ * - BaseDateValue → toString() (YYYY-MM-DD HH:mm:ss)
+ * - BaseDurationValue → valueOf() (milliseconds as number)
+ * - BaseLinkValue → toString() (wikilink text)
+ * - Unknown objects → null + console.warn
+ */
+export function scalarizeBaseExpressionValue(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) return value;
+  if (value instanceof BaseDateValue) {
+    return value.toString();
+  }
+  if (isBaseDurationValue(value)) {
+    return value.valueOf();
+  }
+  if (isBaseLinkValue(value)) {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    return String(value);
+  }
+  console.warn("Note Database: unsupported object type returned by Bases formula, treating as null");
+  return null;
 }
 
 function parseBaseDuration(value: string): MomentDurationLike {

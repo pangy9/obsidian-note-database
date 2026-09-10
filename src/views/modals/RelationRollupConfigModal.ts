@@ -1,4 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { isRollupNumericTarget } from "../../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig } from "../../data/types";
 import { t } from "../../i18n";
@@ -31,6 +32,7 @@ export class RelationRollupConfigModal extends Modal {
     contentEl.createEl("h3", {
       text: this.column.type === "relation" ? t("relation.configure") : t("rollup.configure"),
     });
+    makeModalDraggable(this);
     if (this.column.type === "relation") this.renderRelation();
     else if (this.column.type === "rollup") this.renderRollup();
   }

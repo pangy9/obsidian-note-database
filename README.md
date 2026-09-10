@@ -61,7 +61,17 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 
 Each view keeps its own filters, sorting, grouping, visible properties, title property, and layout—without duplicating the notes.
 
-## New in 1.2.8
+## New in 1.2.9
+
+- **More reliable editing and refresh:** fixes values appearing on unrelated grouped rows, lost formatting after note renames, and stale properties after refresh. Manual refresh rereads data from disk.
+- **Undoable property renames:** updates formulas and cross-database Rollup references. Failed writes trigger rollback attempts, with explicit reporting of concurrent conflicts.
+- **Unified automatic formula saving:** automatic mode is scheduled by the plugin, without requiring an open Dashboard, including when using embedded views alone.
+- **Clearer Relation states:** marks missing and out-of-scope references. Existing out-of-scope notes still support opening and preview, with an explanatory notice.
+- **Improved Base import:** choose a file, search and sort properties, and preserve display names. Select which formula columns to import as computed fields or text. Text reads the matching note property without writing formula results.
+- **Smoother dialogs:** drag desktop dialogs using the grip beside the title. Improved text copying in dialogs and popovers, title editing, and formula suggestions on narrow screens.
+- **Mobile compatibility:** fixes iPad toolbar icons, badges, embedded collapse arrows, and phone cell-editor positioning.
+
+## Feature tour
 
 | Faster filter and sort controls |
 | --- |
@@ -142,7 +152,7 @@ Calendar supports month, week, and day. Timeline supports day, week, month, and 
 | ![A database view embedded in a note](assets/screenshots/en-embed-view.png) | ![A compact headerless embedded view](assets/screenshots/en-embed-headerless.png) |
 | Paste a generated `note-database` block into any note. | Hide the database header when the surrounding note already provides context. |
 
-Embedded records stay read-only, while view switching, filters, sorting, grouping, computed values, and copy/export tools remain available.
+Embedded records stay read-only, while view switching, filters, sorting, grouping, computed values, and copy/export tools remain available. If a database explicitly enables automatic formula-result storage, that database-level background task still runs while the database is shown in an embedded view.
 
 ## Markdown remains the source of truth
 

@@ -16,6 +16,7 @@ import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "../data/Gro
 import { getDateGroupMode } from "../data/GroupDisplay";
 import { isHTMLElement } from "./DomGuards";
 import { renderRecordIcon } from "./RecordIconRenderer";
+import { replaceToolbarBadge } from "./ToolbarBadge";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -77,7 +78,6 @@ export interface ToolbarActions {
   toggleColumnManager(anchorEl: HTMLElement): void;
   closeToolbarPopovers?(): void;
   openFullView?(): void;
-  toggleHeaderChrome?(hidden: boolean): void;
   createEntry(defaults?: Record<string, unknown>): void;
   readonly isReadOnly?: boolean;
   readonly isReadOnlyViews?: boolean;
@@ -232,7 +232,6 @@ export class ToolbarRenderer {
 
       const titleActions = titleRow.createDiv({ cls: "db-title-actions" });
       this.renderFullViewButton(titleActions, actions);
-      if (actions.toggleHeaderChrome && phoneLayout) this.renderHeaderChromeButton(titleActions, actions, false);
       if (!actions.isReadOnly && !isChartView) this.renderNewButton(titleActions, actions);
       if (currentDb?.description) {
         header.createDiv({
@@ -289,14 +288,14 @@ export class ToolbarRenderer {
   private renderComputedSyncButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.syncComputedFields) return;
     const btn = this.createIconButton(toolbar, "", t("viewConfig.saveComputedResults"));
-    appendSvg(btn, ToolbarRenderer.ICONS.refresh_fx);
+    this.appendToolbarSvg(btn, ToolbarRenderer.ICONS.refresh_fx);
     btn.onclick = () => actions.syncComputedFields?.();
   }
 
   private renderDatabaseRefreshButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.refreshDatabase) return;
     const btn = this.createIconButton(toolbar, "", t("toolbar.refreshDatabase"), "db-database-refresh-button");
-    setIcon(btn, "refresh-cw");
+    this.setToolbarIcon(btn, "refresh-cw");
     btn.onclick = () => actions.refreshDatabase?.();
     this.updateDatabaseRefreshButton(btn, actions);
   }
@@ -307,13 +306,11 @@ export class ToolbarRenderer {
     const unknown = state.pendingRefreshUnknown === true;
     const refreshing = state.isRefreshingDatabase === true;
     button.toggleClass("is-refreshing", refreshing);
-    button.querySelector(".db-database-refresh-badge")?.remove();
-    if (pending > 0 || unknown) {
-      button.createSpan({
-        cls: "db-database-refresh-badge",
-        text: pending > 99 ? "99+" : pending > 0 ? String(pending) : "!",
-      });
-    }
+    replaceToolbarBadge(
+      button,
+      "db-database-refresh-badge",
+      pending > 99 ? "99+" : pending > 0 ? String(pending) : unknown ? "!" : undefined,
+    );
     const label = refreshing
       ? t("toolbar.refreshingDatabase")
       : pending > 0
@@ -1011,12 +1008,19 @@ export class ToolbarRenderer {
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    const initialHeight = Math.ceil(el.getBoundingClientRect().height);
+    const initialRect = el.getBoundingClientRect();
+    const initialHeight = Math.ceil(initialRect.height);
     const input = multiline ? window.activeDocument.createElement("textarea") : window.activeDocument.createElement("input");
     input.className = multiline ? "db-heading-edit db-heading-edit-description" : "db-heading-edit";
     if (!multiline) (input as HTMLInputElement).type = "text";
     if (multiline && input instanceof HTMLTextAreaElement) input.rows = 1;
     input.value = value;
+    if (!multiline) {
+      input.addClass("db-heading-edit-title");
+      input.setAttribute("aria-label", t("toolbar.renameDatabase"));
+      input.style.width = `${Math.max(120, Math.ceil(initialRect.width))}px`;
+      input.style.height = `${initialHeight}px`;
+    }
     el.replaceWith(input);
     if (multiline && input instanceof HTMLTextAreaElement) {
       this.syncDatabaseDescriptionEditHeight(input, initialHeight);
@@ -1030,15 +1034,21 @@ export class ToolbarRenderer {
       if (done) return;
       done = true;
       const next = input.value.trim();
-      if (commit) save(next);
-      else save(value);
+      // 先恢复原节点：取消或无变化时无需保存，也不依赖保存回调重建工具栏。
+      input.replaceWith(el);
+      if (commit && next !== value.trim()) save(next);
     };
     input.onblur = () => finish(true);
     input.onkeydown = (keyboardEvent) => {
       if (isImeComposing(keyboardEvent)) return;
-      if (keyboardEvent.key === "Escape") finish(false);
+      if (keyboardEvent.key === "Escape") {
+        keyboardEvent.preventDefault();
+        keyboardEvent.stopPropagation();
+        finish(false);
+      }
       if (keyboardEvent.key === "Enter" && (!multiline || keyboardEvent.metaKey || keyboardEvent.ctrlKey)) {
         keyboardEvent.preventDefault();
+        keyboardEvent.stopPropagation();
         finish(true);
       }
     };
@@ -1076,7 +1086,7 @@ export class ToolbarRenderer {
     const current = config?.displayWidth || "default";
     const next = current === "wide" ? "default" : "wide";
     const btn = this.createIconButton(toolbar, "", current === "wide" ? t("toolbar.defaultWidth") : t("toolbar.wide"), "db-width-toggle-btn");
-    appendSvg(btn, current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut);
+    this.appendToolbarSvg(btn, current === "wide" ? ToolbarRenderer.ICONS.widthIn : ToolbarRenderer.ICONS.widthOut);
     btn.addClass(current === "wide" ? "is-active" : "is-inactive");
     btn.onclick = () => actions.setDisplayWidth(next);
   }
@@ -1087,7 +1097,7 @@ export class ToolbarRenderer {
       cls: "db-search-button",
       attr: { type: "button" },
     });
-    setIcon(button, "search");
+    setIcon(button.createSpan({ cls: "db-toolbar-button-icon db-search-button-icon" }), "search");
     setTooltip(button, t("common.search"), { delay: 100 });
     const searchInput = wrap.createEl("input", {
       cls: "db-search-input",
@@ -1141,7 +1151,7 @@ export class ToolbarRenderer {
     const currentViewType = config?.viewType || "table";
     const groupValue = config ? this.resolveGroupValue(config, currentViewType, state) : state.groupByField;
     const btn = this.createIconButton(toolbar, "", t("toolbar.group"), "db-group-btn");
-    appendSvg(btn, ToolbarRenderer.ICONS.group);
+    this.appendToolbarSvg(btn, ToolbarRenderer.ICONS.group);
     if (groupValue) btn.addClass("is-active");
     btn.onclick = (event) => {
       event.preventDefault();
@@ -1569,7 +1579,7 @@ export class ToolbarRenderer {
 
   private renderViewConfigButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     const btn = this.createIconButton(toolbar, "", t("toolbar.settings"), "db-view-config-btn");
-    appendSvg(btn, ToolbarRenderer.ICONS.settings);
+    this.appendToolbarSvg(btn, ToolbarRenderer.ICONS.settings);
     btn.onclick = () => {
       this.closeDatabasePopover();
       this.closeGroupPopover();
@@ -1618,7 +1628,7 @@ export class ToolbarRenderer {
   private renderExportButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.exportData && !actions.copyViewCode && !actions.exportCsvMarkdownZip) return;
     const btn = this.createIconButton(toolbar, "", t("toolbar.copyFormats"), "db-export-btn");
-    appendSvg(btn, ToolbarRenderer.ICONS.copy);
+    this.appendToolbarSvg(btn, ToolbarRenderer.ICONS.copy);
     btn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1692,28 +1702,12 @@ export class ToolbarRenderer {
 
   private renderFullViewButton(toolbar: HTMLElement, actions: ToolbarActions): void {
     if (!actions.openFullView) return;
-    const fullBtn = toolbar.createEl("button", {
-      cls: "db-toolbar-icon-button db-full-view-btn",
-      attr: {},
-    });
-    setIcon(fullBtn, "maximize-2");
-    setTooltip(fullBtn, t("toolbar.openFullView"), { delay: 100 });
+    const fullBtn = this.createIconButton(toolbar, "maximize-2", t("toolbar.openFullView"), "db-full-view-btn");
     fullBtn.onclick = () => actions.openFullView?.();
   }
 
-  private renderHeaderChromeButton(toolbar: HTMLElement, actions: ToolbarActions, hidden: boolean): void {
-    const label = hidden ? t("toolbar.showEmbedHeader") : t("toolbar.hideEmbedHeader");
-    const btn = this.createIconButton(toolbar, hidden ? "chevron-down" : "chevron-up", label, "db-embed-header-inline-toggle");
-    btn.onclick = () => actions.toggleHeaderChrome?.(!hidden);
-  }
-
   private renderDatabaseFileButton(toolbar: HTMLElement, actions: ToolbarActions): void {
-    const btn = toolbar.createEl("button", {
-      cls: "db-toolbar-icon-button",
-      attr: {},
-    });
-    setIcon(btn, "file-output");
-    setTooltip(btn, t("toolbar.openDatabaseFile"), { delay: 100 });
+    const btn = this.createIconButton(toolbar, "file-output", t("toolbar.openDatabaseFile"));
     btn.onclick = () => actions.openDatabaseFile?.();
   }
 
@@ -1722,9 +1716,23 @@ export class ToolbarRenderer {
       cls: `db-toolbar-icon-button ${extraClass}`.trim(),
       attr: {},
     });
-    if (icon) setIcon(btn, icon);
+    const iconHost = btn.createSpan({ cls: "db-toolbar-button-icon" });
+    if (icon) setIcon(iconHost, icon);
     setTooltip(btn, label, { delay: 100 });
     return btn;
+  }
+
+  private getToolbarIconHost(button: HTMLElement): HTMLElement {
+    return button.querySelector<HTMLElement>(".db-toolbar-button-icon")
+      || button.createSpan({ cls: "db-toolbar-button-icon" });
+  }
+
+  private setToolbarIcon(button: HTMLElement, icon: string): void {
+    setIcon(this.getToolbarIconHost(button), icon);
+  }
+
+  private appendToolbarSvg(button: HTMLElement, svg: string): void {
+    appendSvg(this.getToolbarIconHost(button), svg);
   }
 
   private appendCompositeIcon(
@@ -1733,7 +1741,7 @@ export class ToolbarRenderer {
     badgeSvg: string,
     extraClass = ""
   ): void {
-    const wrap = button.createSpan({
+    const wrap = this.getToolbarIconHost(button).createSpan({
       cls: `db-composite-icon ${extraClass}`.trim(),
     });
 
@@ -1751,8 +1759,7 @@ export class ToolbarRenderer {
   }
 
   private setBadge(button: HTMLElement, count: number): void {
-    if (count <= 0) return;
-    button.createSpan({ cls: "db-toolbar-badge", text: String(count) });
+    replaceToolbarBadge(button, "db-toolbar-badge", count > 0 ? String(count) : undefined);
   }
 
   private markLatestMenu(className: string, icons?: string[]): void {

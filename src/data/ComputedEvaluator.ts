@@ -1,5 +1,5 @@
 import { App, TFile } from "obsidian";
-import { evaluateBaseComputedFields } from "./BaseExpression";
+import { evaluateBaseComputedFields, scalarizeBaseExpressionValue } from "./BaseExpression";
 import { getFileFieldValue } from "./FileFields";
 import { ComputedFieldEngine } from "./ComputedField";
 import { ColumnDef, ComputedFieldDef } from "./types";
@@ -62,7 +62,7 @@ export function evaluateComputedFields(
           columns,
           computedValues: result,
         }, result);
-        result[def.key] = evaluated[def.key];
+        result[def.key] = scalarizeBaseExpressionValue(evaluated[def.key]);
       } else {
         const evaluated = engine.evaluateSingleDetailed(def.expression, enrichedFrontmatter, result);
         if (evaluated.error) {

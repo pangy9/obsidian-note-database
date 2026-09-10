@@ -94,7 +94,6 @@ export class SortPanelRenderer {
     const row = panel.createDiv({ cls: "db-panel-row db-sort-rule-row" });
     if (compact) row.addClass("db-active-rule-editor-row");
     if (!compact) {
-      row.draggable = true;
       row.ondragstart = (event) => {
         if (this.shouldIgnoreRuleDrag(event)) {
           event.preventDefault();
@@ -111,6 +110,7 @@ export class SortPanelRenderer {
       row.ondragend = () => this.finishDrag();
 
       const drag = row.createSpan({ cls: "db-panel-drag", text: "⋮⋮" });
+      drag.draggable = true;
       drag.title = t("panel.dragToSort");
 
       const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls" });
@@ -242,7 +242,6 @@ export class SortPanelRenderer {
   }
 
   private shouldIgnoreRuleDrag(event: DragEvent): boolean {
-    return isHTMLElement(event.target)
-      && event.target.closest("input, select, textarea, button, .db-dropdown-field, .db-mobile-reorder-controls") != null;
+    return !isHTMLElement(event.target) || event.target.closest(".db-panel-drag") == null;
   }
 }

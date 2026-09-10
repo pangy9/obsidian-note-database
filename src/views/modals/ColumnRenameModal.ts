@@ -1,4 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { isFileFieldKey } from "../../data/FileFields";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
@@ -25,6 +26,7 @@ export class ColumnRenameModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h3", { text: t("modal.editProperty", { label: this.col.label }) });
 
+    makeModalDraggable(this);
     const keyLabel = contentEl.createEl("label", {
       text: t("modal.propertyKey"),
       attr: { style: "display: block; margin-top: 8px; font-size: 12px; font-weight: 600;" },

@@ -1,4 +1,5 @@
 import { Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 import { CsvMarkdownExportOptions } from "../../data/CsvMarkdownZipExport";
 
@@ -17,6 +18,7 @@ export class CsvMarkdownExportModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: t("csvMarkdownExport.title") });
+    makeModalDraggable(this);
     this.contentEl.createDiv({ cls: "db-panel-empty", text: t("csvMarkdownExport.desc") });
 
     this.renderCheckboxOption(t("csvMarkdownExport.includeFrontmatter"), this.includeFrontmatter, (value) => {

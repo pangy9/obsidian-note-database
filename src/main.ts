@@ -1,4 +1,5 @@
 import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { makeModalDraggable } from "./views/modals/ModalDrag";
 import { DataSource } from "./data/DataSource";
 import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
@@ -16,6 +17,7 @@ import {
 } from "./data/ColumnTypes";
 import { EmbeddedDatabaseEntry, EmbeddedDatabaseRenderer } from "./views/EmbeddedDatabaseRenderer";
 import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImportConfirmModal";
+import { BaseImportSelectionError, resolveBaseImportSelection, resolveBasePropertyDisplayName } from "./data/BaseImportView";
 import {
   confirmNewDatabasePropertyTypeConflicts,
   MutablePropertyTypeConflictEntry,
@@ -30,6 +32,7 @@ import { linkDatabaseSchemas } from "./data/ColumnConfig";
 import { safeString, isRecord } from "./data/SafeString";
 import { isElement } from "./views/DomGuards";
 import { NOTE_DATABASE_HOVER_LINK_SOURCE } from "./views/HoverLinkPreview";
+import { DatabaseComputedSyncService } from "./data/DatabaseComputedSyncService";
 
 /** Parsed view data from a .base file */
 interface BaseFileViewData {
@@ -58,6 +61,7 @@ interface BaseFileViewData {
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
   dataSource!: DataSource;
+  private computedSyncService?: DatabaseComputedSyncService;
   private readonly instanceId = generateId();
   private getActiveDbView(): DatabaseView | null {
     const leaf = this.app.workspace.getLeavesOfType(DATABASE_VIEW_TYPE)[0];
@@ -211,6 +215,7 @@ export default class NoteDatabasePlugin extends Plugin {
     // Initialize data source
     this.dataSource = new DataSource(this.app);
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
+    this.computedSyncService = new DatabaseComputedSyncService(this.app, this.dataSource);
     this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleVaultPropertyCacheRefresh()));
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
@@ -251,6 +256,7 @@ export default class NoteDatabasePlugin extends Plugin {
       this.handleDatabaseFileExplorerClick(event);
     }, { capture: true });
     this.app.workspace.onLayoutReady(() => {
+      this.computedSyncService?.requestAll();
       void this.maybeShowChangelog();
       if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) {
         this.markDatabaseFilesInExplorer();
@@ -390,6 +396,7 @@ export default class NoteDatabasePlugin extends Plugin {
     await this.saveSettings();
     const modal = new Modal(this.app);
     modal.titleEl.setText(`Note Database ${this.manifest.version}`);
+    makeModalDraggable(modal, modal.titleEl);
     modal.contentEl.addClass("note-database-changelog");
     const component = new Component();
     modal.onClose = () => component.unload();
@@ -802,14 +809,75 @@ export default class NoteDatabasePlugin extends Plugin {
       new Notice(t("notice.importCancelled"));
       return;
     }
+    const selectedKeys = new Set(confirmed.map((col) => col.key));
+    let resolvedColumns: BaseImportColumn[];
+    try {
+      resolvedColumns = resolveBaseImportSelection(confirmed);
+    } catch (error) {
+      if (error instanceof BaseImportSelectionError) {
+        const key = error.code === "unsupported-formula-type"
+          ? "errors.baseImportUnsupportedFormulaType"
+          : error.code === "virtual-property"
+            ? "errors.baseImportVirtualProperty"
+            : "errors.baseImportDuplicateProperty";
+        new Notice(t(key, { property: error.property, type: error.propertyType || "" }));
+      } else {
+        new Notice(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+    config.schema.columns = config.schema.columns.filter((col) => col.key === "file.name" || selectedKeys.has(col.key));
+    for (const view of config.views) {
+      view.schema = config.schema;
+      view.columnOrder = view.columnOrder?.filter((key) => key === "file.name" || selectedKeys.has(key));
+      view.hiddenColumns = view.hiddenColumns?.filter((key) => key.startsWith("file.") || selectedKeys.has(key));
+      view.summaryRules = view.summaryRules?.filter((rule) => rule.field.startsWith("file.") || selectedKeys.has(rule.field));
+      if (view.columnWidths) view.columnWidths = Object.fromEntries(Object.entries(view.columnWidths).filter(([key]) => key === "file.name" || selectedKeys.has(key)));
+      view.sortRules = view.sortRules?.filter((rule) => rule.field.startsWith("file.") || selectedKeys.has(rule.field));
+      if (view.sortColumn && !view.sortColumn.startsWith("file.") && !selectedKeys.has(view.sortColumn)) {
+        view.sortColumn = undefined;
+        view.sortDirection = undefined;
+      }
+      if (view.groupByField && !view.groupByField.startsWith("file.") && !selectedKeys.has(view.groupByField)) {
+        view.groupByField = undefined;
+        view.groupOrders = undefined;
+      }
+      if (view.galleryImageField && !view.galleryImageField.startsWith("file.") && !selectedKeys.has(view.galleryImageField)) view.galleryImageField = undefined;
+    }
     // Apply user-confirmed types back to schema and populate options if needed
     const STATUS_COLORS = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
-    for (const col of confirmed) {
-      const schemaCol = config.schema.columns.find((c) => c.key === col.key);
+    for (const [index, original] of confirmed.entries()) {
+      const col = resolvedColumns[index];
+      const schemaCol = config.schema.columns.find((c) => c.key === original.key);
       if (!schemaCol) continue;
       const originalType = schemaCol.type;
       schemaCol.label = col.label || col.key;
+      if (schemaCol.type === "computed" && col.type === "computed") {
+        const computed = config.schema.computedFields?.find((field) => field.key === schemaCol.computedKey);
+        if (computed) {
+          computed.label = schemaCol.label;
+        }
+        continue;
+      }
       schemaCol.type = col.type;
+      schemaCol.key = col.key;
+      delete schemaCol.computedKey;
+      if (original.key !== col.key) {
+        // Remap display references only. Base formula/filter dependencies retain their semantics.
+        for (const view of config.views) {
+          view.columnOrder = view.columnOrder?.map((key) => key === original.key ? col.key : key);
+          view.hiddenColumns = view.hiddenColumns?.map((key) => key === original.key ? col.key : key);
+          if (view.columnWidths && original.key in view.columnWidths) {
+            view.columnWidths[col.key] = view.columnWidths[original.key]!;
+            delete view.columnWidths[original.key];
+          }
+          view.sortRules?.forEach((rule) => { if (rule.field === original.key) rule.field = col.key; });
+          view.summaryRules?.forEach((rule) => { if (rule.field === original.key) rule.field = col.key; });
+          if (view.sortColumn === original.key) view.sortColumn = col.key;
+          if (view.groupByField === original.key) view.groupByField = col.key;
+          if (view.galleryImageField === original.key) view.galleryImageField = col.key;
+        }
+      }
       // If user changed to an option-based type, collect unique values as options
       if ((col.type === "status" || col.type === "select" || col.type === "multi-select") && originalType !== col.type) {
         const uniqueValues = collectUniqueStringValues(this.app, col.key, config.sourceFolder, config.sourceRules, config.sourceLogic, config.sourceRuleTree);
@@ -839,12 +907,6 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   private async convertBaseFromCommand(): Promise<void> {
-    const activeFile = this.app.workspace.getActiveFile();
-    if (activeFile?.extension === "base") {
-      await this.convertBaseToDatabase(activeFile);
-      return;
-    }
-
     const baseFiles = this.app.vault.getFiles()
       .filter((file) => file.extension === "base")
       .sort((a, b) => a.path.localeCompare(b.path));
@@ -1378,7 +1440,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const createFolder = this.getBaseCreateFolder(sourceFolder, sourceRules, sourceRuleTree);
     const baseComputedFields: ComputedFieldDef[] = Object.entries(parsed.formulas).map(([key, expression]) => ({
       key,
-      label: this.getBasePropertyDisplayName(parsed.properties, `formula.${key}`, key),
+      label: this.getBasePropertyDisplayName(parsed.properties, `formula.${key}`, key).trim() || key,
       expression,
       type: "text",
       expressionSyntax: "base" as const,
@@ -1451,7 +1513,9 @@ export default class NoteDatabasePlugin extends Plugin {
       columns: Array.from(allColumnKeys.entries()).map(([key, label]) => {
         if (key.startsWith("formula.")) {
           const computedKey = key.slice("formula.".length);
-          const col: ColumnDef = { key, label, type: "computed", computedKey };
+          const computed = baseComputedFields.find((field) => field.key === computedKey);
+          const col: ColumnDef = { key, label: computed?.label || label || computedKey, type: "computed", computedKey };
+          if (computed) inferredColumns.push({ ...col, fileCount: 0 });
           return col;
         }
         const type = isFileFieldKey(key) ? getFileFieldFixedType(key) : inferColumnType(key, sampleValues.get(key) || []);
@@ -1962,14 +2026,9 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   private getBasePropertyDisplayName(properties: Record<string, unknown>, rawKey: string, fallback: string): string {
-    const key = this.cleanBaseKey(rawKey);
-    const candidates = [rawKey, key];
-    if (key.startsWith("formula.")) candidates.push(`formula.${key.slice("formula.".length)}`);
-    for (const candidate of candidates) {
-      const prop = properties?.[candidate];
-      if (isRecord(prop) && prop["displayName"] != null) return safeString(prop["displayName"]);
-    }
-    return fallback;
+    // properties 段的键形制随 Obsidian 版本不同（note.xxx / properties.xxx / 裸键），
+    // 纯函数按各前缀变体依次尝试，见 resolveBasePropertyDisplayName。
+    return resolveBasePropertyDisplayName(properties, rawKey, this.cleanBaseKey(rawKey), fallback);
   }
 
   private getBaseGlobalFilters(source: string): { sourceRuleTree?: SourceRuleNode; supported: boolean } {
@@ -2678,6 +2737,7 @@ export default class NoteDatabasePlugin extends Plugin {
     const databases = this.getLegacySettingsDatabases();
     if (databases.length === 0) return;
 
+    const failed: typeof databases = [];
     let migrated = 0;
     for (const db of databases) {
       try {
@@ -2699,11 +2759,15 @@ export default class NoteDatabasePlugin extends Plugin {
         migrated++;
       } catch (err) {
         console.error(`Note Database: failed to migrate database "${db.name}":`, err);
+        failed.push(db);
       }
     }
 
-    this.setLegacySettingsDatabases([]);
-    this.settings.databasesMigrated = true;
+    // Only clear successfully migrated databases; keep failed ones so the user
+    // can retry after fixing the underlying issue (e.g. folder permissions).
+    this.setLegacySettingsDatabases(failed);
+    // Only mark migration complete when every database was migrated.
+    this.settings.databasesMigrated = failed.length === 0;
     delete (this.settings as unknown as Record<string, unknown>)["dashboardInitialSource"];
     await this.saveSettings();
 
@@ -2740,6 +2804,8 @@ export default class NoteDatabasePlugin extends Plugin {
       window.clearTimeout(this.pendingDatabaseFileOpen);
       this.pendingDatabaseFileOpen = null;
     }
+    this.computedSyncService?.destroy();
+    this.computedSyncService = undefined;
     this.dataSource.destroy();
   }
 }
@@ -2798,6 +2864,7 @@ class CsvMarkdownImportModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: t("csvMarkdownImport.title") });
+    makeModalDraggable(this);
     this.contentEl.createDiv({ cls: "db-panel-empty", text: t("csvMarkdownImport.desc") });
 
     const csvRow = this.contentEl.createDiv({ cls: "db-panel-row db-csv-markdown-import-row" });

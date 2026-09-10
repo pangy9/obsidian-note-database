@@ -1,9 +1,19 @@
-import { ColumnDef, DatabaseConfig, RowData, SourceRule, ViewConfig } from "./types";
+import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "./types";
 import { DatabaseViewState } from "../views/ViewStateStore";
 import { isOptionColumnType } from "./ColumnTypes";
 import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
-import { FORMULA_BUILTIN_CONSTANTS, scanFormulaSegments } from "./FormulaTokenizer";
+import {
+  updateColumnKeyReferences as updateColumnKeyReferencesCore,
+  updateComputedFormulaReferences,
+  updateSourceRuleKeyReferences,
+  updateSummaryFormulaReferences,
+} from "./ColumnKeyReferences";
 import { updateSourceRuleTreeKeyReferences } from "./SourceRules";
+
+// 引用更新纯逻辑已抽到 obsidian-free 的 ColumnKeyReferences（便于 R2-CO-1 plan builder
+// 单测）；这里仅 re-export 保持既有调用方不变，并为 updateColumnKeyReferences 注入
+// 真实的 sourceRuleTree 更新器（所在 SourceRules.ts 耦合 obsidian，不由纯模块直接 import）。
+export { updateComputedFormulaReferences, updateSourceRuleKeyReferences, updateSummaryFormulaReferences };
 
 /**
  * After JSON deserialization, db.schema and each view.schema can become
@@ -121,220 +131,7 @@ export function updateColumnKeyReferences(
   oldLabel?: string,
   newLabel?: string
 ): boolean {
-  if (oldKey === newKey) {
-    return updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel);
-  }
-  let changed = false;
-  const replaceValue = (value: string | undefined): string | undefined => {
-    if (value !== oldKey) return value;
-    changed = true;
-    return newKey;
-  };
-  const replaceKeys = (keys: string[] | undefined): string[] | undefined => {
-    if (!keys?.includes(oldKey)) return keys;
-    changed = true;
-    return keys.map((key) => key === oldKey ? newKey : key);
-  };
-  config.columnOrder = replaceKeys(config.columnOrder);
-  config.titleField = replaceValue(config.titleField);
-  config.recordIconField = replaceValue(config.recordIconField);
-  config.galleryImageField = replaceValue(config.galleryImageField);
-  config.boardImageField = replaceValue(config.boardImageField);
-  config.boardGroupField = replaceValue(config.boardGroupField);
-  config.boardSubgroupField = replaceValue(config.boardSubgroupField);
-  config.chartGroupField = replaceValue(config.chartGroupField);
-  config.chartStackField = replaceValue(config.chartStackField);
-  config.chartSeriesField = replaceValue(config.chartSeriesField);
-  config.chartValueField = replaceValue(config.chartValueField);
-  config.chartSecondaryValueField = replaceValue(config.chartSecondaryValueField);
-  config.calendarStartDateField = replaceValue(config.calendarStartDateField);
-  config.calendarEndDateField = replaceValue(config.calendarEndDateField);
-  config.calendarTitleField = replaceValue(config.calendarTitleField);
-  config.calendarColorField = replaceValue(config.calendarColorField);
-  config.timelineStartDateField = replaceValue(config.timelineStartDateField);
-  config.timelineEndDateField = replaceValue(config.timelineEndDateField);
-  config.timelineGroupField = replaceValue(config.timelineGroupField);
-  config.timelineTitleField = replaceValue(config.timelineTitleField);
-  config.timelineColorField = replaceValue(config.timelineColorField);
-  config.groupByField = replaceValue(config.groupByField);
-  config.sortColumn = replaceValue(config.sortColumn);
-  config.sortColumnOrder = replaceValue(config.sortColumnOrder);
-  changed = updateSourceRuleKeyReferences(config.sourceRules, oldKey, newKey) || changed;
-  changed = updateSourceRuleTreeKeyReferences(config.sourceRuleTree, oldKey, newKey) || changed;
-  for (const rule of config.filters || []) {
-    if (rule.field === oldKey) {
-      rule.field = newKey;
-      changed = true;
-    }
-  }
-  for (const rule of config.sortRules || []) {
-    if (rule.field === oldKey) {
-      rule.field = newKey;
-      changed = true;
-    }
-  }
-
-  config.hiddenColumns = replaceKeys(config.hiddenColumns);
-  if (config.groupOrders?.[oldKey]) {
-    config.groupOrders[newKey] = config.groupOrders[oldKey];
-    delete config.groupOrders[oldKey];
-    changed = true;
-  }
-  if (config.showEmptyGroups && oldKey in config.showEmptyGroups) {
-    config.showEmptyGroups[newKey] = config.showEmptyGroups[oldKey];
-    delete config.showEmptyGroups[oldKey];
-    changed = true;
-  }
-  if (config.collapsedGroups?.[oldKey]) {
-    config.collapsedGroups[newKey] = config.collapsedGroups[oldKey];
-    delete config.collapsedGroups[oldKey];
-    changed = true;
-  }
-  if (config.dateGroupModes && oldKey in config.dateGroupModes) {
-    config.dateGroupModes[newKey] = config.dateGroupModes[oldKey];
-    delete config.dateGroupModes[oldKey];
-    changed = true;
-  }
-  if (config.expandedGroupRows && oldKey in config.expandedGroupRows) {
-    config.expandedGroupRows[newKey] = config.expandedGroupRows[oldKey];
-    delete config.expandedGroupRows[oldKey];
-    changed = true;
-  }
-  if (config.boardCardOrders?.[oldKey]) {
-    config.boardCardOrders[newKey] = config.boardCardOrders[oldKey];
-    delete config.boardCardOrders[oldKey];
-    changed = true;
-  }
-  for (const rule of config.summaryRules || []) {
-    if (rule.field === oldKey) {
-      rule.field = newKey;
-      changed = true;
-    }
-  }
-  for (const viewState of Object.values(config.viewStates || {})) {
-    if (!viewState) continue;
-    viewState.sortColumn = replaceValue(viewState.sortColumn);
-    viewState.groupByField = replaceValue(viewState.groupByField);
-    viewState.hiddenColumns = replaceKeys(viewState.hiddenColumns);
-    for (const rule of viewState.sortRules || []) {
-      if (rule.field === oldKey) {
-        rule.field = newKey;
-        changed = true;
-      }
-    }
-    for (const rule of viewState.filters || []) {
-      if (rule.field === oldKey) {
-        rule.field = newKey;
-        changed = true;
-      }
-    }
-  }
-  if (state) {
-    const hiddenChanged = state.hiddenColumns.delete(oldKey);
-    if (hiddenChanged) {
-      state.hiddenColumns.add(newKey);
-      changed = true;
-    }
-    state.groupByField = replaceValue(state.groupByField) || "";
-    state.sortColumn = replaceValue(state.sortColumn);
-    for (const rule of state.sortRules) {
-      if (rule.field === oldKey) {
-        rule.field = newKey;
-        changed = true;
-      }
-    }
-    for (const rule of state.filters) {
-      if (rule.field === oldKey) {
-        rule.field = newKey;
-        changed = true;
-      }
-    }
-  }
-  return updateComputedFormulaReferences(config, oldKey, newKey, oldLabel, newLabel) || changed;
-}
-
-export function updateSourceRuleKeyReferences(
-  rules: SourceRule[] | undefined,
-  oldKey: string,
-  newKey: string
-): boolean {
-  let changed = false;
-  for (const rule of rules || []) {
-    if (rule.field !== oldKey) continue;
-    rule.field = newKey;
-    changed = true;
-  }
-  return changed;
-}
-
-export function updateComputedFormulaReferences(
-  config: ViewConfig,
-  oldKey: string,
-  newKey: string,
-  oldLabel?: string,
-  _newLabel?: string
-): boolean {
-  const names = new Set([oldKey, oldLabel].filter((value): value is string => !!value && value !== newKey));
-  if (names.size === 0) return false;
-  let changed = false;
-  for (const def of config.schema.computedFields || []) {
-    const next = replaceFormulaFieldReferences(def.expression || "", names, newKey);
-    if (next !== def.expression) {
-      def.expression = next;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-export function updateSummaryFormulaReferences(
-  database: Pick<DatabaseConfig, "summaryFormulas">,
-  oldKey: string,
-  newKey: string,
-  oldLabel?: string,
-  _newLabel?: string
-): boolean {
-  const names = new Set([oldKey, oldLabel].filter((value): value is string => !!value && value !== newKey));
-  if (names.size === 0 || !database.summaryFormulas) return false;
-  let changed = false;
-  for (const [summaryName, expression] of Object.entries(database.summaryFormulas)) {
-    const next = replaceFormulaFieldReferences(expression || "", names, newKey);
-    if (next !== expression) {
-      database.summaryFormulas[summaryName] = next;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-export function replaceFormulaFieldReferences(expression: string, names: Set<string>, newKey: string): string {
-  // 全部走 scanFormulaSegments（跳过字符串/注释/正则、递归模板、member-ref 由扫描器产生），
-  // 不再对原始表达式跑正则。修复 GPT 复核：① 字符串内引用不改写；② [多词标签] 不破坏；
-  // ③ 内置/语言字面量不随同名列改写；④ 字符串内 note.price 不被正则误改。
-  const segments = scanFormulaSegments(expression);
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
-  for (const seg of segments) {
-    if (seg.kind === "bracket-ref") {
-      if (names.has(seg.name)) replacements.push({ start: seg.start, end: seg.end, text: `[${newKey}]` });
-    } else if (seg.kind === "field-call") {
-      if (names.has(seg.name)) replacements.push({ start: seg.start, end: seg.end, text: `field(${seg.quote}${newKey}${seg.quote})` });
-    } else if (seg.kind === "member-ref") {
-      // formula.total 的重命名集合用完整键 formula.total，需匹配 object.name；其余（note.x/properties.x）按 name。
-      const fullKey = seg.object === "formula" ? `formula.${seg.name}` : seg.name;
-      if (seg.object === "formula" ? names.has(fullKey) : names.has(seg.name)) {
-        const text = seg.object === "formula"
-          ? `formula[${JSON.stringify(newKey.startsWith("formula.") ? newKey.slice("formula.".length) : newKey)}]`
-          : `${seg.object}[${JSON.stringify(newKey)}]`;
-        replacements.push({ start: seg.start, end: seg.end, text });
-      }
-    } else if (seg.kind === "identifier" && !seg.isCall && !seg.isMember && !FORMULA_BUILTIN_CONSTANTS.has(seg.text) && names.has(seg.text)) {
-      const replacement = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(newKey) ? newKey : `note[${JSON.stringify(newKey)}]`;
-      replacements.push({ start: seg.start, end: seg.end, text: replacement });
-    }
-  }
-  let result = expression;
-  for (let i = replacements.length - 1; i >= 0; i -= 1) {
-    result = result.slice(0, replacements[i].start) + replacements[i].text + result.slice(replacements[i].end);
-  }
-  return result;
+  return updateColumnKeyReferencesCore(config, state, oldKey, newKey, {
+    updateSourceRuleTree: updateSourceRuleTreeKeyReferences as (tree: unknown, oldKey: string, newKey: string) => boolean,
+  }, oldLabel, newLabel);
 }

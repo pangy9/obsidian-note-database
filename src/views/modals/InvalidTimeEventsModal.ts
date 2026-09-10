@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import {
   getInvalidTimeEventQuickFix,
   getTimelineDateTimeSpanMinutes,
@@ -60,6 +61,7 @@ export class InvalidTimeEventsModal extends Modal {
     this.modalEl.addClass("invalid-events-modal-host");
     contentEl.addClass("note-database-modal", "db-invalid-events-modal");
     contentEl.createEl("h3", { text: t("timeline.invalidEventsTitleWithCount", { count: this.options.length }) });
+    makeModalDraggable(this);
     contentEl.createDiv({ cls: "db-modal-help", text: t("timeline.invalidEventsDesc") });
 
     const grid = contentEl.createDiv({ cls: "db-invalid-event-grid" });

@@ -35,6 +35,8 @@ export interface ListGroup {
 }
 
 export interface ListRendererActions {
+  /** U1-REL-1：relation 列状态判定所需目标库条目集合（缺省仅做 missing 检测）。 */
+  getRelationScopePaths?(col: ColumnDef): ReadonlySet<string> | undefined;
   openRow(row: RowData): void;
   createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   isRowSelected(row: RowData): boolean;
@@ -515,7 +517,7 @@ export class ListRenderer {
       for (const entry of values) this.renderBadge(badges, col, entry);
       return;
     }
-    if (col.type === "relation" && renderRelationValue(valueEl, this.app, row, value, true)) {
+    if (col.type === "relation" && renderRelationValue(valueEl, this.app, row, value, true, { scopePaths: this.actions.getRelationScopePaths?.(col) })) {
       return;
     }
     if (displayType === "date" || displayType === "datetime") {

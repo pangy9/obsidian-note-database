@@ -11,6 +11,174 @@
 
 import { safeString } from "./SafeString";
 
+// Property names that must never be accessed at runtime, regardless of how the
+// key string is produced (literal, concatenation, fromCharCode, Unicode escape,
+// template interpolation, array-to-string coercion).  The source-level token
+// blacklist in validateFormulaSecurity / validateBaseExpression cannot catch keys
+// that are assembled at runtime; this runtime guard is the true security boundary.
+//
+// Beyond constructor/prototype/__proto__, we also block legacy accessor methods
+// inherited from Object.prototype (__defineGetter__ etc.) that can mutate any
+// extensible object including real globals like Math and JSON.
+const FORBIDDEN_MEMBER_KEYS = new Set([
+	"constructor", "__proto__", "prototype",
+	"__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__",
+]);
+
+function assertSafeMemberKey(key: unknown): void {
+	// Coerce to string — JS property access converts arrays/symbols to strings
+	// (e.g. obj[["constructor"]] → obj["constructor"]), so we must check the
+	// coerced form, not just typeof === "string".
+	const strKey = String(key);
+	if (FORBIDDEN_MEMBER_KEYS.has(strKey)) {
+		throw new TypeError(`Access to "${strKey}" is not allowed in formulas`);
+	}
+}
+
+/**
+ * Create a null-prototype, frozen object facade for built-ins that are NOT
+ * callable (Math, JSON).  No prototype → no constructor, no __defineGetter__.
+ */
+function createFrozenFacade(original: Record<string, unknown>, safeKeys: string[]): Record<string, unknown> {
+	const facade: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+	for (const key of safeKeys) {
+		const value = original[key];
+		if (value !== undefined) facade[key] = value;
+	}
+	return Object.freeze(facade);
+}
+
+/**
+ * Create a callable, frozen wrapper for built-in constructor functions
+ * (Number, String, Boolean, Array, Date, Object).  The wrapper:
+ * - Is a NEW function (not the real constructor) that delegates calls.
+ * - Has safe static properties attached from a whitelist.
+ * - Is frozen so no properties can be added/removed.
+ * - assertSafeMemberKey blocks constructor/prototype/__proto__ access at AST level.
+ */
+function createCallableWrapper(
+	original: (...args: unknown[]) => unknown,
+	props: Record<string, unknown>,
+): (...args: unknown[]) => unknown {
+	const wrapper = function (this: unknown, ...args: unknown[]): unknown {
+		return original(...args);
+	};
+	Object.assign(wrapper, props);
+	return Object.freeze(wrapper);
+}
+
+// ─── Non-callable facades (Math, JSON) ───────────────────────
+
+const SAFE_MATH = createFrozenFacade(Math as unknown as Record<string, unknown>, [
+	"abs","acos","acosh","asin","asinh","atan","atan2","atanh","cbrt","ceil",
+	"clz32","cos","cosh","exp","expm1","floor","fround","hypot","imul","log",
+	"log10","log1p","log2","max","min","pow","random","round","sign","sin",
+	"sinh","sqrt","tan","tanh","trunc",
+	"E","LN10","LN2","LOG10E","LOG2E","PI","SQRT1_2","SQRT2",
+]);
+
+const SAFE_JSON = createFrozenFacade(JSON as unknown as Record<string, unknown>, ["stringify", "parse"]);
+
+// ─── Callable wrappers (Object, Number, String, Boolean, Array, Date) ──
+
+const SAFE_OBJECT = createCallableWrapper(
+	(value?: unknown) => Object(value ?? {}),
+	{
+		keys: Object.keys.bind(Object),
+		values: Object.values.bind(Object),
+		entries: Object.entries.bind(Object),
+		is: Object.is.bind(Object),
+		fromEntries: Object.fromEntries.bind(Object),
+		assign: (...args: unknown[]): Record<string, unknown> => {
+			const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+			for (const arg of args) {
+				if (arg && typeof arg === "object" && !Array.isArray(arg)) {
+					const src = arg as Record<string, unknown>;
+					for (const key of Object.keys(src)) {
+						if (!FORBIDDEN_MEMBER_KEYS.has(key)) result[key] = src[key];
+					}
+				}
+			}
+			return result;
+		},
+	},
+);
+
+const SAFE_NUMBER = createCallableWrapper(
+	Number as (...a: unknown[]) => unknown,
+	{
+		isFinite: Number.isFinite,
+		isInteger: Number.isInteger,
+		isNaN: Number.isNaN,
+		isSafeInteger: Number.isSafeInteger,
+		parseFloat: Number.parseFloat,
+		parseInt: Number.parseInt,
+		MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER,
+		MAX_VALUE: Number.MAX_VALUE,
+		MIN_SAFE_INTEGER: Number.MIN_SAFE_INTEGER,
+		MIN_VALUE: Number.MIN_VALUE,
+		NaN: Number.NaN,
+		NEGATIVE_INFINITY: Number.NEGATIVE_INFINITY,
+		EPSILON: Number.EPSILON,
+		POSITIVE_INFINITY: Number.POSITIVE_INFINITY,
+	},
+);
+
+const SAFE_STRING = createCallableWrapper(
+	String as (...a: unknown[]) => unknown,
+	{
+		fromCharCode: String.fromCharCode,
+		fromCodePoint: String.fromCodePoint,
+		raw: String.raw,
+	},
+);
+
+const SAFE_BOOLEAN = createCallableWrapper(
+	(value?: unknown) => Boolean(value),
+	{},
+);
+
+const SAFE_ARRAY = createCallableWrapper(
+	Array as (...a: unknown[]) => unknown,
+	{
+		isArray: Array.isArray,
+		from: Array.from,
+		of: Array.of,
+	},
+);
+
+const SAFE_DATE = createCallableWrapper(
+	(...args: unknown[]) => (Date as (...a: unknown[]) => string)(...args),
+	{
+		now: Date.now,
+		UTC: Date.UTC,
+		parse: Date.parse,
+	},
+);
+
+const SAFE_BUILTIN_MAP = new Map<object, unknown>([
+	[Object, SAFE_OBJECT],
+	[Math, SAFE_MATH],
+	[JSON, SAFE_JSON],
+	[Array, SAFE_ARRAY],
+	[String, SAFE_STRING],
+	[Number, SAFE_NUMBER],
+	[Boolean, SAFE_BOOLEAN],
+	[Date, SAFE_DATE],
+]);
+
+/**
+ * Replace a real built-in global with a safe facade:
+ * - Math/JSON: null-prototype frozen objects (not callable, pure API).
+ * - Object/Number/String/Boolean/Array/Date: frozen callable wrappers with
+ *   whitelisted static properties.  assertSafeMemberKey blocks
+ *   constructor/prototype/__proto__/__defineGetter__ at AST level.
+ */
+export function createSafeBuiltin(original: object): unknown {
+	const safe = SAFE_BUILTIN_MAP.get(original);
+	return safe ?? original;
+}
+
 // ─── Token ─────────────────────────────────────────────────────
 
 enum TT {
@@ -983,6 +1151,43 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 		}
 
 		case "Call": {
+			// Short-circuit built-ins: evaluate args lazily so that IFERROR can
+			// catch errors thrown during arg evaluation, and IF/AND/OR avoid
+			// evaluating branches that should be skipped.
+			// All four forms fall through to eager evaluation when spread is used.
+			const hasSpread = node.args.some((a) => a.type === "Spread");
+			if (!hasSpread && node.callee.type === "Ident") {
+				const fnName = node.callee.name;
+				const lower = fnName.toLowerCase();
+				if (lower === "if") {
+					const cond = evalNode(node.args[0], scope);
+					if (cond) return node.args[1] ? evalNode(node.args[1], scope) : null;
+					return node.args[2] ? evalNode(node.args[2], scope) : null;
+				}
+				if (lower === "iferror") {
+					try {
+						const v = node.args[0] ? evalNode(node.args[0], scope) : null;
+						if (v instanceof Error || v == null || (typeof v === "number" && !Number.isFinite(v))) {
+							return node.args[1] ? evalNode(node.args[1], scope) : null;
+						}
+						return v;
+					} catch {
+						return node.args[1] ? evalNode(node.args[1], scope) : null;
+					}
+				}
+				if (lower === "and") {
+					for (const a of node.args) {
+						if (!evalNode(a, scope)) return false;
+					}
+					return true;
+				}
+				if (lower === "or") {
+					for (const a of node.args) {
+						if (evalNode(a, scope)) return true;
+					}
+					return false;
+				}
+			}
 			// Preserve 'this' binding for method calls (obj.method())
 			let callee: unknown;
 			let thisObj: unknown = undefined;
@@ -995,6 +1200,7 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 					throw new TypeError("Cannot read properties of null (reading '" + memberKey(node.callee, scope) + "')");
 				}
 				const key = m.computed ? evalNode(m.prop, scope) : (m.prop as { type: "Literal"; value: string }).value;
+				assertSafeMemberKey(key);
 				callee = (thisObj as Record<string, unknown>)[key as string];
 				if (callee == null) {
 					if (node.optional) return undefined;
@@ -1025,6 +1231,7 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 				throw new TypeError("Cannot read properties of null (reading '" + memberKey(node, scope) + "')");
 			}
 			const key = node.computed ? evalNode(node.prop, scope) : (node.prop as { type: "Literal"; value: string }).value;
+			assertSafeMemberKey(key);
 			return (obj as Record<string, unknown>)[key as string];
 		}
 
@@ -1032,9 +1239,10 @@ function evalNode(node: ASTNode, scope: Record<string, unknown>): unknown {
 			return node.elements.map((e) => (e.type === "Spread" ? evalSpread(e.arg, scope) : evalNode(e, scope))).flat();
 
 		case "Object": {
-			const result: Record<string, unknown> = {};
+			const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 			for (const prop of node.props) {
 				const key = prop.computed ? String(evalNode(prop.key as ASTNode, scope)) : (prop.key as string);
+				assertSafeMemberKey(key);
 				result[key] = evalNode(prop.value, scope);
 			}
 			return result;

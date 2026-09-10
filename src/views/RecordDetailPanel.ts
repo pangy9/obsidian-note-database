@@ -38,6 +38,8 @@ import { positionToolbarPopover } from "./PopoverPosition";
 
 export interface RecordDetailActions {
   editCell: (target: HTMLElement, row: RowData, col: ColumnDef, event?: MouseEvent) => void;
+  /** U1-REL-1：relation 列状态判定所需目标库条目集合（缺省仅做 missing 检测）。 */
+  getRelationScopePaths?(col: ColumnDef): ReadonlySet<string> | undefined;
   editFileName?: (target: HTMLElement, row: RowData, currentName: string) => void;
   showColumnMenu?: (event: MouseEvent, col: ColumnDef, anchorEl: HTMLElement) => void;
   openRow: (row: RowData) => void;
@@ -317,7 +319,7 @@ function renderRecordValue(
     for (const entry of values) renderBadge(wrap, col, entry);
     return;
   }
-  if (col.type === "relation" && renderRelationValue(valueEl, app, row, value, true)) {
+  if (col.type === "relation" && renderRelationValue(valueEl, app, row, value, true, { scopePaths: actions.getRelationScopePaths?.(col) })) {
     valueEl.addClass("has-badges");
     return;
   }

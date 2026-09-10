@@ -1,4 +1,5 @@
 import { setIcon } from "obsidian";
+import { suppressClickWhileTextSelected } from "./modals/ModalDrag";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 
@@ -143,6 +144,8 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
   const host = getDropdownPopoverHost(anchor);
   const searchable = options.searchable === true && options.options.length > 8;
   const panel = host.createDiv({ cls: `db-dropdown-popover ${contextClass}${searchable ? " is-searchable" : ""}${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
+  // 拖选选项文字可复制；拖选后的 click 不触发选择项。
+  suppressClickWhileTextSelected(panel);
   panel.setAttr("role", "listbox");
   let searchInput: HTMLInputElement | undefined;
   if (searchable) {

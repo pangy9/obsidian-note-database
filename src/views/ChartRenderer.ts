@@ -1,4 +1,5 @@
 import { App, Modal, Notice, setIcon } from "obsidian";
+import { makeModalDraggable } from "./modals/ModalDrag";
 import type { ChartDataset, ChartType as ChartJsType, Plugin } from "chart.js";
 import { Chart } from "../data/ChartJsSetup";
 import {
@@ -929,6 +930,7 @@ class ChartDrilldownModal extends Modal {
     contentEl.addClass("db-chart-drilldown-modal");
     const header = contentEl.createDiv({ cls: "db-chart-drilldown-header" });
     header.createEl("h2", { text: this.options.title });
+    makeModalDraggable(this);
     header.createDiv({ cls: "db-chart-drilldown-group", text: this.options.groupLabel });
     contentEl.createDiv({ cls: "db-chart-drilldown-summary", text: t("chart.drilldownSummary", { count: String(this.options.rows.length) }) });
     const tableWrap = contentEl.createDiv({ cls: "db-chart-drilldown-table-wrap" });

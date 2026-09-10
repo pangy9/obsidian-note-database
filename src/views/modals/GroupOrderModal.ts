@@ -1,4 +1,5 @@
 import { App, Modal, setIcon } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { mergeGroupOrder } from "../../data/GroupOrder";
 import { t } from "../../i18n";
 
@@ -32,6 +33,7 @@ export class GroupOrderModal extends Modal {
     contentEl.empty();
     contentEl.addClass("note-database-modal");
     contentEl.createEl("h2", { text: t("modal.groupOrderTitle", { field: this.fieldLabel }) });
+    makeModalDraggable(this);
     contentEl.createDiv({
       cls: "db-modal-help",
       text: t("modal.groupOrderHint"),

@@ -850,6 +850,25 @@
   padding: 2px 6px;
 }
 
+.note-database-container input.db-heading-edit-title,
+.note-database-container input.db-heading-edit-title:hover,
+.note-database-container input.db-heading-edit-title:focus,
+.note-database-container input.db-heading-edit-title:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4px;
+  font-family: var(--db-title-font-family);
+  font-size: var(--db-heading-font-size);
+  font-weight: 700;
+  line-height: var(--db-heading-line-height);
+}
+
 .note-database-container .db-heading-edit-description {
   display: block;
   width: 100%;
@@ -1336,6 +1355,31 @@
   color: var(--text-normal);
 }
 
+/* Keep toolbar SVGs out of the button's direct-child layout. Obsidian's iPad
+   shell can collapse or clip direct SVG children even though the same icons
+   render correctly inside an explicit inline-flex host. The host also keeps
+   count badges inside the button's clipping boundary. */
+.note-database-container .db-toolbar-button-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 19px;
+  width: 19px;
+  height: 19px;
+  line-height: 0;
+}
+
+.note-database-container .db-toolbar-badge-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  overflow: visible;
+}
+
 .view-header .db-view-undo-action-near-nav {
   order: 2;
   margin-inline: 4px 8px;
@@ -1360,6 +1404,7 @@
 }
 
 .note-database-container .db-database-refresh-badge {
+  box-sizing: border-box;
   position: absolute;
   top: -4px;
   right: -5px;
@@ -1424,6 +1469,13 @@
   mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;
   mask-size: 100% 100%;
+}
+
+/* WebKit on iPad can apply the SVG radial mask as an almost-empty mask. The
+   cutout is decorative, so mobile uses the unmasked icon and keeps the badge. */
+.is-mobile .note-database-container .db-composite-icon-main svg {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .note-database-container .db-composite-icon-badge {
@@ -1537,6 +1589,7 @@
 }
 
 .note-database-container .db-toolbar-badge {
+  box-sizing: border-box;
   min-width: 15px;
   height: 15px;
   border-radius: 999px;
@@ -6730,9 +6783,55 @@
  *  Base Import Confirm Modal — 确认导入属性
  * ============================================================ */
 
+/* 0. 搜索 + 排序工具栏：属性多时先过滤/排序再勾选 */
+.note-database-modal .base-import-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.note-database-modal .base-import-toolbar .base-import-search {
+  flex: 1 1 180px;
+  min-width: 0;
+  width: 0;
+  max-width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.note-database-modal .base-import-toolbar .base-import-search:focus-visible {
+  border-color: var(--interactive-accent);
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+  outline-offset: 1px;
+}
+
+.note-database-modal .base-import-toolbar .base-import-sort-dropdown {
+  flex: 0 1 160px;
+  width: 160px;
+  max-width: 100%;
+  height: 32px;
+}
+
 /* 1. 表格整体：用 separate + 固定表头，增加纵向间距 */
+.note-database-modal .base-import-toolbar-help {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .note-database-modal .base-import-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -6756,7 +6855,7 @@
 }
 
 /* 表头特殊列宽 */
-.note-database-modal .base-import-table thead th:nth-child(1) { width: 110px; text-align: left; }
+.note-database-modal .base-import-table thead th:nth-child(1) { width: 28%; text-align: left; }
 .note-database-modal .base-import-table thead th:nth-child(4) { width: 56px; text-align: center; }
 .note-database-modal .base-import-table thead th:nth-child(5) { width: 52px; text-align: center; }
 
@@ -6777,6 +6876,7 @@
 
 /* 4. 属性名（key）：等宽字体 + 弱化，让它退居次要 */
 .note-database-modal .base-import-table td:first-child {
+  overflow-wrap: anywhere;
   color: var(--text-faint);
   font-family: var(--font-monospace);
   font-size: 12px;
@@ -6787,6 +6887,7 @@
   box-sizing: border-box;
   width: 100%;
   height: 32px;
+  min-width: 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--db-radius-md);
   background: var(--background-primary);
@@ -6814,9 +6915,7 @@
 
 /* 6. 类型选择器：图标 */
 .note-database-modal .base-import-type-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  vertical-align: middle;
 }
 
 .note-database-modal .base-import-type-cell svg {
@@ -6829,7 +6928,7 @@
 
 .note-database-modal .base-import-type-cell .db-base-import-type-dropdown {
   height: 32px;
-  min-width: 110px;
+  min-width: 0;
   max-width: 140px;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
@@ -6854,6 +6953,8 @@
 .note-database-modal .base-import-check-cell {
   text-align: center;
 }
+
+
 
 .note-database-modal .db-modal-checkbox {
   position: relative;
@@ -6930,7 +7031,7 @@
   gap: 10px;
   margin-top: 4px;
   padding-top: 14px;
-  border-top: 1px solid var(--background-modifier-border);
+  border-top: 0;
 }
 
 .note-database-modal .base-import-buttons button {
@@ -10057,6 +10158,22 @@ body.is-phone .note-database-container .db-record-detail-panel {
   scrollbar-gutter: stable;
 }
 
+/*
+ * The textarea is only the editable/caret layer; syntax-highlighted text is
+ * rendered by the transparent layer behind it. Obsidian and some themes set
+ * an opaque form-field background on :focus, which would cover that layer
+ * while the textarea text itself remains transparent.
+ */
+.note-database-modal .db-formula-code-wrap .db-formula-textarea,
+.note-database-modal .db-formula-code-wrap:focus-within .db-formula-textarea,
+.note-database-modal .db-formula-textarea:hover,
+.note-database-modal .db-formula-textarea:focus,
+.note-database-modal .db-formula-textarea:focus-visible {
+  background-color: transparent;
+  background-image: none;
+  color: transparent;
+}
+
 .note-database-modal .db-formula-textarea::placeholder {
   color: var(--text-faint);
   opacity: 1;
@@ -10373,6 +10490,18 @@ body.is-phone .note-database-container .db-record-detail-panel {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 窄屏/手机：联想停靠式——占据文档流出现在输入区下方，不遮挡输入、不溢出视口
+ * （早期实现在此场景直接禁用联想，窄屏下弹不出来）。 */
+.note-database-modal .db-formula-property-suggestions.is-docked,
+.formula-workbench-modal .db-formula-property-suggestions.is-docked {
+  position: static;
+  width: 100%;
+  max-width: none;
+  margin-top: 6px;
+  max-height: 132px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
 }
 
 .note-database-modal .db-formula-property-suggestion {
@@ -12425,21 +12554,9 @@ body.is-phone .note-database-container .db-record-detail-panel {
   background: var(--background-modifier-hover);
 }
 
-.note-database-container .db-embed-header-inline-toggle {
-  display: none;
-}
-
-.is-mobile .note-database-container .db-embed-header-inline-toggle {
-  display: inline-flex;
-}
-
 .is-mobile .note-database-embed.note-database-container > .db-embed-header-toggle {
   opacity: 1;
   pointer-events: auto;
-}
-
-.is-mobile .note-database-embed.note-database-container:not(.note-database-embed-headerless) > .db-embed-header-toggle {
-  display: none;
 }
 
 /* Embed: 未分组时，属性行紧贴 header 底边 */
@@ -15324,11 +15441,6 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   scrollbar-width: none;
 }
 
-.is-phone .note-database-container .db-toolbar-right .db-toolbar-badge {
-  top: -3px;
-  right: -3px;
-}
-
 .is-phone .note-database-container .db-toolbar-right::-webkit-scrollbar {
   display: none;
 }
@@ -16197,4 +16309,140 @@ img.db-text-md-image {
 
 .note-database-modal.db-relation-rollup-config-modal .db-relation-target-impact-detail {
   margin-top: 4px;
+}
+
+/* ─── U1-REL-1：失效 Relation 标识 ───────────────────────────────────── */
+/* 单元格链接：missing 淡橙（强制警告，不受"隐藏记录图标"影响）；out-of-scope 弱灰虚线。 */
+.db-relation-link.is-missing {
+  color: color-mix(in srgb, var(--text-error, #d97706) 62%, var(--text-muted));
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--text-error, #d97706) 45%, transparent);
+}
+.db-relation-link.is-missing .db-relation-link-icon {
+  color: var(--text-error, #b45309);
+}
+.db-relation-link.is-out-of-scope {
+  color: var(--text-faint);
+  opacity: 0.85;
+}
+.db-relation-link.is-out-of-scope .db-relation-link-icon {
+  color: var(--text-faint);
+}
+
+/* 编辑器列表项：missing 淡橙底 + 警告图标；out-of-scope 弱底。与有效项同一滚动列表。 */
+.db-relation-option-item.is-missing {
+  background: color-mix(in srgb, var(--text-error, #d97706) 8%, transparent);
+}
+.db-relation-option-item.is-missing .db-relation-option-icon {
+  color: var(--text-error, #b45309);
+}
+.db-relation-option-item.is-out-of-scope {
+  background: color-mix(in srgb, var(--text-muted) 6%, transparent);
+}
+.db-relation-option-item.is-out-of-scope .db-relation-option-icon {
+  color: var(--text-faint);
+}
+.db-relation-invalid-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: 0 5px;
+  line-height: 16px;
+}
+.db-relation-option-item.is-missing .db-relation-invalid-hint {
+  color: var(--text-error, #b45309);
+  border-color: color-mix(in srgb, var(--text-error, #d97706) 30%, transparent);
+}
+
+/* ─── Modal 拖动（功能级优化，参照新版 Obsidian 设置面板交互）───────────── */
+.db-modal-drag-grip {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  cursor: grab;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  opacity: 0.45;
+  vertical-align: middle;
+}
+.db-modal-drag-grip svg {
+  width: 14px;
+  height: 14px;
+}
+.db-modal-drag-grip:hover,
+.db-modal-drag-grip:active,
+.db-modal-is-dragging {
+  opacity: 0.9;
+  cursor: grabbing;
+}
+/* 拖动期间禁止 modal 内文本选择（pointer capture 跨元素移动）。 */
+.modal.db-modal-is-dragging,
+.modal.db-modal-is-dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* ─── 弹窗 / popover 文字可复制 ──────────────────────────────────────────
+   锚点：modal 经 makeModalDraggable 统一打 .db-modal；popover 为插件自有根类。
+   显式 user-select: text 覆盖主题对 .modal 的潜在禁选；拖拽手柄与拖动态保持禁选。 */
+.modal.db-modal,
+.modal.db-modal *,
+.db-cell-option-popover,
+.db-cell-option-popover *,
+.db-dropdown-popover,
+.db-dropdown-popover *,
+.db-cell-edit-popover,
+.db-cell-edit-popover *,
+.db-export-popover,
+.db-export-popover *,
+.db-database-popover,
+.db-database-popover *,
+.db-group-popover,
+.db-group-popover *,
+.db-group-order-popover,
+.db-group-order-popover *,
+.db-chart-options-popover,
+.db-chart-options-popover *,
+.db-calendar-options-popover,
+.db-calendar-options-popover *,
+.db-calendar-search-results-popover,
+.db-calendar-search-results-popover *,
+.db-icon-picker-popover,
+.db-icon-picker-popover *,
+.db-view-tab-popover,
+.db-view-tab-popover *,
+.db-filter-panel,
+.db-filter-panel *,
+.db-sort-panel,
+.db-sort-panel *,
+.db-column-manager,
+.db-column-manager *,
+.db-view-config-panel,
+.db-view-config-panel *,
+.db-active-rule-popover,
+.db-active-rule-popover *,
+.db-formula-property-suggestions,
+.db-record-detail-panel {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 例外：popover/modal 内的拖拽手柄与行号禁选（拖动时误选文字）。 */
+.db-modal .db-formula-line-numbers,
+.db-modal .db-status-option-drag,
+.db-modal .db-file-list-drag,
+.db-modal .db-group-order-drag,
+.db-group-order-popover .db-group-order-drag,
+.db-cell-option-popover .db-option-drag-handle,
+.db-dropdown-popover .db-option-drag-handle,
+.db-database-popover .db-database-popover-drag,
+.db-view-config-panel .db-panel-drag,
+.db-sort-panel .db-panel-drag,
+.db-modal .db-modal-drag-grip,
+.db-column-manager .db-column-drag {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }

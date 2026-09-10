@@ -1,4 +1,5 @@
 import { App, Modal, Notice, setIcon } from "obsidian";
+import { makeModalDraggable, suppressClickWhileTextSelected } from "./ModalDrag";
 import { evaluateBaseExpression } from "../../data/BaseExpression";
 import { isImeComposing } from "../../data/KeyboardUtils";
 import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValuesForKey } from "../../data/ColumnTypes";
@@ -188,7 +189,8 @@ export class FormulaModal extends Modal {
       const width = this.modalEl.getBoundingClientRect().width || this.contentEl.getBoundingClientRect().width;
       this.contentEl.toggleClass("is-formula-compact", width > 0 && width < 1040);
       this.contentEl.toggleClass("is-formula-narrow", width > 0 && width < 760);
-      if (this.shouldDisableInlineSuggestions()) this.hideSuggestions();
+      // 跨过窄/宽阈值时：可见的联想框在停靠式与光标跟随式之间切换定位，而不是直接藏掉。
+      if (this.propertySuggestEl?.hasClass("is-visible")) this.applySuggestionPosition();
     };
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(update);
@@ -200,6 +202,7 @@ export class FormulaModal extends Modal {
     const header = this.contentEl.createDiv({ cls: "db-formula-header" });
     const titleWrap = header.createDiv({ cls: "db-formula-title-wrap" });
     titleWrap.createEl("h3", { text: t("formula.title", { name: this.col.label }) });
+    makeModalDraggable(this);
     titleWrap.createDiv({ cls: "db-formula-subtitle", text: this.getStorageSubtitle() });
     titleWrap.createDiv({ cls: "db-formula-storage-note", text: this.getStorageNote() });
 
@@ -263,7 +266,15 @@ export class FormulaModal extends Modal {
     this.textarea.spellcheck = false;
     this.textarea.value = this.originalExpression;
     this.propertySuggestEl = codeWrap.createDiv({ cls: "db-formula-property-suggestions" });
-    this.propertySuggestEl.onmousedown = (event) => event.preventDefault();
+    // 保焦点但不禁选：默认阻止 mousedown 会同时阻止文字选择（无法复制）。
+    // 改为 mousedown 放行（选择可启动），pointerup 时若未产生选区则把焦点还给编辑器；
+    // 纯点击选项（onclick 插入后关闭）不受影响。
+    // 拖选文字结束后的 click 不应插入选项（click 守卫；纯点击照常）。
+    suppressClickWhileTextSelected(this.propertySuggestEl);
+    this.propertySuggestEl.addEventListener("pointerup", () => {
+      const selection = this.propertySuggestEl?.ownerDocument.getSelection();
+      if (!selection || selection.isCollapsed) this.textarea?.focus();
+    });
 
     this.textarea.addEventListener("input", () => {
       this.updateEditorChrome();
@@ -687,6 +698,21 @@ export class FormulaModal extends Modal {
     });
   }
 
+  /**
+   * Schema-aware 字段名集合（列 key/label + 文件字段 key/label）。
+   * 必须与公式引擎（ComputedFieldEngine）使用的集合一致，否则 [2024 Revenue]、
+   * [Budget (USD)] 这类多词字段会被扫描器误判为数组/拆成裸标识符，导致
+   * 校验、预览字段清单与替换预览三处彼此不一致。
+   */
+  private getFormulaKnownFields(): ReadonlySet<string> {
+    const fields = new Set<string>();
+    for (const col of [...this.columns, ...FORMULA_FILE_FIELDS]) {
+      fields.add(col.key);
+      if (col.label) fields.add(col.label);
+    }
+    return fields;
+  }
+
   private getExamples(): FormulaExampleHelp[] {
     const status = this.columns.find((candidate) => ["status", "select"].includes(candidate.type)) || this.columns.find((candidate) => candidate.key !== this.col.key);
     const number = this.columns.find((candidate) => ["number", "currency"].includes(candidate.type) && candidate.key !== this.col.key);
@@ -871,7 +897,7 @@ export class FormulaModal extends Modal {
       "Math", "Number", "String", "Boolean", "Date", "Array", "Object", "JSON",
       "Infinity", "NaN", "console",
     ]);
-    for (const segment of scanFormulaSegments(expression)) {
+    for (const segment of scanFormulaSegments(expression, this.getFormulaKnownFields())) {
       if (segment.kind === "bracket-ref" || segment.kind === "field-call") {
         const col = available.find((candidate) => candidate.key === segment.name || candidate.label === segment.name);
         if (!col) return t("formula.fieldNotExist", { name: segment.name });
@@ -986,7 +1012,7 @@ export class FormulaModal extends Modal {
   private getReferencedFields(expression: string, row: RowData): FormulaReferencedField[] {
     const result: FormulaReferencedField[] = [];
     const seen = new Set<string>();
-    for (const segment of scanFormulaSegments(expression)) {
+    for (const segment of scanFormulaSegments(expression, this.getFormulaKnownFields())) {
       const resolved = this.resolveFormulaReference(expression, segment);
       if (!resolved) continue;
       const key = `${resolved.source}:${resolved.object || ""}:${resolved.col.key}:${resolved.ref}`;
@@ -1047,7 +1073,7 @@ export class FormulaModal extends Modal {
 
   private buildSubstitutedExpression(expression: string, refs: FormulaReferencedField[]): string {
     const replacements: Array<{ start: number; end: number; text: string }> = [];
-    for (const segment of scanFormulaSegments(expression)) {
+    for (const segment of scanFormulaSegments(expression, this.getFormulaKnownFields())) {
       const resolved = this.resolveFormulaReference(expression, segment);
       const item = resolved
         ? refs.find((candidate) =>
@@ -1245,10 +1271,6 @@ export class FormulaModal extends Modal {
 
   private updateSuggestions(): void {
     if (!this.textarea || !this.propertySuggestEl) return;
-    if (this.shouldDisableInlineSuggestions()) {
-      this.hideSuggestions();
-      return;
-    }
     const cursor = this.textarea.selectionStart;
     const before = this.textarea.value.slice(0, cursor);
     const openIndex = before.lastIndexOf("[");
@@ -1301,14 +1323,22 @@ export class FormulaModal extends Modal {
 
   private showSuggestionBox(): void {
     if (!this.textarea || !this.propertySuggestEl) return;
-    if (this.shouldDisableInlineSuggestions()) {
-      this.hideSuggestions();
+    this.applySuggestionPosition();
+    this.suggestionIndex = -1;
+    this.propertySuggestEl.addClass("is-visible");
+  }
+
+  /** 宽屏：跟随光标 inline 定位；窄屏/手机：停靠式（占文档流，出现在输入区下方）。 */
+  private applySuggestionPosition(): void {
+    if (!this.textarea || !this.propertySuggestEl) return;
+    const docked = this.shouldDockSuggestions();
+    this.propertySuggestEl.toggleClass("is-docked", docked);
+    if (docked) {
+      this.propertySuggestEl.setCssProps({ left: "", top: "" });
       return;
     }
     const pos = this.estimateCaretPosition();
     this.propertySuggestEl.setCssProps({ left: `${pos.left}px`, top: `${pos.top + 4}px` });
-    this.suggestionIndex = -1;
-    this.propertySuggestEl.addClass("is-visible");
   }
 
   private hideSuggestions(): void {
@@ -1316,7 +1346,11 @@ export class FormulaModal extends Modal {
     this.propertySuggestEl?.removeClass("is-visible");
   }
 
-  private shouldDisableInlineSuggestions(): boolean {
+  /**
+   * 窄屏（手机或 modal 宽 <760）下光标跟随定位会溢出视口/遮挡输入区，
+   * 联想改为停靠式面板展示（不再是早期的一刀切禁用——窄屏也要有联想）。
+   */
+  private shouldDockSuggestions(): boolean {
     if (window.activeDocument.body.classList.contains("is-phone")) return true;
     const width = this.modalEl?.getBoundingClientRect().width || this.contentEl?.getBoundingClientRect().width || 0;
     return width > 0 && width < 760;

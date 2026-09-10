@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 
 export interface ConfirmModalOptions {
@@ -31,6 +32,7 @@ class ConfirmModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: this.options.title });
+    makeModalDraggable(this);
     this.contentEl.createDiv({ cls: "db-modal-help", text: this.options.message });
 
     const actions = this.contentEl.createDiv({ cls: "db-modal-actions" });

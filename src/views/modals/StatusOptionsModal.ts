@@ -1,4 +1,5 @@
 import { App, Modal, Notice, setIcon } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { COLUMN_TYPE_LABELS, DEFAULT_STATUS_OPTIONS, getBuiltinStatusPresets } from "../../data/ColumnTypes";
 import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../data/types";
 import { t } from "../../i18n";
@@ -102,6 +103,7 @@ export class StatusOptionsModal extends Modal {
     this.contentEl.empty();
     this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: t("modal.statusOptions", { type: COLUMN_TYPE_LABELS()[this.col.type], label: this.col.label }) });
+    makeModalDraggable(this);
     if (this.col.type === "status" && this.showPresets) this.renderPresets();
     this.listEl = this.contentEl.createDiv({ cls: "db-status-option-list" });
     this.renderList();

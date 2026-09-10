@@ -1,4 +1,4 @@
-import { TFile, Vault, MetadataCache, App, normalizePath, parseYaml, stringifyYaml, EventRef, getAllTags } from "obsidian";
+import { TFile, Vault, MetadataCache, App, Notice, normalizePath, parseYaml, stringifyYaml, EventRef, getAllTags } from "obsidian";
 import { ChartReferenceLine, ColumnDef, ConditionalFormatRule, DatabaseConfig, DateGroupMode, FilterRule, NewRecordTemplateConfig, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
@@ -9,6 +9,13 @@ import { normalizeComputedSyncMode } from "./ComputedSync";
 import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
 import { absorbTypeFilterIntoRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { linkDatabaseSchema } from "./ColumnConfig";
+import { cloneFrontmatter, cloneFrontmatterValue, diffFrontmatter } from "./FrontmatterOverride";
+import { applyFrontmatterWrites, applyViewDefDatabasePatch, configsDeepEqual, mergeFrontmatterDesired, reconcileFrontmatterDesired, verifyFrontmatterExpect } from "./FrontmatterPatch";
+import { resolveRenamedRecordCache } from "./RecordCacheResolution";
+import { PathTaskQueue } from "./PathTaskQueue";
+import { parseDiskFrontmatter, runBoundedReconcilePool, runDiskReconcileTask, type DiskReconcileTaskDeps, type DiskReconcileOutcome } from "./DiskReconcile";
+import { ReconcileScheduler } from "./ReconcileScheduler";
+import type { FrontmatterKeySnapshot, FrontmatterWrite } from "./RenameTransaction";
 import { t } from "../i18n";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;
@@ -42,6 +49,7 @@ export type DataChangeCallback = (batch: DataChangeBatch) => void;
 export type FrontmatterMutator = (frontmatter: Record<string, unknown>) => void;
 export interface DataWriteContext {
   sourceInstanceId?: string;
+  assertWritable?: () => void;
 }
 
 interface OwnedWriteCredit {
@@ -55,6 +63,11 @@ export interface ViewConfigMutation {
   viewId?: string;
   sourceInstanceId: string;
   database?: DatabaseConfig;
+}
+
+export interface ViewDefSnapshot {
+  typedConfig: DatabaseConfig;
+  rawPayload: unknown;
 }
 
 export type ViewConfigMutationCallback = (mutation: ViewConfigMutation) => void;
@@ -76,17 +89,45 @@ export class DataSource {
   private viewConfigListeners: ViewConfigMutationCallback[] = [];
   private eventRefs: { offref: () => void }[] = [];
   private notifyTimer: number | null = null;
-  private modifyRecheckTimers = new Map<string, number>();
   private pendingChanges = new Map<string, DataChange>();
   private ownedPathUntil = new Map<string, {
     metadataEvents: OwnedWriteCredit[];
     vaultEvents: OwnedWriteCredit[];
   }>();
   private recordCache: Map<string, NoteRecord> | null = null;
-  private frontmatterOverrides = new Map<string, { values: Record<string, unknown>; expiresAt: number }>();
-  private viewDefOverrides = new Map<string, { config: DatabaseConfig; expiresAt: number }>();
+  private frontmatterOverrides = new Map<string, { values: Record<string, FrontmatterKeySnapshot>; expiresAt: number }>();
+  private viewDefOverrides = new Map<string, { config: DatabaseConfig; rawPayload: unknown; expiresAt: number }>();
   /** Per-file write queue to serialize processFrontMatter calls on the same file */
-  private writeQueues = new Map<string, Promise<void>>();
+  /** 读写共用的路径任务队列（写入在 enqueueWrite 内另行包装 ownership；读取零副作用）。 */
+  private pathTasks = new PathTaskQueue();
+  /** 每路径插件写入版本：成功写入 +1。磁盘对账用它识别"读取期间有新写入"（过期读取）。 */
+  private pathWriteVersions = new Map<string, number>();
+  /** 对账作用域代数：destroy() 推进，使在途任务不得发布缓存/清 overlay/广播。 */
+  private reconcileEpoch = 0;
+  /** 永久卸载标志：队列中的滞后任务即使捕获到新 epoch 也不得发布（epoch 可复用，标志不会）。 */
+  private dataSourceDestroyed = false;
+  /** 每路径身份代数：删除/重命名时推进。同路径重建（新 TFile 实例）使在途读取的发布权限失效。 */
+  private pathGenerations = new Map<string, number>();
+  /** 磁盘对账最终失败的路径：cleanup（读驱动）不再重复调度；新的磁盘证据（modify/metadata）到来后重置。 */
+  private reconcileFailedPaths = new Set<string>();
+  /** overlay 过期告警去重（每路径一次，避免读驱动 cleanup 反复打日志）。 */
+  private overlayExpiryWarned = new Set<string>();
+  /** 磁盘对账调度：去重 + 有界退避 + 删除/重命名/卸载失效。 */
+  private reconcileScheduler = new ReconcileScheduler({
+    setTimer: (callback, delay) => window.setTimeout(callback, delay),
+    clearTimer: (timer) => window.clearTimeout(timer),
+    runReconcile: (path) => this.runDiskReconcile(path),
+    onFinalFailure: (path) => {
+      // 登记失败门控：读驱动的 cleanup 不再对该路径反复调度（避免无限重试）；
+      // modify/metadata/手动刷新等新证据会清除门控重新调度。
+      this.reconcileFailedPaths.add(path);
+      console.error(`Note Database: disk reconcile failed after retries for ${path}`);
+      new Notice(t("errors.refreshFailed"));
+    },
+    onScheduleError: (path, error) => {
+      console.warn(`Note Database: disk reconcile error for ${path}`, error);
+    },
+  });
 
   constructor(app: App) {
     this.app = app;
@@ -101,24 +142,25 @@ export class DataSource {
     operation: () => Promise<void>,
     context?: DataWriteContext
   ): Promise<void> {
-    const prev = this.writeQueues.get(path) ?? Promise.resolve();
-    // Swallow previous error so the queue is never poisoned, then run this operation
-    const next = prev.catch(() => {}).then(() => {
+    return this.pathTasks.enqueue(path, async () => {
+      context?.assertWritable?.();
       const credit = this.markOwnedPath(path, context?.sourceInstanceId);
-      return operation().catch((error) => {
+      try {
+        await operation();
+      } catch (error) {
         this.releaseOwnedCredit(path, credit);
         throw error;
-      });
-    });
-    this.writeQueues.set(path, next);
-    // Clean up when this slot is the tail of the chain (whether fulfilled or rejected)
-    const cleanup = () => {
-      if (this.writeQueues.get(path) === next) {
-        this.writeQueues.delete(path);
       }
-    };
-    next.then(cleanup, cleanup);
-    return next;
+    });
+  }
+
+  /**
+   * 与写入共用同一路径队列但不标记写入 ownership：读取/对账任务不得产生
+   * "插件写入"标记，否则会把随后的外部变化误过滤为自身回声。
+   * 队列只串行化本插件任务，不构成磁盘原子锁——任务内部自行复验。
+   */
+  private enqueueReadTask(path: string, task: () => Promise<void>): Promise<void> {
+    return this.pathTasks.enqueue(path, task);
   }
 
   onDataChanged(cb: DataChangeCallback): () => void {
@@ -136,8 +178,14 @@ export class DataSource {
   }
 
   notifyViewConfigChanged(mutation: ViewConfigMutation): void {
+    // 隔离 listener 异常：配置可能已落盘（patchViewDefConfig post-commit），listener 抛错
+    // 不得让 writer reject（否则违反 resolve=已落盘/reject=未写入 契约，executor 无法补偿）。
     for (const cb of this.viewConfigListeners) {
-      cb(mutation);
+      try {
+        cb(mutation);
+      } catch (error) {
+        console.error("Note Database: view config listener threw (mutation already applied)", error);
+      }
     }
   }
 
@@ -150,19 +198,36 @@ export class DataSource {
     // "resolved" has no file identity and fires broadly; concrete cache/vault
     // events below are the authoritative refresh signal.
     track(this.metadataCache.on("changed", (file) => {
-      this.cancelModifyRecheck(file.path);
-      // metadataCache.changed is the hand-off from optimistic plugin overlays
-      // to Obsidian's authoritative parsed frontmatter. Keeping an older
-      // override beyond this point can mask a newer external save indefinitely
-      // because expiry alone does not schedule another render.
-      this.frontmatterOverrides.delete(file.path);
-      this.viewDefOverrides.delete(file.path);
+      // 不能无条件删 overlay：延迟到达的旧 commit 事件会误删较新的 compensation overlay
+      // （commit cost → compensate price → compensation overlay 已记 → 旧 commit 事件到达 →
+      // 若直接 delete 会回到 cost）。只在 cache 确实追平期望状态时移除对应 key/条目。
+      this.reconcileFrontmatterOverride(file);
+      this.reconcileViewDefOverride(file);
+      // 事件处理后仍有待对账状态（overlay 未追平 / view-def 未交接）→ 不能就此罢手，
+      // 保留磁盘对账兜底：磁盘即真相，最终由它完成交接或让外部修改接管。
+      if (this.frontmatterOverrides.has(file.path) || this.viewDefOverrides.has(file.path)) {
+        this.reconcileScheduler.schedule(file.path);
+      }
+      const beforeBase = this.recordCache?.get(file.path)?.frontmatter;
       this.refreshCachedRecord(file);
+      const afterBase = this.recordCache?.get(file.path)?.frontmatter;
+      // 晚到的旧 metadata 事件可能覆盖已提交/已对账的正确快照，且此刻已无 overlay
+      // 保护。基底被事件改变且无 overlay 时，交给磁盘仲裁（而不是无条件信任事件）。
+      if (beforeBase && afterBase && JSON.stringify(beforeBase) !== JSON.stringify(afterBase)
+        && !this.frontmatterOverrides.has(file.path)) {
+        this.reconcileFailedPaths.delete(file.path);
+        this.reconcileScheduler.schedule(file.path);
+      }
       this.scheduleNotify("changed", file.path, undefined, "metadata");
     }));
     track(this.vault.on("modify", (file) => {
       this.scheduleNotify("changed", file.path, undefined, "vault");
-      this.scheduleModifyRecheck(file);
+      // 附件（图片/PDF 等）修改不触发全文对账；只有 Markdown 笔记才调度。
+      if (!(file instanceof TFile) || file.extension !== "md") return;
+      // 新的磁盘证据到达：此前最终失败的对账路径重新获得调度资格。
+      this.reconcileFailedPaths.delete(file.path);
+      this.overlayExpiryWarned.delete(file.path);
+      this.reconcileScheduler.schedule(file.path);
     }));
     track(this.vault.on("create", (file) => {
       this.refreshCachedRecord(file);
@@ -170,11 +235,20 @@ export class DataSource {
     }));
     track(this.vault.on("delete", (file) => {
       this.recordCache?.delete(file.path);
+      this.reconcileScheduler.invalidate(file.path);
+      // 同路径重建会产生新 TFile 实例：推进代数使在途读取（基于旧实例捕获）失去发布权限。
+      this.bumpPathGeneration(file.path);
       this.scheduleNotify("deleted", file.path, undefined, "vault");
     }));
     track(this.vault.on("rename", (file, oldPath) => {
+      // rename 不改变文件内容：旧路径记录即权威值，传给 refreshCachedRecord——
+      // metadataCache 尚未解析新路径（cache null 或 frontmatter undefined）时
+      // 立即迁移，避免重命名后的行首帧整行清空、要等兜底才恢复。
+      const previousRecord = this.recordCache?.get(oldPath);
       this.recordCache?.delete(oldPath);
-      this.refreshCachedRecord(file);
+      this.reconcileScheduler.invalidate(oldPath);
+      this.bumpPathGeneration(oldPath);
+      this.refreshCachedRecord(file, previousRecord?.frontmatter);
       // Bug 5: 迁移 optimistic overrides old→new（不清除，否则丢掉等待 metadata cache 接管
       // 的 frontmatter——新创建文件被快速重命名时尤其关键）。
       const fmOverride = this.frontmatterOverrides.get(oldPath);
@@ -195,15 +269,18 @@ export class DataSource {
   destroy(): void {
     if (this.notifyTimer !== null) window.clearTimeout(this.notifyTimer);
     this.notifyTimer = null;
-    for (const timer of this.modifyRecheckTimers.values()) window.clearTimeout(timer);
-    this.modifyRecheckTimers.clear();
+    // 卸载后旧对账任务（计时/执行中/退避重试/队列中滞后任务）全部失效，不得再写缓存或广播。
+    // epoch 会被后续创建复用，dataSourceDestroyed 是永久的第二道闸。
+    this.dataSourceDestroyed = true;
+    this.reconcileEpoch += 1;
+    this.reconcileScheduler.destroy();
+    this.pathTasks.clear();
     for (const ref of this.eventRefs) {
       ref.offref();
     }
     this.eventRefs = [];
     this.listeners = [];
     this.viewConfigListeners = [];
-    this.writeQueues.clear();
     this.pendingChanges.clear();
     this.ownedPathUntil.clear();
     this.recordCache = null;
@@ -292,15 +369,26 @@ export class DataSource {
   ): Promise<void> {
     return this.enqueueWrite(file.path, async () => {
       let updates: Record<string, unknown> | null = null;
+      // 写回调内捕获完成后的独立快照：持久化成功后发布为 recordCache 基础值
+      //（无差异写入同样修复旧缓存），失败则绝不发布。
+      let after: Record<string, unknown> | null = null;
       try {
         await this.app.fileManager.processFrontMatter(file, (fm) => {
+          context?.assertWritable?.();
           const frontmatter = fm as Record<string, unknown>;
-          const before = this.cloneFrontmatter(frontmatter);
+          const before = cloneFrontmatter(frontmatter);
           mutator(frontmatter);
-          updates = this.diffFrontmatter(before, frontmatter);
+          updates = diffFrontmatter(before, frontmatter);
+          after = cloneFrontmatter(frontmatter);
         });
-        if (updates && Object.keys(updates).length > 0) {
-          this.rememberFrontmatterUpdates(file.path, updates);
+        try {
+          if (after) this.publishCommittedSnapshot(file.path, after);
+          if (updates && Object.keys(updates).length > 0) {
+            this.rememberFrontmatterUpdates(file.path, updates);
+          }
+        } catch (hookError) {
+          // 文件已写入：缓存钩子异常不得误报为"文件未写入"。
+          console.error("Note Database: post-write cache hook failed (file already persisted)", hookError);
         }
       } catch (err) {
         if (updates && Object.keys(updates).length > 0) this.frontmatterOverrides.delete(file.path);
@@ -350,7 +438,7 @@ export class DataSource {
     if (this.recordCache) {
       this.recordCache.set(file.path, {
         file,
-        frontmatter: this.cloneFrontmatter(frontmatter),
+        frontmatter: cloneFrontmatter(frontmatter),
       });
     }
     return file;
@@ -402,8 +490,14 @@ export class DataSource {
 
   /** Latest observable frontmatter, including short-lived writes not yet reflected in metadataCache. */
   getFrontmatterSnapshot(file: TFile): Record<string, unknown> {
-    const cached = this.metadataCache.getFileCache(file)?.frontmatter || {};
-    return { ...this.withFrontmatterOverride(file.path, cached) };
+    // 权威来源统一：recordCache 持有提交快照（写成功发布）与磁盘对账结果，优先于
+    // metadataCache——否则磁盘恢复/写后窗口的编辑仍会读到旧值。
+    const base = this.recordCache?.get(file.path)?.frontmatter
+      ?? this.metadataCache.getFileCache(file)?.frontmatter
+      ?? {};
+    // 深克隆（浅展开不足以隔离 Obsidian 共享的值数组）；编辑器读此快照后即使
+    // 原地修改也不会渗透回 metadataCache。
+    return cloneFrontmatter(this.withFrontmatterOverride(file.path, base));
   }
 
   async renameNote(file: TFile, newPath: string, context?: DataWriteContext): Promise<void> {
@@ -433,7 +527,8 @@ export class DataSource {
       if (seedRecordCache) {
         this.recordCache?.set(f.path, {
           file: f,
-          frontmatter: cache?.frontmatter ? cache.frontmatter : {},
+          // 同 toRawRecord：克隆以隔离 Obsidian 的共享 frontmatter 对象。
+          frontmatter: cache?.frontmatter ? cloneFrontmatter(cache.frontmatter) : {},
         });
       }
       const override = this.getViewDefOverride(f.path);
@@ -441,7 +536,9 @@ export class DataSource {
         results.push({ file: f, config: override });
         continue;
       }
-      const fm = cache?.frontmatter;
+      // 权威来源统一：非种子路径优先读 recordCache（提交快照/磁盘对账结果），
+      // metadataCache 只作回退——磁盘恢复后配置不再被旧 metadata 覆盖。
+      const fm = this.recordCache?.get(f.path)?.frontmatter ?? cache?.frontmatter;
       if (!fm || fm["db_view"] !== true) continue;
 
       const config = this.parseDatabaseConfig(fm);
@@ -797,6 +894,57 @@ export class DataSource {
     }
   }
 
+  /**
+   * 从磁盘同一份 view-def frontmatter 同时读取 typed config 与 raw database payload。
+   * rename prepare 必须使用同源快照：typed 用于构建 after，raw 用于后续 CAS，不能把
+   * live/metadata typed config 与另一时刻的 raw payload 拼接。
+   */
+  async readViewDefSnapshot(path: string): Promise<ViewDefSnapshot> {
+    const file = this.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      throw new Error(`readViewDefSnapshot: view-def not found: ${path}`);
+    }
+    const frontmatter = await this.readFrontmatterFromDisk(file);
+    if (frontmatter["db_view"] !== true) {
+      throw new Error(`readViewDefSnapshot: not a view-def file: ${path}`);
+    }
+    const typedConfig = this.parseDatabaseConfig(frontmatter);
+    if (!typedConfig) throw new Error(`readViewDefSnapshot: invalid database config: ${path}`);
+    return {
+      typedConfig: this.cloneDatabaseConfig(typedConfig),
+      rawPayload: cloneFrontmatterValue(frontmatter["database"]),
+    };
+  }
+
+  /** 从磁盘读取 rename 涉及 key 的存在性/值快照；不依赖 metadata cache/overlay。 */
+  async readFrontmatterKeySnapshots(
+    path: string,
+    keys: readonly string[]
+  ): Promise<Record<string, FrontmatterKeySnapshot>> {
+    const file = this.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      throw new Error(`readFrontmatterKeySnapshots: note not found: ${path}`);
+    }
+    const frontmatter = await this.readFrontmatterFromDisk(file);
+    const snapshots: Record<string, FrontmatterKeySnapshot> = {};
+    for (const key of keys) {
+      snapshots[key] = Object.prototype.hasOwnProperty.call(frontmatter, key)
+        ? { exists: true, value: cloneFrontmatterValue(frontmatter[key]) }
+        : { exists: false };
+    }
+    return snapshots;
+  }
+
+  private async readFrontmatterFromDisk(file: TFile): Promise<Record<string, unknown>> {
+    const content = await this.vault.read(file);
+    const match = content.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (!match) return {};
+    const parsed: unknown = parseYaml(match[1]);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  }
+
   private parseConditionalFormats(value: unknown): ConditionalFormatRule[] | undefined {
     if (!Array.isArray(value)) return undefined;
     const operators = new Set(["eq", "neq", "contains", "hasTag", "gt", "lt", "gte", "lte", "empty", "notempty"]);
@@ -992,14 +1140,9 @@ export class DataSource {
     return this.enqueueWrite(file.path, async () => {
       this.rememberViewDefConfig(file.path, dbConfig);
       try {
+        const payload = this.toDatabasePayload(dbConfig);
         await this.app.fileManager.processFrontMatter(file, (fm) => {
-          const f = fm as Record<string, unknown>;
-          f["db_view"] = true;
-          // name is stored inside the database object; avoid a redundant top-level name
-          // that would show up in Obsidian's property panel.
-          delete f["name"];
-          f["database"] = this.toDatabasePayload(dbConfig);
-          for (const key of this.legacyViewKeys()) delete f[key];
+          applyViewDefDatabasePatch(fm as Record<string, unknown>, payload, this.legacyViewKeys());
         });
       } catch (err) {
         this.viewDefOverrides.delete(file.path);
@@ -1007,6 +1150,115 @@ export class DataSource {
       }
       if (mutation) this.notifyViewConfigChanged({ ...mutation, database: dbConfig });
     }, { sourceInstanceId: mutation?.sourceInstanceId });
+  }
+
+  /**
+   * 原子 read-modify-write 笔记 frontmatter（R2-CO-1 writer）。
+   * 在 processFrontMatter 回调（Obsidian 写锁）内：校验涉及 key 仍符合 expect，
+   * 通过则 apply writes（set/delete）；任一不符抛 conflict（回调抛错 → 不落盘）。
+   * resolve = 已落盘；reject（含 conflict）= 该步骤未写入。同 path 经 enqueueWrite 串行。
+   */
+  async patchFrontmatter(
+    path: string,
+    expect: Record<string, FrontmatterKeySnapshot>,
+    writes: Record<string, FrontmatterWrite>,
+    assertWritable?: () => void
+  ): Promise<void> {
+    // 克隆排队参数，避免等待队列期间调用方修改 plan 对象
+    const expectSnapshot: Record<string, FrontmatterKeySnapshot> = {};
+    for (const [k, s] of Object.entries(expect)) {
+      expectSnapshot[k] = s.exists ? { exists: true, value: cloneFrontmatterValue(s.value) } : { exists: false };
+    }
+    const writesSnapshot: Record<string, FrontmatterWrite> = {};
+    for (const [k, op] of Object.entries(writes)) {
+      writesSnapshot[k] = op.kind === "delete" ? { kind: "delete" } : { kind: "set", value: cloneFrontmatterValue(op.value) };
+    }
+    return this.enqueueWrite(path, async () => {
+      // 排队期间文件可能被删除/重命名，进入队列后重新解析 TFile
+      const file = this.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        throw new Error(`patchFrontmatter: note not found: ${path}`);
+      }
+      // 写回调内捕获完成后的独立快照：持久化成功后发布为 recordCache 基础值。
+      let after: Record<string, unknown> | null = null;
+      await this.app.fileManager.processFrontMatter(file, (fm) => {
+        const frontmatter = fm as Record<string, unknown>;
+        assertWritable?.();
+        const verify = verifyFrontmatterExpect(frontmatter, expectSnapshot);
+        if (!verify.ok) {
+          throw new Error(`frontmatter conflict: ${path}: ${verify.key} (${verify.reason})`);
+        }
+        applyFrontmatterWrites(frontmatter, writesSnapshot);
+        after = cloneFrontmatter(frontmatter);
+      });
+      // 写入已成功：post-commit hook 失败不得让 writer reject（否则违反 resolve=已落盘/reject=未写入 契约）。
+      try {
+        if (after) this.publishCommittedSnapshot(path, after);
+        const desired: Record<string, FrontmatterKeySnapshot> = {};
+        for (const [key, op] of Object.entries(writesSnapshot)) {
+          desired[key] = op.kind === "delete" ? { exists: false } : { exists: true, value: op.value };
+        }
+        this.rememberFrontmatterDesired(path, desired);
+      } catch (hookErr) {
+        console.error("Note Database: frontmatter overlay hook failed (already persisted)", hookErr);
+      }
+    }, { assertWritable });
+  }
+
+  /**
+   * 原子 CAS 写 view-def 配置（R2-CO-1 writer，config 并发保护）。
+   * casExpect/casNext 是 raw database payload（与文件 fm.database 比较，不用 toDatabasePayload
+   * 以免补默认值与旧格式误冲突）；typedNext（typed config）用于持久化成功后的 optimistic
+   * override 与 peer notify。resolve = 已落盘；reject = 未写入。同 path 经 enqueueWrite 串行。
+   */
+  async patchViewDefConfig(
+    path: string,
+    casExpect: unknown,
+    casNext: unknown,
+    typedNext?: DatabaseConfig,
+    mutation?: ViewConfigMutation,
+    assertWritable?: () => void
+  ): Promise<void> {
+    // 克隆 raw payload，避免等待队列期间调用方修改
+    const expectPayload = cloneFrontmatterValue(casExpect);
+    const nextPayload = cloneFrontmatterValue(casNext);
+    const typedNextSnapshot = typedNext ? this.cloneDatabaseConfig(typedNext) : undefined;
+    const mutationSnapshot = mutation ? { ...mutation } : undefined;
+    return this.enqueueWrite(path, async () => {
+      const file = this.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        throw new Error(`patchViewDefConfig: view-def not found: ${path}`);
+      }
+      await this.app.fileManager.processFrontMatter(file, (fm) => {
+        const f = fm as Record<string, unknown>;
+        assertWritable?.();
+        if (!configsDeepEqual(f["database"], expectPayload)) {
+          throw new Error(`config conflict: ${path}`);
+        }
+        // 事务 config patch 只改 database：不夹带 db_view/name/legacy 格式迁移，
+        // 否则 commit 删了顶层 name/legacy、compensate 只恢复 database → name/legacy 永久丢失。
+        f["database"] = nextPayload;
+      });
+      // 写入已成功：post-commit hook 失败不得让 writer reject（同 patchFrontmatter）。
+      // 推进写入版本：使在途的磁盘对账读取作废，保护更新中的配置 overlay。
+      this.pathWriteVersions.set(path, (this.pathWriteVersions.get(path) || 0) + 1);
+      if (typedNextSnapshot) {
+        try {
+          // reconcile 必须等待本次实际写入的 raw casNext，而不是从 typed config
+          // 再序列化；补偿旧格式 payload 时二者可能不同。
+          this.rememberViewDefConfig(path, typedNextSnapshot, nextPayload);
+        } catch (hookErr) {
+          console.error("Note Database: view-def override hook failed (already persisted)", hookErr);
+        }
+      }
+      if (typedNextSnapshot && mutationSnapshot) {
+        try {
+          this.notifyViewConfigChanged({ ...mutationSnapshot, database: typedNextSnapshot });
+        } catch (hookErr) {
+          console.error("Note Database: view-def peer notify hook failed (already persisted)", hookErr);
+        }
+      }
+    }, { sourceInstanceId: mutationSnapshot?.sourceInstanceId, assertWritable });
   }
 
   async createViewDefFile(folderPath: string, filename: string, dbConfig: DatabaseConfig): Promise<TFile> {
@@ -1061,6 +1313,12 @@ export class DataSource {
       defaultStatusPresetId: dbConfig.defaultStatusPresetId || "",
       views: dbConfig.views.map((v) => this.toViewPayload(v)),
     };
+  }
+
+  /** 公开纯序列化：typed config → raw database payload（深拷贝，不绑 private toDatabasePayload）。
+   *  R2-CO-1 plan builder 的 deps.serializeConfig 注入此方法生成 casAfter。 */
+  serializeDatabaseConfig(config: DatabaseConfig): unknown {
+    return cloneFrontmatterValue(this.toDatabasePayload(config));
   }
 
   private toViewPayload(view: ViewConfig): Record<string, unknown> {
@@ -1579,7 +1837,10 @@ export class DataSource {
     const cache = this.metadataCache.getFileCache(file);
     return {
       file,
-      frontmatter: cache?.frontmatter ? cache.frontmatter : {},
+      // 必须克隆：Obsidian metadataCache 对内容相同的文件返回同一个共享 frontmatter
+      // 对象（multi-select 值数组同样共享）。直接持有引用会让任何下游原地修改污染
+      // Obsidian 缓存本身——共享该对象的其他文件渲染出脏值且任何刷新都无法恢复。
+      frontmatter: cache?.frontmatter ? cloneFrontmatter(cache.frontmatter) : {},
     };
   }
 
@@ -1593,13 +1854,20 @@ export class DataSource {
     return Array.from(this.recordCache.values(), (record) => this.applyFrontmatterOverride(record));
   }
 
-  private refreshCachedRecord(file: unknown): void {
+  private refreshCachedRecord(file: unknown, previousFrontmatter?: Record<string, unknown>): void {
     if (!this.recordCache || !(file instanceof TFile)) return;
     if (file.extension !== "md") {
       this.recordCache.delete(file.path);
       return;
     }
-    this.recordCache.set(file.path, this.toRawRecord(file));
+    // metadataCache 未就绪有两种形态：getFileCache → null，或返回缓存对象但
+    // frontmatter === undefined。两者都交给 resolveRenamedRecordCache 统一决策：
+    // rename 场景传入旧路径记录（内容未变，即权威值）立即迁移，消除首帧清空；
+    // 未就绪一律安排 modifyRecheck 磁盘重读兜底（权威事件先到会取消）。
+    const cache = this.metadataCache.getFileCache(file);
+    const resolution = resolveRenamedRecordCache(cache?.frontmatter, previousFrontmatter);
+    this.recordCache.set(file.path, { file, frontmatter: cloneFrontmatter(resolution.frontmatter ?? {}) });
+    if (resolution.needsRecheck) this.scheduleModifyRecheck(file);
   }
 
   /**
@@ -1610,45 +1878,125 @@ export class DataSource {
    */
   private scheduleModifyRecheck(file: unknown): void {
     if (!(file instanceof TFile) || file.extension !== "md") return;
-    this.cancelModifyRecheck(file.path);
-    const timer = window.setTimeout(() => {
-      this.modifyRecheckTimers.delete(file.path);
-      void this.reconcileModifiedRecordFromDisk(file);
-    }, 500);
-    this.modifyRecheckTimers.set(file.path, timer);
+    this.reconcileScheduler.schedule(file.path);
   }
 
-  private cancelModifyRecheck(path: string): void {
-    const timer = this.modifyRecheckTimers.get(path);
-    if (timer === undefined) return;
-    window.clearTimeout(timer);
-    this.modifyRecheckTimers.delete(path);
+  /**
+   * 有效来源范围的候选笔记路径。不按 sourceRules 过滤——规则依赖属性值，
+   * 不能用可能过期的缓存筛选"需要刷新哪些文件"，否则会漏掉刚进入来源范围的笔记。
+   */
+  getSourceCandidatePaths(db: DatabaseConfig): string[] {
+    const folder = this.normalizeVaultFolder(db.sourceFolder || "");
+    const prefix = folder ? (folder.endsWith("/") ? folder : `${folder}/`) : "";
+    return this.vault.getMarkdownFiles()
+      .filter((file) => !prefix || file.path.startsWith(prefix))
+      .map((file) => file.path);
   }
 
-  private async reconcileModifiedRecordFromDisk(file: TFile): Promise<void> {
-    try {
-      const content = await this.vault.read(file);
-      const match = content.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-      let frontmatter: Record<string, unknown> = {};
-      if (match) {
-        const parsed: unknown = parseYaml(match[1]);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          frontmatter = parsed as Record<string, unknown>;
-        }
-      }
-      if (this.recordCache) this.recordCache.set(file.path, { file, frontmatter });
-      this.frontmatterOverrides.delete(file.path);
-      this.viewDefOverrides.delete(file.path);
-      // This path only runs when the authoritative metadata event did not
-      // arrive. Treat the recovery conservatively as external without
-      // consuming ownership credits reserved for real Obsidian events.
-      this.queuePendingChange({
-        kind: "changed",
-        path: file.path,
-        origin: "external",
-      });
-    } catch (error) {
-      console.warn("Note Database: failed to reconcile modified record", file.path, error);
+  /**
+   * 手动刷新的统一恢复入口：批量从磁盘对账给定路径（有界并发、去重），
+   * 返回成功数与失败路径。与后台调度互不干扰（各路径仍经串行队列）。
+   */
+  async reconcilePathsFromDisk(
+    paths: Iterable<string>,
+    opts: { concurrency?: number; onProgress?: (done: number, total: number) => void } = {}
+  ): Promise<{ succeeded: number; failed: string[] }> {
+    const valid: string[] = [];
+    const seen = new Set<string>();
+    for (const path of paths) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const file = this.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile && file.extension === "md") valid.push(path);
+    }
+    // 手动刷新是新的磁盘证据：清除失败门控，被兜底暂停的路径重新对账。
+    for (const path of paths) this.reconcileFailedPaths.delete(path);
+    // 缓存为空（手动刷新先 invalidate）时先从 metadata 全量种子：磁盘快照发布到
+    // 非空缓存才会被保存；种子保证"读取成功=恢复成功"，且其他记录不缺失、
+    // 候选路径的磁盘真值随后覆盖对应条目。
+    if (!this.recordCache) this.getCachedRecords();
+    return runBoundedReconcilePool(valid, (path) => this.runDiskReconcile(path), opts);
+  }
+
+  /**
+   * 执行一次磁盘对账（由 ReconcileScheduler 调度）。返回 true=已发布（含文件
+   * 无效的静默放弃），false=应按退避重试（stale 或异常）。解析失败 throw 由
+   * 调度器记录并计入退避——保留原缓存，绝不当作空 frontmatter。
+   */
+  private async runDiskReconcile(path: string): Promise<boolean> {
+    // publishSnapshot 只写非空缓存：后台触发（overlay 过期/modify）时缓存可能尚未
+    // 种子。先确保存在，否则磁盘读取结果会被整体丢弃。
+    if (!this.recordCache) this.getCachedRecords();
+    // 非 Markdown（附件等）不读全文；调度侧已过滤，这里是执行侧的第二道闸。
+    const file = this.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md") return true;
+    // 生命周期与身份必须在【入队前】捕获：排队期间卸载/删除重建时，任务开始执行才
+    // 捕获会拿到卸载后的新 epoch/新实例而通过校验。epoch 可能复用，dataSourceDestroyed
+    // 永久；同路径重建用 TFile 实例 + 路径代数双重识别。
+    const scopeEpoch = this.reconcileEpoch;
+    const scopeGeneration = this.pathGenerations.get(path) || 0;
+    const scopeFile: TFile = file;
+    const deps = this.diskReconcileDeps(scopeFile, scopeEpoch, scopeGeneration);
+    let outcome: DiskReconcileOutcome | undefined;
+    // 与同路径插件写入串行（PathTaskQueue），读取不标记 ownership。
+    await this.enqueueReadTask(path, async () => {
+      outcome = await runDiskReconcileTask(deps, path);
+    });
+    return outcome?.outcome !== "stale";
+  }
+
+  private diskReconcileDeps(scopeFile: TFile, scopeEpoch: number, scopeGeneration: number): DiskReconcileTaskDeps {
+    return {
+      // 三重校验：未卸载（永久标志）+ epoch 未推进 + 路径代数未推进（删除/重建/改名）。
+      isScopeValid: () =>
+        !this.dataSourceDestroyed &&
+        this.reconcileEpoch === scopeEpoch &&
+        (this.pathGenerations.get(scopeFile.path) || 0) === scopeGeneration,
+      readFile: (p) => this.vault.adapter.read(p),
+      parse: (content) => parseDiskFrontmatter(content, parseYaml),
+      clone: (frontmatter) => cloneFrontmatter(frontmatter),
+      // 文件身份 = TFile 实例同一性：删除后同路径重建（即使 mtime/size 巧合相同）
+      // 会产生新实例，读取基于旧实例的发布权限随之失效。mtime+size 保留作辅助检查。
+      isFileValid: (p) => this.vault.getAbstractFileByPath(p) === scopeFile,
+      // 外部修改不推进插件写入版本：以文件 mtime 为外部变更代数，读前读后比较，
+      // 读取期间落地的外部写入同样使本次读取作废（同 stale 处理）。
+      getFileStamp: (p) => {
+        const file = this.vault.getAbstractFileByPath(p);
+        return file instanceof TFile ? `${file.stat?.mtime ?? 0}:${file.stat?.size ?? 0}` : undefined;
+      },
+      getWriteVersion: (p) => this.pathWriteVersions.get(p) || 0,
+      getFrontmatterOverlay: (p) => this.frontmatterOverrides.get(p)?.values ?? null,
+      getViewDefRawPayload: (p) => this.viewDefOverrides.get(p)?.rawPayload,
+      publishSnapshot: (p, frontmatter) => {
+        if (!this.recordCache) return;
+        const file = this.vault.getAbstractFileByPath(p);
+        if (file instanceof TFile) this.recordCache.set(p, { file, frontmatter });
+      },
+      clearFrontmatterOverlay: (p) => this.frontmatterOverrides.delete(p),
+      clearViewDefOverlay: (p) => this.viewDefOverrides.delete(p),
+      notifyRecovered: (p) => {
+        // 恢复路径不消费为真实 Obsidian 事件保留的 ownership credits：保守按外部处理。
+        this.queuePendingChange({ kind: "changed", path: p, origin: "external" });
+      },
+    };
+  }
+
+  private bumpPathGeneration(path: string): void {
+    this.pathGenerations.set(path, (this.pathGenerations.get(path) || 0) + 1);
+  }
+
+  /**
+   * 写入成功后发布基础快照：recordCache 立即持有落盘后的真值（无差异写入同样修复
+   * 旧缓存），并推进写入版本使在途的磁盘读取作废。overlay 照常记录以覆盖 metadata
+   * 尚未接管的窗口；后到旧 metadata 事件即便覆盖缓存基底，读取端 overlay 合并 +
+   * 过期触发的磁盘对账仍能收敛到正确值。
+   */
+  private publishCommittedSnapshot(path: string, after: Record<string, unknown>): void {
+    this.pathWriteVersions.set(path, (this.pathWriteVersions.get(path) || 0) + 1);
+    if (!this.recordCache) return;
+    const file = this.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      this.recordCache.set(path, { file, frontmatter: cloneFrontmatter(after) });
     }
   }
 
@@ -1657,26 +2005,24 @@ export class DataSource {
     if (!override) return record;
     return {
       file: record.file,
-      frontmatter: this.mergeFrontmatterOverride(record.frontmatter, override.values),
+      frontmatter: mergeFrontmatterDesired(record.frontmatter, override.values),
     };
   }
 
-  private rememberFrontmatterUpdates(path: string, updates: Record<string, unknown>): void {
+  /**
+   * 记录 frontmatter 期望存在性快照（optimistic overlay 核心）。
+   * 用 exists/value（而非 null=delete），可精确表达「key 存在且值为 null」。
+   * metadata cache 追平后自动清理已一致 key；全部追平则删 override。
+   */
+  private rememberFrontmatterDesired(path: string, desired: Record<string, FrontmatterKeySnapshot>): void {
     this.cleanupFrontmatterOverrides();
     const existing = this.frontmatterOverrides.get(path)?.values || {};
-    const combined = { ...existing, ...updates };
+    const combined: Record<string, FrontmatterKeySnapshot> = { ...existing, ...desired };
     const file = this.vault.getAbstractFileByPath(path);
     const cached = file instanceof TFile
       ? this.metadataCache.getFileCache(file)?.frontmatter || {}
       : {};
-    const pending: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(combined)) {
-      const cachedHas = Object.prototype.hasOwnProperty.call(cached, key);
-      const caughtUp = value === null
-        ? !cachedHas
-        : cachedHas && this.valuesEqual(cached[key], value);
-      if (!caughtUp) pending[key] = value;
-    }
+    const pending = reconcileFrontmatterDesired(combined, cached);
     if (Object.keys(pending).length === 0) {
       this.frontmatterOverrides.delete(path);
       return;
@@ -1687,88 +2033,71 @@ export class DataSource {
     });
   }
 
-  private diffFrontmatter(
-    before: Record<string, unknown>,
-    after: Record<string, unknown>
-  ): Record<string, unknown> {
-    // Track only changed top-level keys so metadata overlays mirror Obsidian's frontmatter shape.
-    const updates: Record<string, unknown> = {};
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const key of keys) {
-      const beforeHas = Object.prototype.hasOwnProperty.call(before, key);
-      const afterHas = Object.prototype.hasOwnProperty.call(after, key);
-      if (!afterHas) {
-        if (beforeHas) updates[key] = null;
-        continue;
-      }
-      if (!beforeHas || !this.valuesEqual(before[key], after[key])) {
-        updates[key] = this.cloneFrontmatterValue(after[key]);
-      }
+  /** 普通 mutateFrontmatter 入口：updates 为 diffFrontmatter 结果（null=delete），转存在性后记忆。 */
+  private rememberFrontmatterUpdates(path: string, updates: Record<string, unknown>): void {
+    const desired: Record<string, FrontmatterKeySnapshot> = {};
+    for (const [key, val] of Object.entries(updates)) {
+      desired[key] = val === null ? { exists: false } : { exists: true, value: val };
     }
-    return updates;
-  }
-
-  private cloneFrontmatter(frontmatter: Record<string, unknown>): Record<string, unknown> {
-    // Snapshot before mutation so in-place array/object edits can still be compared reliably.
-    const clone: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(frontmatter)) {
-      clone[key] = this.cloneFrontmatterValue(value);
-    }
-    return clone;
-  }
-
-  private cloneFrontmatterValue(value: unknown): unknown {
-    // Frontmatter values are YAML-compatible; JSON cloning is enough for nested arrays/objects here.
-    if (Array.isArray(value)) return value.map((entry) => this.cloneFrontmatterValue(entry));
-    if (value && typeof value === "object") {
-      const serialized = JSON.stringify(value);
-      return serialized == null ? value : JSON.parse(serialized);
-    }
-    return value;
-  }
-
-  private valuesEqual(a: unknown, b: unknown): boolean {
-    // Normalize nullish scalars while comparing structured values by content.
-    if (Array.isArray(a) || Array.isArray(b) || (a && typeof a === "object") || (b && typeof b === "object")) {
-      return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-    }
-    return (a ?? null) === (b ?? null);
+    this.rememberFrontmatterDesired(path, desired);
   }
 
   private withFrontmatterOverride(path: string, frontmatter: Record<string, unknown>): Record<string, unknown> {
     this.cleanupFrontmatterOverrides();
     const override = this.frontmatterOverrides.get(path);
     if (!override) return frontmatter;
-    return this.mergeFrontmatterOverride(frontmatter, override.values);
-  }
-
-  private mergeFrontmatterOverride(
-    frontmatter: Record<string, unknown>,
-    values: Record<string, unknown>
-  ): Record<string, unknown> {
-    const merged = { ...frontmatter };
-    for (const [key, value] of Object.entries(values)) {
-      if (value === null) delete merged[key];
-      else merged[key] = value;
-    }
-    return merged;
+    return mergeFrontmatterDesired(frontmatter, override.values);
   }
 
   private cleanupFrontmatterOverrides(): void {
     const now = Date.now();
     for (const [path, override] of this.frontmatterOverrides) {
-      if (override.expiresAt <= now) this.frontmatterOverrides.delete(path);
+      if (override.expiresAt > now) continue;
+      // 确认交接后才撤保护：过期只调度磁盘对账，overlay 保留到任务发布磁盘真相时
+      // 由任务清除。恢复最终失败时【不按时间撤保护】：基础缓存可能已被旧 metadata
+      // 覆盖，撤掉 overlay 会露出旧值——保留最后确认快照（写入时已发布）与 overlay，
+      // 告警一次；新的磁盘证据（modify/metadata 重置失败门控）或手动刷新到来再交接。
+      if (!this.reconcileFailedPaths.has(path)) {
+        if (!this.overlayExpiryWarned.has(path)) {
+          this.overlayExpiryWarned.add(path);
+          console.error(`Note Database: frontmatter overlay awaiting disk hand-off for ${path}`);
+        }
+        this.reconcileScheduler.schedule(path);
+      }
     }
   }
 
-  private rememberViewDefConfig(path: string, config: DatabaseConfig): void {
+  private rememberViewDefConfig(path: string, config: DatabaseConfig, rawPayload?: unknown): void {
     this.cleanupViewDefOverrides();
     const cloned = this.cloneDatabaseConfig(config);
     linkDatabaseSchema(cloned);
     this.viewDefOverrides.set(path, {
       config: cloned,
+      // 同时存 raw payload：metadata 事件只有 cache.database 追上 rawPayload 才删 override
+      rawPayload: cloneFrontmatterValue(rawPayload === undefined ? this.toDatabasePayload(config) : rawPayload),
       expiresAt: Date.now() + 10000,
     });
+  }
+
+  /** metadata cache 追平 frontmatter 期望状态时移除对应 key，否则保留（避免误删较新 overlay）。 */
+  private reconcileFrontmatterOverride(file: TFile): void {
+    const override = this.frontmatterOverrides.get(file.path);
+    if (!override) return;
+    const cached = this.metadataCache.getFileCache(file)?.frontmatter || {};
+    const remaining = reconcileFrontmatterDesired(override.values, cached);
+    if (Object.keys(remaining).length === 0) this.frontmatterOverrides.delete(file.path);
+    else this.frontmatterOverrides.set(file.path, { values: remaining, expiresAt: override.expiresAt });
+  }
+
+  /** view-def override：cache.database 与记录的 rawPayload 一致才删（否则保留）。 */
+  private reconcileViewDefOverride(file: TFile): void {
+    const override = this.viewDefOverrides.get(file.path);
+    if (!override) return;
+    const cachedFrontmatter = this.metadataCache.getFileCache(file)?.frontmatter;
+    const cachedPayload: unknown = cachedFrontmatter ? cachedFrontmatter["database"] : undefined;
+    if (configsDeepEqual(cachedPayload, override.rawPayload)) {
+      this.viewDefOverrides.delete(file.path);
+    }
   }
 
   private getViewDefOverride(path: string): DatabaseConfig | null {
@@ -1783,7 +2112,16 @@ export class DataSource {
   private cleanupViewDefOverrides(): void {
     const now = Date.now();
     for (const [path, override] of this.viewDefOverrides) {
-      if (override.expiresAt <= now) this.viewDefOverrides.delete(path);
+      if (override.expiresAt > now) continue;
+      // 同 frontmatter overlay：确认交接后才撤保护；最终失败保留 overlay 与最后确认
+      // 快照，等待新磁盘证据（失败门控重置）再交接，不按时间丢弃。
+      if (!this.reconcileFailedPaths.has(path)) {
+        if (!this.overlayExpiryWarned.has(path)) {
+          this.overlayExpiryWarned.add(path);
+          console.error(`Note Database: view-def overlay awaiting disk hand-off for ${path}`);
+        }
+        this.reconcileScheduler.schedule(path);
+      }
     }
   }
 

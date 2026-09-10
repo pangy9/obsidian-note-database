@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import { TFile, type App } from "obsidian";
 import { evaluateComputedFields } from "./ComputedEvaluator";
 import { getRowFileFieldValue, isFileFieldKey } from "./FileFields";
 import { parseRelationValues } from "./RelationLinks";
@@ -145,11 +145,21 @@ function getTargetFieldValue(
     }, targetField);
   }
   if (column?.type === "computed") {
+    const thisFile = database.baseThisFilePath
+      ? app.vault.getAbstractFileByPath(database.baseThisFilePath)
+      : null;
     const computed = evaluateComputedFields(
       database.schema.computedFields,
       database.schema.columns,
       record.frontmatter,
-      { app, file: record.file }
+      {
+        app,
+        file: record.file,
+        thisFile: thisFile instanceof TFile ? thisFile : undefined,
+        thisFrontmatter: thisFile instanceof TFile
+          ? app.metadataCache.getFileCache(thisFile)?.frontmatter
+          : undefined,
+      }
     );
     return computed[column.computedKey || column.key];
   }

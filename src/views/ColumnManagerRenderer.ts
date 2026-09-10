@@ -8,6 +8,7 @@ import { getPropertyDropdownIcon, renderPropertyTypeIcon } from "./PropertyTypeI
 import { DatabaseViewState } from "./ViewStateStore";
 import { isHTMLElement } from "./DomGuards";
 import { openDropdownMenu } from "./DropdownField";
+import { replaceToolbarBadge } from "./ToolbarBadge";
 
 export interface ColumnManagerActions {
   close(): void;
@@ -278,12 +279,9 @@ export class ColumnManagerRenderer {
 
   private updateToolbarButton(containerEl: HTMLElement, state: DatabaseViewState, columns: ColumnDef[]): void {
     const colBtn = containerEl.querySelector(".db-col-manager-btn");
-    if (colBtn) {
-      colBtn.querySelector(".db-toolbar-badge")?.remove();
-      if (colBtn.instanceOf(HTMLElement)) {
-        const visibleCount = Math.max(0, columns.length - state.hiddenColumns.size);
-        if (visibleCount > 0) colBtn.createSpan({ cls: "db-toolbar-badge", text: String(visibleCount) });
-      }
+    if (colBtn?.instanceOf(HTMLElement)) {
+      const visibleCount = Math.max(0, columns.length - state.hiddenColumns.size);
+      replaceToolbarBadge(colBtn, "db-toolbar-badge", visibleCount > 0 ? String(visibleCount) : undefined);
     }
   }
 

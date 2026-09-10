@@ -1,4 +1,5 @@
 import { App, Modal, Notice } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { ColumnDef } from "../../data/types";
 import { t } from "../../i18n";
 
@@ -14,6 +15,7 @@ export class CreateRecordIconFieldModal extends Modal {
     const suggested = conflict ? "record_icon" : "icon";
     this.contentEl.empty();
     this.contentEl.createEl("h3", { text: t("recordIcon.createField") });
+    makeModalDraggable(this);
     const keyInput = this.createInput(t("modal.propertyKey"), suggested);
     const labelInput = this.createInput(t("modal.displayName"), suggested);
     if (conflict) this.contentEl.createDiv({ cls: "setting-item-description", text: t("recordIcon.iconKeyConflict") });

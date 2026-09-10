@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { makeModalDraggable } from "./ModalDrag";
 import { ComputedFrontmatterCleanupOption } from "../../data/ComputedCleanup";
 import { applyRangeSelection } from "../../data/RangeSelection";
 import { t } from "../../i18n";
@@ -21,6 +22,7 @@ export class ComputedFrontmatterCleanupModal extends Modal {
     contentEl.empty();
     contentEl.addClass("note-database-modal");
     contentEl.createEl("h3", { text: t("viewConfig.computedCleanup.title") });
+    makeModalDraggable(this);
     contentEl.createDiv({ cls: "db-modal-help", text: t("viewConfig.computedCleanup.desc") });
 
     const list = contentEl.createDiv({ cls: "db-computed-cleanup-list" });

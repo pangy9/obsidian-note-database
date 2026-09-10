@@ -1584,7 +1584,7 @@ export function scalarizeBaseExpressionValue(value: unknown): unknown {
     return value.valueOf();
   }
   if (isBaseLinkValue(value)) {
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- BaseLinkValue carries an explicit toString that returns the link display text.
     return String(value);
   }
   console.warn("Note Database: unsupported object type returned by Bases formula, treating as null");

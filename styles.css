@@ -14359,12 +14359,13 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   isolation: isolate;
 }
 
+/* 条件格式 / Event color 的 inline --db-calendar-event-bg/-accent 与 timed 条同构地
+   进入渐变与左边框（含 is-clipped 伪元素渐隐）；无颜色时兜底即原 muted 全天条外观。 */
 .note-database-container .db-timeline-event.is-all-day {
-  --db-timeline-event-background-image: linear-gradient(color-mix(in srgb, var(--background-modifier-hover) 70%, transparent), color-mix(in srgb, var(--background-modifier-hover) 70%, transparent));
-  --db-calendar-event-accent: var(--text-muted);
+  --db-timeline-event-background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--background-modifier-hover) 70%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--background-modifier-hover) 70%, transparent)));
   background-color: var(--background-primary);
   background-image: var(--db-timeline-event-background-image);
-  border-left: 2px solid var(--text-faint);
+  border-left: 2px solid var(--db-calendar-event-accent, var(--text-faint));
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
@@ -14911,7 +14912,7 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 }
 
 .note-database-container .db-timeline-event.is-all-day {
-  --db-timeline-event-background-image: linear-gradient(color-mix(in srgb, var(--background-modifier-hover) 70%, transparent), color-mix(in srgb, var(--background-modifier-hover) 70%, transparent));
+  --db-timeline-event-background-image: linear-gradient(var(--db-calendar-event-bg, color-mix(in srgb, var(--background-modifier-hover) 70%, transparent)), var(--db-calendar-event-bg, color-mix(in srgb, var(--background-modifier-hover) 70%, transparent)));
 }
 
 .note-database-container .db-timeline-event.is-dragging {

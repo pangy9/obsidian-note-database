@@ -15554,16 +15554,14 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   position: relative;
 }
 
-.note-database-embed.note-database-container.db-view-table > .db-summary,
-.note-database-embed.note-database-container.has-selection-status > .db-summary {
-  /* The status bar is in normal flow above the summary; do not reserve a second
-   * toolbar-sized blank row when a cell selection opens it. */
-  min-height: 0;
+.note-database-embed.note-database-container.db-view-table > .db-summary {
+  min-height: 18px;
 }
 
 .note-database-embed.note-database-container.has-selection-status > .db-summary {
-  margin-top: 0;
-  margin-bottom: 0;
+  /* The embed status bar takes its own line; collapse the hidden summary so
+   * its text height cannot leave an empty row below the bar. */
+  display: none;
 }
 
 .note-database-embed.note-database-container > .db-selection-status-bar {

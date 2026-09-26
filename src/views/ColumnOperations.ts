@@ -542,6 +542,7 @@ export class ColumnOperations {
     if (config.titleField === key) config.titleField = undefined;
     if (config.recordIconField === key) config.recordIconField = undefined;
     if (config.galleryImageField === key) config.galleryImageField = undefined;
+    config.formRequiredFields = (config.formRequiredFields || []).filter((candidate) => candidate !== key);
     if (config.boardImageField === key) config.boardImageField = undefined;
     if (config.boardGroupField === key) config.boardGroupField = undefined;
     if (config.boardSubgroupField === key) config.boardSubgroupField = undefined;

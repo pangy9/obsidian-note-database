@@ -1,6 +1,6 @@
 import { App, TFile } from "obsidian";
 import { evaluateBaseComputedFields, scalarizeBaseExpressionValue } from "./BaseExpression";
-import { getFileFieldValue } from "./FileFields";
+import { getFileFieldValue } from "./FileFieldObsidian";
 import { ComputedFieldEngine } from "./ComputedField";
 import { ColumnDef, ComputedFieldDef } from "./types";
 

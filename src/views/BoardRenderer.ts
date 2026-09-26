@@ -4,7 +4,8 @@ import { OPTION_REGISTRATION_COLORS } from "../data/OptionRegistration";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateTimeValueDisplay, formatDateValueDisplay } from "../data/DateTimeFormat";
-import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getFileFieldFixedType, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { resolveCoverImage } from "../data/CoverImage";
 import { formatGroupKeyDisplay, isComputedGroupField } from "../data/GroupDisplay";
 import { renderGroupLabel } from "./GroupLabelRenderer";
@@ -13,6 +14,9 @@ import { parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
 import { ColumnDef, CreateEntryPosition, NO_TITLE_FIELD, RowCreateContext, RowData, StatusColor, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { promptMoveToPosition } from "./modals/MoveToPositionModal";
+import { getMovePositionNeighbors } from "../data/MovePosition";
+import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
 import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
@@ -109,6 +113,7 @@ export class BoardRenderer {
   private boardDragPreview: HTMLElement | null = null;
   private boardDragLabelByKey = new Map<string, string>();
   private boundBoardDragOver?: (event: DragEvent) => void;
+  private stopMobileTargetMode?: () => void;
 
   constructor(private app: App, private actions: BoardRendererActions) {}
 
@@ -763,6 +768,41 @@ export class BoardRenderer {
 
     menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").onClick(() => applyOrder(currentGroup, subgroupKey, "top")));
     menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").onClick(() => applyOrder(currentGroup, subgroupKey, "bottom")));
+    const currentIndex = currentRows.findIndex((candidate) => candidate.file.path === row.file.path);
+    menu.addItem((item) => item.setTitle(t("mobile.moveToPosition")).setIcon("list-ordered")
+      .setDisabled(currentIndex < 0 || currentRows.length <= 1).onClick(() => {
+        void promptMoveToPosition(this.app, currentIndex + 1, currentRows.map((candidate) => this.getMobileRowLabel(config, candidate))).then((position) => {
+          if (position == null || position - 1 === currentIndex) return;
+          const neighbors = getMovePositionNeighbors(currentRows.map((candidate) => candidate.file.path), row.file.path, position);
+          if (!neighbors) return;
+          if (neighbors.nextPath) applyOrder(currentGroup, subgroupKey, "before", neighbors.nextPath);
+          else applyOrder(currentGroup, subgroupKey, "bottom");
+        });
+      }));
+    const root = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(".db-board") : null;
+    const canCrossGroup = !isComputedGroupField(config, groupField)
+      && (!subgroupField || !isComputedGroupField(config, subgroupField));
+    const locations = canCrossGroup
+      ? groups.flatMap((group) => subgroupField
+        ? (group.subgroups || []).flatMap((subgroup) => subgroup.rows.map((candidate) => ({ row: candidate, group, subgroupKey: subgroup.key })))
+        : group.rows.map((candidate) => ({ row: candidate, group, subgroupKey: undefined as string | undefined })))
+      : currentRows.map((candidate) => ({ row: candidate, group: currentGroup, subgroupKey }));
+    if (root && currentIndex >= 0 && locations.length > 1) menu.addItem((item) => item.setTitle(t("mobile.chooseTarget"))
+      .setIcon("mouse-pointer-2").onClick(() => {
+        this.stopMobileTargetMode?.();
+        const labels = new Map(locations.map((location) => [location.row.file.path, this.getMobileRowLabel(config, location.row)]));
+        this.stopMobileTargetMode = startMobileRecordTargetMode({
+          root,
+          bannerHost: root.parentElement || root,
+          movedPath: row.file.path,
+          eligiblePaths: new Set(locations.map((location) => location.row.file.path)),
+          labelForPath: (path) => labels.get(path) || path,
+          onPlace: (targetPath, placement) => {
+            const target = locations.find((location) => location.row.file.path === targetPath);
+            if (target) applyOrder(target.group, target.subgroupKey, placement, targetPath);
+          },
+        });
+      }));
     for (const target of currentRows.filter((candidate) => candidate.file.path !== row.file.path)) {
       const label = this.getMobileRowLabel(config, target);
       menu.addItem((item) => item
@@ -1404,6 +1444,8 @@ export class BoardRenderer {
   }
 
   private clear(container: HTMLElement): void {
+    this.stopMobileTargetMode?.();
+    this.stopMobileTargetMode = undefined;
     container.querySelectorAll(".db-board").forEach((el) => el.remove());
     this.detachBoardDropHighlight();
   }

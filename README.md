@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Turn Markdown notes into editable, visual databases inside Obsidian.</strong><br>
-  Same notes. Seven views. Still plain Markdown.
+  Same notes. Eight views. Still plain Markdown.
 </p>
 
 <p align="center">
@@ -23,7 +23,9 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 
 ## Highlights
 
-- **Seven database views:** see the same notes as a table, board, gallery, list, chart, calendar, or timeline.
+- **Eight database views:** see the same notes as a table, board, gallery, list, chart, calendar, timeline, or form.
+- **Forms for local capture:** build a form view with required fields and a cover, or open the same quick-capture form from another view or the command palette. Unsubmitted drafts are kept during the current session.
+- **Database starters:** begin with one of six built-in setups, each with properties and views; optionally add sample notes.
 - **Local Markdown storage:** each database is an ordinary Markdown file with `db_view: true`; records, properties, and relations also stay inside your vault.
 - **Direct property editing:** edit text, numbers, currency, dates, options, statuses, checkboxes, and file names without opening every note; one dialog confirms the display name, property key, and type for new properties.
 - **Spreadsheet-style workflows:** use keyboard navigation, range selection, copy/paste, fill, paste-to-create, bulk editing, and single-step undo.
@@ -34,10 +36,10 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 - **Formulas, Relations, and Rollups:** calculate properties safely, connect notes with Obsidian wikilinks, and derive count, sum, average, or list values.
 - **Native Obsidian links:** use `file.*` metadata and the core Page preview plugin for record titles, Relations, and internal links inside text.
 - **Date planning:** drag and resize date or time ranges in month/week/day calendars and day/week/month/quarter timelines.
-- **Embedding and portability:** place read-only database views in notes, copy or export data, and convert Obsidian `.base` files.
+- **Embedding and portability:** place database views in notes (read-only by default, with optional editing), resize the embedded block, copy or export data, and convert Obsidian `.base` files.
 - **Local and private:** no cloud data copy and no external transmission of vault content, metadata, formulas, or settings.
 
-## Seven views, one vault
+## Eight views, one vault
 
 | Table | Board |
 | --- | --- |
@@ -54,6 +56,11 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 | ![Chart view](assets/screenshots/chart-view.png) | ![Timeline view](assets/screenshots/timeline-view.png) |
 | Turn the current filtered result into charts, summaries, drilldowns, and PNG exports. | Plan across day, week, month, or quarter scales; drag and resize date ranges. |
 
+| Form |
+| --- |
+| ![Form view with half-page cover and required fields](assets/screenshots/en-1.3.0-form-view.png) |
+| Capture a new note with field-aware controls, source-rule defaults, required fields, and a banner, half-page, or wallpaper cover. |
+
 | Calendar month | Calendar week |
 | --- | --- |
 | ![Calendar month view](assets/screenshots/calendar-view-month.png) | ![Calendar week view](assets/screenshots/calendar-view-week.png) |
@@ -61,17 +68,25 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 
 Each view keeps its own filters, sorting, grouping, visible properties, title property, and layout—without duplicating the notes.
 
-## New in 1.2.9
+## New in 1.3.0
 
-- **More reliable editing and refresh:** fixes values appearing on unrelated grouped rows, lost formatting after note renames, and stale properties after refresh. Manual refresh rereads data from disk.
-- **Undoable property renames:** updates formulas and cross-database Rollup references. Failed writes trigger rollback attempts, with explicit reporting of concurrent conflicts.
-- **Unified automatic formula saving:** automatic mode is scheduled by the plugin, without requiring an open Dashboard, including when using embedded views alone.
-- **Clearer Relation states:** marks missing and out-of-scope references. Existing out-of-scope notes still support opening and preview, with an explanatory notice.
-- **Improved Base import:** choose a file, search and sort properties, and preserve display names. Select which formula columns to import as computed fields or text. Text reads the matching note property without writing formula results.
-- **Smoother dialogs:** drag desktop dialogs using the grip beside the title. Improved text copying in dialogs and popovers, title editing, and formula suggestions on narrow screens.
-- **Mobile compatibility:** fixes iPad toolbar icons, badges, embedded collapse arrows, and phone cell-editor positioning.
+- **Form view and quick capture:** make a dedicated form view or open a capture dialog from another view. Field controls follow property types; source rules and optional form settings determine required fields. Drafts survive view changes during the current session.
+- **Six database starters:** Project tracker, Content calendar, Reading and media library, Research library, Lightweight CRM, and Task planner. Choose whether to include sample notes; presets, views, icons, and cover artwork come with the starter.
+- **Editable embeds when enabled:** embedded databases remain read-only by default. Turn off the read-only setting to edit records in a note, and drag the lower edge to set the embed height.
+- **Record templates on creation:** apply a Markdown, Obsidian Templates, or Templater file when creating records through supported entry points.
+- **Faster property and mobile workflows:** edit a property's type and text/number display style in its dialog; use larger mobile sort controls and choose where to insert a record.
 
 ## Feature tour
+
+| Quick-capture dialog | Database starters |
+| --- | --- |
+| ![Quick capture dialog](assets/screenshots/en-1.3.0-quick-form.png) | ![Built-in database starter picker](assets/screenshots/en-1.3.0-starters.png) |
+| Open a form without leaving the current view. A failed submission keeps the entered values. | Start with a workflow, its properties and views, and optional sample notes; then customize everything in your vault. |
+
+| Editable embed | Adjustable embed height |
+| --- | --- |
+| ![Editing a selected range in an embedded database](assets/screenshots/en-1.3.0-editable-embed.png) | ![Embedded database height grip](assets/screenshots/en-1.3.0-embed-height.png) |
+| Embeds stay read-only by default. Enable editing in plugin settings to change records directly inside a note. | Drag the lower edge of an embedded database to give the view more or less room. |
 
 | Faster filter and sort controls |
 | --- |
@@ -152,7 +167,7 @@ Calendar supports month, week, and day. Timeline supports day, week, month, and 
 | ![A database view embedded in a note](assets/screenshots/en-embed-view.png) | ![A compact headerless embedded view](assets/screenshots/en-embed-headerless.png) |
 | Paste a generated `note-database` block into any note. | Hide the database header when the surrounding note already provides context. |
 
-Embedded records stay read-only, while view switching, filters, sorting, grouping, computed values, and copy/export tools remain available. If a database explicitly enables automatic formula-result storage, that database-level background task still runs while the database is shown in an embedded view.
+Embedded databases are read-only by default. Disable **Read-only embedded databases** in plugin settings to allow editing in notes; form embeds can submit records only in this mode. Drag the lower edge to resize an embed. View switching, filters, sorting, grouping, computed values, and copy/export tools remain available in read-only mode. If a database explicitly enables automatic formula-result storage, that database-level background task still runs while the database is shown in an embedded view.
 
 ## Markdown remains the source of truth
 
@@ -161,15 +176,15 @@ Embedded records stay read-only, while view switching, filters, sorting, groupin
 | Database | A normal Markdown file with `db_view: true` |
 | Records and property values | Markdown notes and their frontmatter |
 | Relations | Obsidian wikilinks in frontmatter |
-| Templates | Existing Obsidian Templates or Templater files |
+| Record templates | Markdown, Obsidian Templates, or Templater files |
 | Views | Saved configuration in the database file |
 
-Create records from source rules, groups, subgroups, or row insertion. Apply templates at creation. Export CSV + Markdown ZIP, copy CSV/Markdown tables, or convert an Obsidian `.base` file.
+Create records from source rules, groups, subgroups, row insertion, or a form. Apply record templates at creation. Export CSV + Markdown ZIP, copy CSV/Markdown tables, or convert an Obsidian `.base` file.
 
 ## Start in three steps
 
 1. Install and enable Note Database, then open the dashboard from the ribbon or command palette.
-2. Create a database and choose a folder or source rules for its notes.
+2. Create a blank database or choose a built-in starter, then set its folder or source rules.
 3. Add properties and views. Edits write back to the original Markdown files.
 
 ![](assets/screenshots/en-create-dataset.png)

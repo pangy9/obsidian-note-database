@@ -1,8 +1,14 @@
-import { normalizePath } from "obsidian";
 import { isDateLikeColumnType } from "./DateTimeFormat";
 import { getBaseFileFieldType, isBaseFileField } from "./FileFields";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleExpression, SourceRuleGroup, SourceRuleNode, SourceRuleNot, SourceRuleOperator, SourceRuleValueType } from "./types";
+
+/** 与 Obsidian normalizePath 等价的本地实现（合并连续斜杠、去首尾斜杠、空串回 "/"）：
+ *  仅用于 linkTargetsEqual 的双侧同函数比较，保持本模块 obsidian-free 以便 vitest 直测。 */
+function normalizeLinkPath(path: string): string {
+  const normalized = path.replace(/([\\/])+/g, "/").replace(/^\/+|\/+$/g, "");
+  return normalized === "" ? "/" : normalized;
+}
 
 const SOURCE_RULE_OPERATORS = new Set<SourceRuleOperator>([
   "inFolder",
@@ -361,7 +367,7 @@ function getComparableLinkTarget(value: unknown): string | undefined {
 }
 
 function linkTargetsEqual(left: string, right: string): boolean {
-  const normalizeTarget = (value: string) => normalizePath(value.split("#", 1)[0]).replace(/\.md$/i, "");
+  const normalizeTarget = (value: string) => normalizeLinkPath(value.split("#", 1)[0]).replace(/\.md$/i, "");
   return normalizeTarget(left) === normalizeTarget(right);
 }
 

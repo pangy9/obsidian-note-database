@@ -5,6 +5,7 @@ import { ColumnDef, StatusColor, StatusOptionDef, StatusPresetDef } from "../../
 import { t } from "../../i18n";
 import { confirmWithModal } from "./ConfirmModal";
 import { isHTMLElement } from "../DomGuards";
+import { renderMobileOptionMoveControls } from "../MobileOptionReorder";
 
 export interface StatusOptionsSaveResult {
   options: StatusOptionDef[];
@@ -211,19 +212,8 @@ export class StatusOptionsModal extends Modal {
       };
       drag.ondragend = () => this.finishDrag();
       drag.title = t("panel.dragToSort");
-      const moveControls = row.createSpan({ cls: "db-mobile-reorder-controls db-status-option-mobile-controls" });
-      const upBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
-      });
-      setIcon(upBtn, "arrow-up");
-      upBtn.disabled = index === 0;
-      upBtn.onclick = () => this.moveOption(index, index - 1);
-      const downBtn = moveControls.createEl("button", {
-        attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
-      });
-      setIcon(downBtn, "arrow-down");
-      downBtn.disabled = index >= this.options.length - 1;
-      downBtn.onclick = () => this.moveOption(index, index + 1);
+      renderMobileOptionMoveControls(row, index, this.options.length, (target) => this.moveOption(index, target))
+        .addClass("db-status-option-mobile-controls");
       row.createSpan({
         cls: `db-status-option-preview status-badge status-color-${option.color}`,
         text: option.value || t("modal.untitled"),

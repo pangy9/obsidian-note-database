@@ -1,4 +1,5 @@
 import { DatabaseConfig, SourceRule, SourceRuleNode, StatusPresetDef } from "./types";
+import type { StarterTemplateId } from "./DatabaseStarterTemplates";
 
 /** Globals collected by the new-database modal. The creation flow applies these to the
  *  freshly built DatabaseConfig via `applyAddDatabaseResult`. Source rules, new-record
@@ -16,6 +17,10 @@ export interface AddDatabaseModalResult {
   statusPresets?: StatusPresetDef[];
   /** Default status preset id. `undefined` = inherit the global default. */
   defaultStatusPresetId?: string;
+  starterTemplateId?: StarterTemplateId;
+  includeStarterSamples?: boolean;
+  /** The modal's generated folder should be recomputed from the final unique database name. */
+  starterSourceFolderAuto?: boolean;
 }
 
 /** Apply the modal's collected globals onto a freshly built DatabaseConfig. Called by

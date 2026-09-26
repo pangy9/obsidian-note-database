@@ -226,6 +226,8 @@ export interface ViewConfigPanelActions {
   onDefaultStatusPresetChange?(presetId: string): void;
   onManageStatusPresets?(): void;
   viewStatusPresets?: StatusPresetDef[];
+  /** 表单视图：来源规则必填的列键（勾选列表展示为禁用态「由来源规则必填」）。 */
+  getFormRequiredFromRules?(): Set<string>;
   defaultViewStatusPresetId?: string;
   viewStatusPresetHelpText?: string;
   managedViewStatusPresetCount?: number;
@@ -265,8 +267,14 @@ export class ViewConfigPanelRenderer {
     if (["table", "board", "gallery", "list", "calendar", "timeline"].includes(config.viewType || "table") && actions.database) {
       this.renderRecordIconSettings(panel, actions.database, config, actions);
     }
-    if (config.viewType !== "chart" && actions.database) {
+    if (config.viewType !== "chart" && config.viewType !== "form" && actions.database) {
       this.renderConditionalFormatting(panel, config, actions.database, actions, actions.isDatabaseReadOnly);
+    }
+    if (config.viewType === "form") {
+      this.renderFormSettings(panel, config, actions);
+      positionToolbarPopover(panel, anchorEl);
+      if (savedScroll) panel.scrollTop = savedScroll;
+      return;
     }
     const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
     if (showViewStatusPresets) {
@@ -334,6 +342,60 @@ export class ViewConfigPanelRenderer {
     panel.createDiv({ cls: "db-view-config-section-title", text });
   }
 
+  /** 表单视图专属设置：封面（必填标记入口在列管理器行首星标）。 */
+  private renderFormSettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
+    this.renderSectionTitle(panel, t("form.settingsTitle"));
+    const titleRow = panel.createDiv({ cls: "db-view-config-row" });
+    titleRow.createDiv({ cls: "db-view-config-label", text: t("form.titleLabel") });
+    const titleInput = titleRow.createEl("input", { cls: "db-chart-options-text-input", type: "text" });
+    titleInput.value = config.formTitle || "";
+    titleInput.placeholder = t("form.titlePlaceholder");
+    titleInput.onchange = () => {
+      config.formTitle = titleInput.value.trim() || undefined;
+      actions.onChange(t("undo.formConfig"));
+    };
+    const coverRow = panel.createDiv({ cls: "db-view-config-row" });
+    coverRow.createDiv({ cls: "db-view-config-label", text: t("form.coverLabel") });
+    const coverField = coverRow.createDiv({ cls: "db-view-config-field db-database-cover-setting" });
+    coverField.createDiv({
+      cls: `db-view-config-readonly-value${config.formCoverImage ? "" : " is-empty"}`,
+      text: config.formCoverImage || t("common.notSet"),
+      attr: { title: config.formCoverImage || t("common.notSet") },
+    });
+    const chooseCover = coverField.createEl("button", {
+      cls: "db-icon-only-button",
+      attr: { type: "button", "aria-label": t("databaseCover.choose") },
+    });
+    setIcon(chooseCover, config.formCoverImage ? "image-up" : "image-plus");
+    setTooltip(chooseCover, t("databaseCover.choose"), { delay: 100 });
+    chooseCover.onclick = () => new ImageFileSuggestModal(actions.app, (file) => {
+      config.formCoverImage = file.path;
+      config.formCoverPositionY = 50;
+      actions.onChange(t("undo.formConfig"));
+    }, t("databaseCover.choose")).open();
+    if (config.formCoverImage) {
+      const removeCover = coverField.createEl("button", {
+        cls: "db-icon-only-button",
+        attr: { type: "button", "aria-label": t("databaseCover.remove") },
+      });
+      setIcon(removeCover, "x");
+      setTooltip(removeCover, t("databaseCover.remove"), { delay: 100 });
+      removeCover.onclick = () => {
+        config.formCoverImage = undefined;
+        config.formCoverPositionY = undefined;
+        actions.onChange(t("undo.formConfig"));
+      };
+    }
+    this.renderSelect(panel, t("form.coverMode"), [
+      { value: "banner", text: t("form.coverMode.banner"), icon: "panel-top" },
+      { value: "half", text: t("form.coverMode.half"), icon: "panel-top" },
+      { value: "wallpaper", text: t("form.coverMode.wallpaper"), icon: "image" },
+    ], config.formCoverMode || "banner", (value) => {
+      config.formCoverMode = value as ViewConfig["formCoverMode"];
+      actions.onChange(t("undo.formConfig"));
+    });
+  }
+
   private renderViewType(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
     this.renderSelect(
       panel,
@@ -346,6 +408,7 @@ export class ViewConfigPanelRenderer {
         { value: "chart", text: t("common.chartView"), icon: "bar-chart" },
         { value: "calendar", text: t("common.calendarView"), icon: "calendar-days" },
         { value: "timeline", text: t("common.timelineView"), icon: "chart-gantt" },
+        { value: "form", text: t("common.formView"), icon: "clipboard-list" },
       ],
       config.viewType || "table",
       (value) => {
@@ -523,6 +586,12 @@ export class ViewConfigPanelRenderer {
 
   private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
     this.renderDatabaseGlobals(panel, database, actions);
+    if (!actions.isDatabaseReadOnly) {
+      this.renderSwitch(panel, t("form.quickFormEnabled.name"), database.quickFormEnabled === true, (value) => {
+        database.quickFormEnabled = value || undefined;
+        actions.onDatabaseChange?.(t("undo.formConfig"));
+      }, false, t("form.quickFormEnabled.desc"));
+    }
     const iconFields = getOrderedRecordIconColumns(database.views[0] || { ...database, name: database.name }, database.recordIconField);
     if (actions.isDatabaseReadOnly) {
       const column = database.schema.columns.find((candidate) => candidate.key === database.recordIconField);

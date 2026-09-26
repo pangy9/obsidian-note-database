@@ -1,7 +1,8 @@
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "../data/types";
 import { toChartNumber } from "../data/ChartAggregation";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "../data/DateTimeFormat";
-import { getRowFileFieldValue, isBaseFileField } from "../data/FileFields";
+import { isBaseFileField } from "../data/FileFields";
+import { getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { stringifyValue } from "../data/Stringify";
 import { t } from "../i18n";

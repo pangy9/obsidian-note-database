@@ -2,7 +2,8 @@ import { App, setIcon, setTooltip } from "obsidian";
 import { isObsidianTagsKey, resolveOptionDisplay, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
 import { formatDateValueDisplay, formatDateTimeValueDisplay } from "../data/DateTimeFormat";
-import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getFileFieldFixedType, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { isImeComposing } from "../data/KeyboardUtils";
 import { safeString } from "../data/SafeString";
 import { parseTextLink } from "../data/TextLink";
@@ -162,14 +163,25 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
     markNoteHoverLink(titleEl, r.file.path, r.file.path);
     actions.applyConditionalFormat?.(titleEl, r, config, titleField);
     if (title.isEmpty) titleEl.addClass("is-empty-title");
-    // 仅 file.name 标题可双击重命名；其它字段标题只读（用字段编辑改值）
-    const editFileName = titleField === "file.name" ? actions.editFileName : undefined;
+    // 展开卡片的标题与看板/列表标题保持一致：文件标题走重命名，普通属性标题走字段编辑。
+    const titleColumn = config.schema.columns.find((candidate) => candidate.key === titleField);
+    const editFileName = (titleField === "file.name" || titleField === "file.basename") ? actions.editFileName : undefined;
+    const editProperty = titleColumn && titleColumn.type !== "computed" && titleColumn.type !== "rollup" && !isReadonlyFileField(titleColumn.key)
+      ? actions.editCell
+      : undefined;
     if (editFileName && !actions.isReadOnly) {
       titleEl.addEventListener("dblclick", (event) => {
         event.stopPropagation();
         editFileName(titleEl, r, title.text);
       });
       setFieldTooltip(titleEl, title.text, t("cell.doubleClickRename"));
+    } else if (editProperty && !actions.isReadOnly && titleColumn) {
+      titleEl.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        editProperty(titleEl, r, titleColumn, event);
+      });
+      setFieldTooltip(titleEl, title.isEmpty ? "" : title.text, t("cell.doubleClickEdit"));
     } else {
       setFieldTooltip(titleEl, title.isEmpty ? "" : title.text);
     }

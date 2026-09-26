@@ -1,4 +1,4 @@
-import { App, Notice } from "obsidian";
+import { App, Notice, TFile } from "obsidian";
 import { ColumnDef, DatabaseConfig, ViewConfig, generateId } from "../../data/types";
 import { isObsidianTagsKey } from "../../data/ColumnTypes";
 import {
@@ -11,6 +11,11 @@ import {
 import { AddDatabaseModalResult, applyAddDatabaseResult } from "../../data/AddDatabaseResult";
 import { BaseImportColumn, BaseImportConfirmModal } from "./BaseImportConfirmModal";
 import { t } from "../../i18n";
+import { buildStarterDatabaseConfig, getStarterRecordFolder, getStarterTemplate } from "../../data/DatabaseStarterTemplates";
+import { getStarterArtworkFiles } from "../../data/DatabaseStarterArtwork";
+import type { DataSource } from "../../data/DataSource";
+import { DataHistoryFailure } from "../../data/EmbeddedDataHistory";
+import type { NewDatabaseConflictPreparation } from "../PropertyTypeConflictWorkflow";
 
 /**
  * Build a DatabaseConfig from a new-database modal result: scan the source folder for
@@ -29,7 +34,24 @@ export async function buildDatabaseWithInferredColumns(
   app: App,
   result: AddDatabaseModalResult,
   dbName: string,
+  databaseFolder = "",
 ): Promise<DatabaseConfig | null> {
+  if (result.starterTemplateId) {
+    const starter = getStarterTemplate(result.starterTemplateId);
+    if (!starter) return null;
+    const sourceFolder = result.starterSourceFolderAuto || !result.sourceFolder
+      ? getStarterRecordFolder(databaseFolder, dbName)
+      : result.sourceFolder;
+    const db = buildStarterDatabaseConfig(starter, dbName, sourceFolder, generateId);
+    applyAddDatabaseResult(db, {
+      ...result,
+      sourceFolder,
+      newRecordFolder: result.starterSourceFolderAuto ? sourceFolder : result.newRecordFolder || sourceFolder,
+      statusPresets: result.statusPresets ?? db.statusPresets,
+      defaultStatusPresetId: result.defaultStatusPresetId ?? db.defaultStatusPresetId,
+    });
+    return db;
+  }
   const sourceFolder = result.sourceFolder || "";
 
   // Scan frontmatter from source folder. Pass the modal's source rules (including the
@@ -130,4 +152,92 @@ export async function buildDatabaseWithInferredColumns(
   applyAddDatabaseResult(newDb, result);
 
   return newDb;
+}
+
+/** The dashboard and settings entry points share one preflight/write/rollback path. */
+export async function createDatabaseFromModalResult(
+  app: App,
+  dataSource: DataSource,
+  result: AddDatabaseModalResult,
+  dbName: string,
+  databaseFolder: string,
+  prepareConflicts: (config: DatabaseConfig) => Promise<NewDatabaseConflictPreparation | null>,
+): Promise<TFile | null> {
+  const db = await buildDatabaseWithInferredColumns(app, result, dbName, databaseFolder);
+  if (!db) return null;
+  const starter = getStarterTemplate(result.starterTemplateId);
+  if (starter && result.starterSourceFolderAuto) {
+    const prefix = `${db.sourceFolder.replace(/\/+$/, "")}/`;
+    if (app.vault.getFiles().some((file) => file.path.startsWith(prefix))) {
+      new Notice(t("starter.folderOccupied"));
+      return null;
+    }
+  }
+  const artwork = starter
+    ? getStarterArtworkFiles(starter.id, db.sourceFolder).slice(0, result.includeStarterSamples === false ? 1 : undefined)
+    : [];
+  if (artwork.some((asset) => app.vault.getAbstractFileByPath(asset.path))) {
+    new Notice(t("starter.artworkOccupied"));
+    return null;
+  }
+  let conflicts: NewDatabaseConflictPreparation | null;
+  try {
+    conflicts = await prepareConflicts(db);
+  } catch (error) {
+    new Notice(t("errors.createFailed", { error: String(error) }));
+    return null;
+  }
+  if (!conflicts) return null;
+
+  const created: Array<{ file: TFile; content: string | null }> = [];
+  const track = async (file: TFile): Promise<void> => {
+    const item = { file, content: null as string | null };
+    created.push(item);
+    item.content = await app.vault.read(file);
+  };
+  try {
+    const dbFile = await dataSource.createViewDefFile(databaseFolder, dbName, db);
+    await track(dbFile);
+    if (artwork.length > 0) {
+      const folder = artwork[0].path.slice(0, artwork[0].path.lastIndexOf("/"));
+      let part = "";
+      for (const segment of folder.split("/").filter(Boolean)) {
+        part = part ? `${part}/${segment}` : segment;
+        if (!app.vault.getAbstractFileByPath(part)) await app.vault.createFolder(part);
+      }
+      for (const asset of artwork) {
+        const file = await app.vault.create(asset.path, asset.content);
+        await track(file);
+      }
+    }
+    if (starter && result.includeStarterSamples !== false) {
+      for (const sample of starter.samples) {
+        const frontmatter = { ...sample.frontmatter };
+        if (sample.coverArtwork) frontmatter.cover = artwork[sample.coverArtwork]?.path;
+        const file = await dataSource.createNote(db.sourceFolder, sample.filename, frontmatter, undefined, sample.body);
+        await track(file);
+      }
+    }
+    await conflicts.commit();
+    return dbFile;
+  } catch (error) {
+    const retained: string[] = error instanceof DataHistoryFailure
+      ? error.compensationErrors.map(({ step }) => step)
+      : [];
+    for (const item of created.reverse()) {
+      try {
+        if (item.content === null || app.vault.getAbstractFileByPath(item.file.path) !== item.file ||
+          await app.vault.read(item.file) !== item.content) {
+          retained.push(item.file.path);
+          continue;
+        }
+        await dataSource.trashNote(item.file);
+      } catch {
+        retained.push(item.file.path);
+      }
+    }
+    new Notice(t(starter ? "starter.createFailed" : "errors.createFailed", { error: String(error) }));
+    if (retained.length > 0) new Notice(t("starter.rollbackIncomplete", { paths: retained.join(", ") }), 10000);
+    return null;
+  }
 }

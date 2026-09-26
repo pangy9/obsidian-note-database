@@ -1,4 +1,4 @@
-import { Menu } from "obsidian";
+import { App, Menu } from "obsidian";
 import { ColumnDef, CreateEntryPosition, RowCreateContext, RowData, ViewConfig } from "../data/types";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { formatGroupKeyDisplay, isComputedGroupField, resolveGroupCreateDefaults } from "../data/GroupDisplay";
@@ -10,6 +10,10 @@ import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
+import { promptMoveToPosition } from "./modals/MoveToPositionModal";
+import { getMovePositionNeighbors, getMoveTargetNeighbors } from "../data/MovePosition";
+import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
+import { getRecordReorderLabel } from "./RecordReorderLabel";
 
 const ROW_MIME = "application/x-note-database-row";
 const ROW_FROM_GROUP_MIME = "application/x-note-database-row-from-group";
@@ -57,8 +61,9 @@ export class TableRenderer {
   private rowByPath = new Map<string, RowData>();
   private draggingPath: string | undefined;
   private rowDropFeedback = new DragDropFeedbackState();
+  private stopMobileTargetMode?: () => void;
 
-  constructor(private actions: TableRendererActions) {}
+  constructor(private app: App, private actions: TableRendererActions) {}
 
   renderTable(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
     this.clearTable(container);
@@ -300,6 +305,8 @@ export class TableRenderer {
   }
 
   private clearTable(container: HTMLElement): void {
+    this.stopMobileTargetMode?.();
+    this.stopMobileTargetMode = undefined;
     this.rowDropFeedback.clear();
     container.querySelectorAll(".db-table-wrap, .db-grouped-table, .db-empty").forEach((el) => el.remove());
   }
@@ -525,7 +532,10 @@ export class TableRenderer {
       event.preventDefault();
       event.stopPropagation();
       const menu = new Menu();
-      if (this.canManualReorder(config)) this.addMobilePositionItems(menu, row, rows);
+      const reorderRows = groupField && groupKey != null
+        ? groups?.find((group) => group.key === groupKey)?.rows || rows
+        : rows;
+      if (this.canManualReorder(config)) this.addMobilePositionItems(menu, row, reorderRows, button, config, groupField, groupKey, groups);
       if (groupField && groupKey != null && groups?.length && this.actions.moveRowToGroupAndPosition) {
         if (this.canManualReorder(config)) menu.addSeparator();
         for (const group of groups) {
@@ -552,7 +562,10 @@ export class TableRenderer {
   }
 
   /** Add local rank movement actions shared by grouped and ungrouped table rows. */
-  private addMobilePositionItems(menu: Menu, row: RowData, rows: RowData[]): void {
+  private addMobilePositionItems(
+    menu: Menu, row: RowData, rows: RowData[], button: HTMLElement, config: ViewConfig,
+    groupField?: string, groupKey?: string, groups?: TableGroup[]
+  ): void {
     const paths = rows.map((candidate) => candidate.file.path);
     const index = paths.indexOf(row.file.path);
     const move = (targetIndex: number) => {
@@ -564,6 +577,41 @@ export class TableRenderer {
     menu.addItem((item) => item.setTitle(t("menu.moveDown")).setIcon("chevron-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(index + 1)));
     menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").setDisabled(index <= 0).onClick(() => move(0)));
     menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(index < 0 || index >= paths.length - 1).onClick(() => move(paths.length - 1)));
+    menu.addItem((item) => item.setTitle(t("mobile.moveToPosition")).setIcon("list-ordered")
+      .setDisabled(index < 0 || paths.length <= 1).onClick(() => {
+        void promptMoveToPosition(this.app, index + 1, rows.map((candidate) => getRecordReorderLabel(candidate, config))).then((position) => {
+          if (position == null || position - 1 === index) return;
+          const neighbors = getMovePositionNeighbors(paths, row.file.path, position);
+          if (neighbors) this.actions.moveRowToPosition?.(row.file.path, neighbors.previousPath, neighbors.nextPath);
+        });
+      }));
+    const root = button.closest<HTMLElement>(".db-grouped-table") || button.closest<HTMLElement>(".db-table-wrap");
+    const canCrossGroup = Boolean(groupField && groupKey != null && groups?.length && this.actions.moveRowToGroupAndPosition
+      && !isComputedGroupField(config, groupField));
+    const targetRows = canCrossGroup ? groups!.flatMap((group) => group.rows) : rows;
+    if (root && index >= 0 && targetRows.length > 1) menu.addItem((item) => item.setTitle(t("mobile.chooseTarget"))
+      .setIcon("mouse-pointer-2").onClick(() => {
+        this.stopMobileTargetMode?.();
+        const labels = new Map(targetRows.map((candidate) => [candidate.file.path, getRecordReorderLabel(candidate, config)]));
+        this.stopMobileTargetMode = startMobileRecordTargetMode({
+          root,
+          bannerHost: root.parentElement || root,
+          movedPath: row.file.path,
+          eligiblePaths: new Set(targetRows.map((candidate) => candidate.file.path)),
+          labelForPath: (path) => labels.get(path) || path,
+          onPlace: (targetPath, placement) => {
+            const targetGroup = canCrossGroup ? groups?.find((group) => group.rows.some((candidate) => candidate.file.path === targetPath)) : undefined;
+            const targetPaths = targetGroup ? targetGroup.rows.map((candidate) => candidate.file.path) : paths;
+            const neighbors = getMoveTargetNeighbors(targetPaths, row.file.path, targetPath, placement);
+            if (!neighbors) return;
+            if (targetGroup && targetGroup.key !== groupKey && groupField && groupKey != null) {
+              void this.actions.moveRowToGroupAndPosition?.(row, groupField, groupKey, targetGroup.key, neighbors.previousPath, neighbors.nextPath);
+            } else {
+              this.actions.moveRowToPosition?.(row.file.path, neighbors.previousPath, neighbors.nextPath);
+            }
+          },
+        });
+      }));
   }
 
   private renderNewRow(tbody: HTMLElement, colspan: number, defaults?: Record<string, unknown>, rows: RowData[] = [], computedGroup = false): void {

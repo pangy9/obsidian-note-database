@@ -9,6 +9,7 @@ import { PropertyService } from "../data/PropertyService";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
 import { applyRangeSelection } from "../data/RangeSelection";
 import { installNoteHoverPreview } from "./HoverLinkPreview";
+import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 import { resolveViewSelection } from "../data/ViewSelection";
 import {
   ensureColumnOrder,
@@ -54,6 +55,7 @@ import { renderRecordIcon } from "./RecordIconRenderer";
 import { resolveRecordIconField } from "../data/RecordIcon";
 import { applyConditionalFormat } from "../data/ConditionalFormatting";
 import { ParsedRecordTemplate, parseRecordTemplate, resolveCoreRecordTemplate } from "../data/RecordTemplate";
+import { runTemplaterOnCreatedFile } from "../data/TemplaterRuntime";
 import { TableRenderer } from "./TableRenderer";
 import {
   captureDatabaseViewport,
@@ -98,8 +100,13 @@ import { RelationRollupConfigModal, RelationRollupConfigResult, RelationTargetCh
 import { CreatePropertyModal } from "./modals/CreatePropertyModal";
 import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
+import { sourceRuleTreesEqual } from "../data/SourceRules";
+import { remapRecordPathsInConfig } from "../data/RecordPathRemap";
+import { FormRenderer } from "./FormRenderer";
+import { QuickFormModal, QuickFormTarget } from "./modals/QuickFormModal";
+import { FormCreateInput, FormPlan, planFormFields, validateCreatedFrontmatter } from "../data/FormModel";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
-import { buildDatabaseWithInferredColumns } from "./modals/AddDatabaseFlow";
+import { createDatabaseFromModalResult } from "./modals/AddDatabaseFlow";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { applyFrontmatterChangeToRows as applyChangeToRenderedRows } from "../data/RenderedRowUpdate";
 import { parseRelationValues } from "../data/RelationLinks";
@@ -117,7 +124,8 @@ import { getAllSourceRules, getSourceRuleTree, matchesBaseSourceType, matchesSou
 import { planCreateEntry, CreateEntryDiagnostic, CreateEntryPlan } from "../data/CreateEntryPlan";
 import { planOptionRegistration } from "../data/OptionRegistration";
 import { buildBulkEditImpact, buildBulkEditPlan, BulkEditImpact, BulkEditorRequest, getBulkEditableColumns, resolveBulkEditInitialValue, resolveBulkEditorRequest } from "../data/BulkEdit";
-import { fileHasLink, getBaseFileFieldType, getFileFieldValue, getRowFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getBaseFileFieldType, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { fileHasLink, getFileFieldValue, getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { StatusOptionsModal } from "./modals/StatusOptionsModal";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
 import { StatusPresetManagerModal } from "./modals/StatusPresetManagerModal";
@@ -130,7 +138,7 @@ import {
   PropertyTypeConflictModalResult,
 } from "./modals/PropertyTypeConflictModal";
 import {
-  confirmNewDatabasePropertyTypeConflicts,
+  prepareNewDatabasePropertyTypeConflictsForCreate,
   MutablePropertyTypeConflictEntry,
 } from "./PropertyTypeConflictWorkflow";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
@@ -328,6 +336,7 @@ export class DatabaseView extends FileView {
   navigation = false;
   private dataSource: DataSource;
   private propertyService: PropertyService;
+  private formRenderer = new FormRenderer();
   private cellRenderer: CellRenderer;
   private columnMenu: ColumnMenu;
   private columnHeaderController: ColumnHeaderController;
@@ -349,6 +358,7 @@ export class DatabaseView extends FileView {
   private chartToolbarRenderer = new ChartToolbarRenderer();
   private mobileColumnWidthPanelCleanup?: () => void;
   private calendarTimelineRenderer = new CalendarTimelineRenderer({
+    app: this.app,
     openRow: (row) => this.dataSource.openNote(row.file),
     openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
     showRowMenu: (event, row) => this.rowMenu.show(event, row),
@@ -606,7 +616,7 @@ export class DatabaseView extends FileView {
       setUndoLabel: (label) => { this.pendingUndoLabel = label; },
       refresh: () => this.refresh(),
     });
-    this.tableRenderer = new TableRenderer({
+    this.tableRenderer = new TableRenderer(this.app, {
       getVisibleColumns: (config, rows) => getVisibleColumns(config, rows, this.vs(), this.pendingShowColumns),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
@@ -899,6 +909,12 @@ export class DatabaseView extends FileView {
     const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
     this.suppressNextCreate = false;
     if (suppressed) { this.closeActiveOverlays(); return; }
+    // 库开启快速采集时，工具栏「新建」改为弹出采集表单（分组/列内等带上下文的
+    // 新建入口不走这里，保持精确直建）。
+    if (this.getActiveDb()?.quickFormEnabled === true) {
+      this.openQuickFormModal();
+      return;
+    }
     void this.createCalendarAwareCreateEntry(defaults);
   }
 
@@ -1110,6 +1126,10 @@ export class DatabaseView extends FileView {
 
   /** Rebuild the database list from vault files */
   private rebuildViewEntries(): void {
+    const currentEntry = this.viewEntries[this.currentDbIndex];
+    const currentSourcePath = currentEntry?.sourcePath;
+    const currentViewId = currentEntry?.config.views[this.currentViewIndex]?.id
+      || currentEntry?.config.views[0]?.id;
     const entries: ViewEntry[] = [];
     const defFiles = sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.databaseFileOrder);
     for (const df of defFiles) {
@@ -1117,9 +1137,13 @@ export class DatabaseView extends FileView {
     }
     const structureChanged = !this.hasSameViewEntryStructure(entries);
     this.viewEntries = entries;
-    if (this.currentDbIndex >= entries.length) {
+    if (currentSourcePath && entries.some((entry) => entry.sourcePath === currentSourcePath)) {
+      this.restoreViewSelection(currentSourcePath, currentViewId);
+    } else if (this.currentDbIndex >= entries.length) {
       this.currentDbIndex = 0;
       this.currentViewIndex = 0;
+    } else if (this.viewEntries[this.currentDbIndex]) {
+      this.currentViewIndex = Math.min(this.currentViewIndex, this.viewEntries[this.currentDbIndex].config.views.length - 1);
     }
     this.captureConfigSnapshots();
     if (structureChanged) this.clearViewStateCache();
@@ -2197,6 +2221,15 @@ export class DatabaseView extends FileView {
   private handleDataChangeBatch(batch: DataChangeBatch): void {
     const observable = batch.changes.filter((change) => change.sourceInstanceId !== this.instanceId);
     if (observable.length === 0) return;
+    if (observable.some((change) => this.isDatabaseDefinitionChange(change))) {
+      // Discover database definition files created or moved into the vault, and
+      // remove deleted definitions. Preserve the selected database/view when the
+      // sorted list changes around the current entry.
+      this.rebuildViewEntries();
+      this.rerenderToolbar();
+      this.refresh();
+      return;
+    }
     const rowPaths = new Set(this.rows.map((row) => row.file.path));
     const sourcePath = this.viewEntries[this.currentDbIndex]?.sourcePath;
     const database = this.hasActiveDatabase() ? this.getActiveDb() : null;
@@ -2245,6 +2278,13 @@ export class DatabaseView extends FileView {
       this.pendingSourceReload = true;
     }
     this.refreshCoordinator.mark(relevant.map((change) => change.path));
+  }
+
+  private isDatabaseDefinitionChange(change: DataChangeBatch["changes"][number]): boolean {
+    const knownPaths = this.viewEntries.map((entry) => entry.sourcePath);
+    if (knownPaths.includes(change.path) || (change.oldPath && knownPaths.includes(change.oldPath))) return true;
+    if (change.kind === "deleted") return false;
+    return this.dataSource.getRecordSnapshot(change.path)?.frontmatter?.db_view === true;
   }
 
   /**
@@ -2404,6 +2444,7 @@ export class DatabaseView extends FileView {
     const descriptionScroll = this.saveDescriptionScrollPosition();
     if (config.viewType === "chart" && value !== "chart") this.chartRenderer.destroy();
     if (config.viewType === "calendar" && value !== "calendar") this.calendarRenderer.destroy();
+    if (config.viewType === "form" && value !== "form") this.formRenderer.destroy();
     this.viewStateStore.persist(config, this.vs());
     config.viewType = value;
     this.viewStateStore.delete(this.currentDbIndex, this.currentViewIndex);
@@ -2479,7 +2520,7 @@ export class DatabaseView extends FileView {
 
   private applyViewTypeClass(viewType: DatabaseViewType): void {
     if (!this.containerEl_) return;
-    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline"] as const) {
+    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline", "form"] as const) {
       this.containerEl_.toggleClass(`db-view-${type}`, viewType === type);
     }
   }
@@ -3141,6 +3182,167 @@ export class DatabaseView extends FileView {
     return `${baseName} ${i}`;
   }
 
+  /** Modal 态提交闸门：目标库身份 + 规则指纹，任一不过保留草稿不创建。 */
+  async createEntryFromForm(target: QuickFormTarget, input: FormCreateInput, formPlan?: FormPlan): Promise<TFile | null> {
+    if (!this.isQuickFormTargetCurrent(target)) return null;
+    return this.createBlankEntry(input.defaults, undefined, undefined, {
+      configOverride: target.viewConfig,
+      expectedSourcePath: target.sourcePath,
+      guardBeforeWrite: () => this.isQuickFormTargetCurrent(target),
+      filenameHint: input.filenameHint,
+      filterDefaults: target.filterDefaults,
+      validatePlan: formPlan
+        ? (frontmatter, filename) => validateCreatedFrontmatter(frontmatter, formPlan, filename)
+          .missing.map((field) => field.col.label || field.col.key)
+        : null,
+    });
+  }
+
+  private isQuickFormTargetCurrent(target: QuickFormTarget): boolean {
+    const entry = this.getCurrentEntry();
+    if (entry?.sourcePath !== target.sourcePath) {
+      new Notice(t("form.targetUnavailable"));
+      return false;
+    }
+    const currentView = entry.config.views.find((view) => view.id === target.viewConfig.id);
+    if (!currentView) {
+      new Notice(t("form.contextChanged"));
+      return false;
+    }
+    const currentTree = this.getCreateContextConfig(currentView).sourceRuleTree;
+    if (!sourceRuleTreesEqual(currentTree, target.mergedRuleTree)) {
+      new Notice(t("form.rulesChanged"));
+      return false;
+    }
+    if (this.getFormCreationFingerprint(currentView) !== target.creationFingerprint) {
+      new Notice(t("form.contextChanged"));
+      return false;
+    }
+    return true;
+  }
+
+  /** 工具栏/命令入口：弹出快捷采集表单（优先库内 form 视图，否则当前视图 + 空 form 配置）。 */
+  openQuickFormModal(): void {
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    // 快速采集与当前视图绑定：字段可见性跟随当前视图的列设置，必填读当前视图的
+    // formRequiredFields（不回退库内 form 视图——那是另一种入口，配置独立）。
+    const formView = this.getConfig();
+    if (!formView) return;
+    const createContext = this.getCreateContextConfig(formView);
+    // 视图字段与规则树快照；schema/manualOrder 保持共享，供现有创建链更新选项及排序。
+    // 提交闸门的 fingerprint 会阻止打开后 schema/来源上下文已变化的创建。
+    const viewConfig = {
+      ...formView,
+      sourceRules: formView.sourceRules ? JSON.parse(JSON.stringify(formView.sourceRules)) as typeof formView.sourceRules : undefined,
+      sourceRuleTree: formView.sourceRuleTree ? JSON.parse(JSON.stringify(formView.sourceRuleTree)) as typeof formView.sourceRuleTree : undefined,
+      formRequiredFields: formView.formRequiredFields ? [...formView.formRequiredFields] : undefined,
+    };
+    const target: QuickFormTarget = {
+      sourcePath: entry.sourcePath,
+      viewConfig,
+      mergedRuleTree: createContext.sourceRuleTree
+        ? JSON.parse(JSON.stringify(createContext.sourceRuleTree)) as typeof createContext.sourceRuleTree
+        : undefined,
+      creationFingerprint: this.getFormCreationFingerprint(formView),
+      filterDefaults: formView.viewType === "form" ? {} : this.getDefaultFrontmatterFromViewFilters(formView),
+    };
+    new QuickFormModal(this.app, this, target, this.vs().hiddenColumns).open();
+  }
+
+  private getFormCreationFingerprint(config: ViewConfig): string {
+    const entry = this.getCurrentEntry();
+    const context = this.getCreateContextConfig(config);
+    return JSON.stringify({
+      sourceFolder: context.sourceFolder,
+      newRecordFolder: context.newRecordFolder,
+      sourceRuleTree: context.sourceRuleTree,
+      schema: context.schema,
+      template: entry?.config.newRecordTemplate,
+      formRequiredFields: config.formRequiredFields,
+      defaultStatusPresetId: config.defaultStatusPresetId,
+      viewStatusPresets: config.statusPresets,
+      databaseStatusPresets: entry?.config.statusPresets,
+    });
+  }
+
+  /** 供命令入口校验活跃视图的库身份。 */
+  getCurrentEntryPath(): string | undefined {
+    return this.getCurrentEntry()?.sourcePath;
+  }
+
+  /** 表单视图渲染：规则合并走 getCreateContextConfig 语义，隐藏列裁剪字段（required 例外）。 */
+  private renderForm(config: ViewConfig): void {
+    if (!this.containerEl_) return;
+    const entry = this.getCurrentEntry();
+    if (!entry) return;
+    const createContext = this.getCreateContextConfig(config);
+    this.formRenderer.render(this.containerEl_, config, createContext.sourceRuleTree, this.vs().hiddenColumns, {
+      submitForm: async (input) => Boolean(await this.submitFormFromView(config, input)),
+      getRelationRecords: (col) => this.getFormRelationRecords(col),
+      getSourcePath: () => entry.sourcePath,
+      updateOptions: (col, before, next, removed) => this.updateFormColumnOptions(entry.sourcePath, col, before, next, removed),
+      saveConfig: (updated) => {
+        // 封面换图/焦点/高度：写回当前视图配置并重绘（config 即实时视图引用）。
+        this.pendingUndoLabel = t("undo.formConfig");
+        this.scheduleConfigSave();
+        this.refresh();
+      },
+      app: this.app,
+    }, { draftKey: `view:${entry.sourcePath}:${config.id}` });
+  }
+
+  /** 视图态提交：目标即当前库，直接走完整创建链（config 用表单视图快照）。 */
+  private async submitFormFromView(config: ViewConfig, input: FormCreateInput): Promise<TFile | null> {
+    const formPlan = this.formRenderer.getPlan();
+    const sourcePath = this.getCurrentEntry()?.sourcePath;
+    if (!sourcePath) return null;
+    return this.createBlankEntry(input.defaults, undefined, undefined, {
+      configOverride: config,
+      expectedSourcePath: sourcePath,
+      filenameHint: input.filenameHint,
+      filterDefaults: {},
+      validatePlan: formPlan
+        ? (frontmatter, filename) => validateCreatedFrontmatter(frontmatter, formPlan, filename)
+          .missing.map((field) => field.col.label || field.col.key)
+        : null,
+    });
+  }
+
+  /** relation 字段的目标库记录（镜像 CellRenderer.editRelationPopover 的目标解析）。 */
+  getFormRelationRecords(col: ColumnDef): NoteRecord[] {
+    const databases = this.dataSource.getViewDefFiles().map((e) => e.config);
+    const target = databases.find((db) => db.id === col.relationConfig?.targetDatabaseId);
+    if (!target) return [];
+    return this.dataSource.getRecordsForDatabase(target);
+  }
+
+  /** 表单中的选项结构编辑与表格共用配置+记录补偿事务。 */
+  async updateFormColumnOptions(
+    sourcePath: string,
+    col: ColumnDef,
+    before: StatusOptionDef[],
+    next: StatusOptionDef[],
+    removed: string[] = [],
+  ): Promise<boolean> {
+    if (this.getCurrentEntry()?.sourcePath !== sourcePath) {
+      new Notice(t("form.targetUnavailable"));
+      return false;
+    }
+    const live = this.getConfig()?.schema.columns.find((candidate) => candidate.key === col.key);
+    if (!live || JSON.stringify(live.statusOptions || []) !== JSON.stringify(before)) {
+      new Notice(t("form.contextChanged"));
+      return false;
+    }
+    try {
+      await this.commitColumnOptionsTransaction(live, before, next, { cleanupRemovedValues: removed });
+      return true;
+    } catch (error) {
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+      return false;
+    }
+  }
+
   private getDefaultViewName(viewType: DatabaseViewType): string {
     if (viewType === "board") return t("common.boardView");
     if (viewType === "gallery") return t("common.galleryView");
@@ -3148,25 +3350,22 @@ export class DatabaseView extends FileView {
     if (viewType === "chart") return t("common.chartView");
     if (viewType === "calendar") return t("common.calendarView");
     if (viewType === "timeline") return t("common.timelineView");
+    if (viewType === "form") return t("common.formView");
     return t("common.tableView");
   }
 
   /** Add a new database via modal dialog */
   private async addDatabase(): Promise<void> {
-    const modal = new AddDatabaseModal(this.app, this.statusPresets, this.defaultStatusPresetId);
+    const modal = new AddDatabaseModal(this.app, this.statusPresets, this.defaultStatusPresetId, this.databaseFolder);
     const result = await modal.openAndWait();
     if (!result) return;
 
     const dbName = this.getUniqueDatabaseName(result.name);
-    const newDb = await buildDatabaseWithInferredColumns(this.app, result, dbName);
-    if (!newDb) return;
-    if (!await this.confirmNewDatabasePropertyTypeConflicts(newDb)) return;
-
-    const file = await this.dataSource.createViewDefFile(
-      this.databaseFolder,
-      dbName,
-      newDb
+    const file = await createDatabaseFromModalResult(
+      this.app, this.dataSource, result, dbName, this.databaseFolder,
+      (config) => this.prepareNewDatabasePropertyTypeConflicts(config),
     );
+    if (!file) return;
     new Notice(t("notice.createdDbFile", { path: file.path }));
     void this.onConfigChanged?.();
     this.rebuildViewEntries();
@@ -3177,28 +3376,27 @@ export class DatabaseView extends FileView {
     this.refresh({ viewport: "reset-top" });
   }
 
-  private async confirmNewDatabasePropertyTypeConflicts(newDb: DatabaseConfig): Promise<boolean> {
+  private async prepareNewDatabasePropertyTypeConflicts(newDb: DatabaseConfig) {
     const existingEntries: MutablePropertyTypeConflictEntry[] = this.viewEntries.map((entry) => ({
       config: entry.config,
       sourcePath: entry.sourcePath,
     }));
-    const result = await confirmNewDatabasePropertyTypeConflicts(this.app, existingEntries, { config: newDb }, {
-      getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
-      getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
-    });
-    if (!result) return false;
-    for (const entry of result.changedEntries) {
-      if (!entry.sourcePath) continue;
-      const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
-      if (!(file instanceof TFile)) continue;
-      await this.dataSource.updateViewDefFile(file, entry.config, {
-        dbId: entry.config.id,
-        dbPath: entry.sourcePath,
-        sourceInstanceId: this.instanceId,
-      });
-      this.configSnapshots.set(this.getConfigHistoryKey(entry as ViewEntry), this.cloneDatabaseConfig(entry.config));
-    }
-    return true;
+    return prepareNewDatabasePropertyTypeConflictsForCreate(
+      this.app, this.dataSource, existingEntries, { config: newDb }, this.instanceId,
+      {
+        getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
+        getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
+      },
+      (changed) => {
+        for (const draft of changed) {
+          const live = this.viewEntries.find((entry) => entry.sourcePath === draft.sourcePath);
+          if (!live) continue;
+          this.replaceDatabaseConfig(live.config, draft.config);
+          linkDatabaseSchema(live.config);
+          this.configSnapshots.set(this.getConfigHistoryKey(live), this.cloneDatabaseConfig(live.config));
+        }
+      },
+    );
   }
 
   private async duplicateCurrentDatabase(): Promise<void> {
@@ -3719,10 +3917,30 @@ export class DatabaseView extends FileView {
     defaults: Record<string, unknown> = {},
     position?: CreateEntryPosition,
     focusColumnKey?: string,
+    options: {
+      /** 表单等外部入口的规划快照视图（创建语义按它走；entry/undo 等仍按当前库）。 */
+      configOverride?: ViewConfig;
+      /** 表单提交期间切库时放弃创建；不会把旧视图计划写进新库。 */
+      expectedSourcePath?: string;
+      /** 异步模板读取后再次校验目标视图/来源规则快照。 */
+      guardBeforeWrite?: () => boolean;
+      /** 用户标题（表单 file.name 字段），进 planCreateEntry 在规则约束下采用。 */
+      filenameHint?: string;
+      /** 表单打开时捕获的筛选默认值；不读取随后切换到的视图状态。 */
+      filterDefaults?: Record<string, unknown>;
+      /** 创建前对合成计划做最终校验，返回缺失字段名清单（非空则拦截，不写盘）。 */
+      validatePlan?: ((frontmatter: Record<string, unknown>, filename: string) => string[] | null) | null;
+    } = {},
   ): Promise<TFile | null> {
-    const config = this.getConfig();
+    const config = options.configOverride || this.getConfig();
     const entry = this.getCurrentEntry();
     if (!config || !entry) return null;
+    const mutationTarget: ViewConfigMutation = {
+      dbId: entry.config.id,
+      dbPath: entry.sourcePath,
+      viewId: config.id,
+      sourceInstanceId: this.instanceId,
+    };
     let template: ParsedRecordTemplate | undefined;
     try {
       template = await this.loadNewRecordTemplate(entry.config);
@@ -3730,8 +3948,27 @@ export class DatabaseView extends FileView {
       new Notice(t("template.loadFailed", { error: String(error) }));
       return null;
     }
+    if (options.expectedSourcePath && this.getCurrentEntry()?.sourcePath !== options.expectedSourcePath) {
+      new Notice(t("form.targetUnavailable"));
+      return null;
+    }
+    if (options.guardBeforeWrite && !options.guardBeforeWrite()) return null;
     const beforeConfig = this.cloneDatabaseConfig(entry.config);
     let registeredGroupOption = false;
+    let plan = this.buildCreateEntryPlan(config, defaults, template?.frontmatter, options.filenameHint, options.filterDefaults, entry.config);
+    if (template?.engine === "core") {
+      template = resolveCoreRecordTemplate(template, plan.filename);
+      plan = this.buildCreateEntryPlan(config, defaults, template.frontmatter, options.filenameHint, options.filterDefaults, entry.config);
+    }
+    if (options.validatePlan) {
+      const missing = options.validatePlan(plan.frontmatter, plan.filename);
+      if (missing && missing.length > 0) {
+        new Notice(t("form.createBlockedMissing", { fields: missing.join(", ") }));
+        return null;
+      }
+    }
+    // 校验可能拦截创建；只有确认可创建后才修改共享 schema 中的选项配置。
+    // 否则一次失败提交会留下未持久化的内存选项，重试时也不会再触发注册。
     for (const [key, value] of Object.entries(defaults)) {
       const col = config.schema.columns.find((candidate) => candidate.key === key);
       if (!col) continue;
@@ -3740,11 +3977,6 @@ export class DatabaseView extends FileView {
       col.statusOptions = optionPlan.options;
       if (optionPlan.clearPresetId) col.statusPresetId = undefined;
       registeredGroupOption = true;
-    }
-    let plan = this.buildCreateEntryPlan(config, defaults, template?.frontmatter);
-    if (template?.engine === "core") {
-      template = resolveCoreRecordTemplate(template, plan.filename);
-      plan = this.buildCreateEntryPlan(config, defaults, template.frontmatter);
     }
     const diagnostics = [...plan.diagnostics];
     try {
@@ -3757,7 +3989,7 @@ export class DatabaseView extends FileView {
       );
       if (template?.engine === "templater") {
         try {
-          await this.runTemplaterOnCreatedFile(file);
+          await runTemplaterOnCreatedFile(this.app, file);
         } catch (error) {
           new Notice(t("template.templaterFailed", { error: String(error) }));
         }
@@ -3782,7 +4014,7 @@ export class DatabaseView extends FileView {
           const dbFile = this.app.vault.getAbstractFileByPath(entry.sourcePath);
           if (dbFile instanceof TFile) {
             this.suppressDataReload(2500);
-            await this.dataSource.updateViewDefFile(dbFile, entry.config, this.getCurrentMutationTarget());
+            await this.dataSource.updateViewDefFile(dbFile, entry.config, mutationTarget);
           }
           const after = this.cloneDatabaseConfig(entry.config);
           this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
@@ -3826,22 +4058,27 @@ export class DatabaseView extends FileView {
     config: ViewConfig,
     defaults: Record<string, unknown>,
     templateFrontmatter: Record<string, unknown> = {},
+    filenameHint?: string,
+    filterDefaults?: Record<string, unknown>,
+    database: DatabaseConfig = this.getActiveDb(),
   ): CreateEntryPlan {
-    const sourceConfig = this.getCreateContextConfig(config);
+    const sourceConfig = this.getCreateContextConfig(config, database);
     // 上下文默认值（列默认 < 视图筛选/状态 < 用户/日历/分组 defaults）。来源规则由
     // planCreateEntry 单独叠加为最高优先级，并统一计算文件名、文件夹与诊断。
     // 显式 defaults 的 key 集合标记为用户意图：来源规则覆盖这些才记 conflictOverride；
     // 列默认空值不在集合内，覆盖不记（避免把分组显式传入的 false/""/[] 误判为列默认）。
     const explicitDefaults = this.mergeCreateDefaults(
       config,
-      this.getDefaultFrontmatterFromViewFilters(config),
+      filterDefaults ?? this.getDefaultFrontmatterFromViewFilters(config),
       defaults,
     );
     const intentionalContextKeys = new Set(Object.keys(explicitDefaults));
     const contextFrontmatter: Record<string, unknown> = {};
     for (const col of config.schema.columns) {
       if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup") continue;
-      contextFrontmatter[col.key] = this.getDefaultCellValue(col);
+      contextFrontmatter[col.key] = col.type === "status" && !col.statusOptions?.length
+        ? this.getDefaultStatusOptions(database, config)[0]?.value || ""
+        : getColumnDefaultCellValue(col);
     }
     Object.assign(contextFrontmatter, templateFrontmatter, explicitDefaults);
     return planCreateEntry({
@@ -3853,6 +4090,7 @@ export class DatabaseView extends FileView {
       contextFrontmatter,
       intentionalContextKeys,
       defaultFilename: t("defaults.untitledNote"),
+      filenameHint,
       normalizeFolder: (folder) => this.normalizeVaultFolder(folder),
     });
   }
@@ -3866,31 +4104,23 @@ export class DatabaseView extends FileView {
     return parseRecordTemplate(content, setting.engine || "markdown");
   }
 
-  private async runTemplaterOnCreatedFile(file: TFile): Promise<void> {
-    type TemplaterRuntime = {
-      templater?: {
-        overwrite_file_commands?: (target: TFile) => Promise<unknown>;
-      };
-    };
-    type PluginRegistry = { getPlugin?: (id: string) => unknown; plugins?: Record<string, unknown> };
-    const registry = (this.app as unknown as { plugins?: PluginRegistry }).plugins;
-    const plugin = (registry?.getPlugin?.("templater-obsidian") ||
-      registry?.plugins?.["templater-obsidian"]) as TemplaterRuntime | undefined;
-    const execute = plugin?.templater?.overwrite_file_commands;
-    if (!execute) throw new Error(t("template.templaterUnavailable"));
-    await execute.call(plugin.templater, file);
-  }
-
   /** 创建成功通知显示最终 file.path；有诊断时说明可能不符合来源规则并给出原因概括。 */
   private showCreateEntryNotice(file: TFile, diagnostics: CreateEntryDiagnostic[]): void {
+    // Notice 可点击：直接打开刚创建的笔记（对全部创建入口生效）。
+    const makeClickable = (notice: Notice): void => {
+      // minAppVersion 1.7.2 尚无公开的 messageEl，保留旧版可用的容器。
+      const noticeContainer = (notice as unknown as { noticeEl: HTMLElement }).noticeEl;
+      noticeContainer.addClass("db-clickable-notice");
+      noticeContainer.onclick = () => this.dataSource.openNote(file);
+    };
     if (diagnostics.length === 0) {
-      new Notice(t("notice.createdNote", { path: file.path }));
+      makeClickable(new Notice(t("notice.createdNote", { path: file.path })));
       return;
     }
     const reasons = Array.from(new Set(diagnostics.map((d) => `createRuleRisk.${d.reason}`)))
       .map((key) => t(key))
       .join(t("common.enumerationJoin"));
-    new Notice(t("notice.createdNoteRuleRisk", { path: file.path, reasons }));
+    makeClickable(new Notice(t("notice.createdNoteRuleRisk", { path: file.path, reasons })));
   }
 
   private async createCalendarTimelineEntry(
@@ -4092,13 +4322,6 @@ export class DatabaseView extends FileView {
     return `${dateKey}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  private getDefaultCellValue(col: ColumnDef): unknown {
-    if (col.type === "status" && !col.statusOptions?.length) {
-      return this.getDefaultStatusOptions()[0]?.value || "";
-    }
-    return getColumnDefaultCellValue(col);
-  }
-
   private assignManualRankForNewEntry(
     config: ViewConfig,
     filePath: string,
@@ -4198,8 +4421,7 @@ export class DatabaseView extends FileView {
     return frontmatter;
   }
 
-  private getCreateContextConfig(config: ViewConfig): ViewConfig {
-    const db = this.getActiveDb();
+  private getCreateContextConfig(config: ViewConfig, db: DatabaseConfig = this.getActiveDb()): ViewConfig {
     // View-level source rules apply only when the switch is ON, mirroring getEffectiveConfig.
     const viewEnabled = config.viewSourceRulesEnabled === true;
     return {
@@ -4708,6 +4930,17 @@ export class DatabaseView extends FileView {
         moveColumn: (key, offset) => this.columnOperations.moveColumn(key, offset),
         moveColumnTo: (key, targetKey, placement) => this.columnOperations.moveColumnTo(key, targetKey, placement),
         toggleColumnWrap: (col) => this.toggleColumnWrap(col),
+        toggleFormRequired: (col) => {
+          const current = this.getConfig();
+          if (!current) return;
+          const next = new Set(current.formRequiredFields || []);
+          if (next.has(col.key)) next.delete(col.key);
+          else next.add(col.key);
+          current.formRequiredFields = next.size > 0 ? Array.from(next) : undefined;
+          this.pendingUndoLabel = t("undo.formConfig");
+          this.scheduleConfigSave();
+          this.renderColumnManager();
+        },
         editColumn: (col) => this.showColumnRenameModal(col),
         addColumn: () => { void this.openCreatePropertyModal(); },
         addFileFieldColumn: (key) => { void this.columnOperations.addFileFieldColumn(key); },
@@ -4759,6 +4992,11 @@ export class DatabaseView extends FileView {
         this.getStatusPresetsForLevel("view", db, config),
         config.defaultStatusPresetId
       ),
+      getFormRequiredFromRules: () => new Set(planFormFields({
+        config,
+        mergedSourceRuleTree: this.getCreateContextConfig(config).sourceRuleTree,
+        hiddenColumnKeys: this.vs().hiddenColumns,
+      }).sourceRequiredKeys),
       viewStatusPresetHelpText: t("viewConfig.statusPreset.help"),
       managedViewStatusPresetCount: config.statusPresets?.length || 0,
       onDefaultViewStatusPresetChange: (value) => {
@@ -5101,6 +5339,17 @@ export class DatabaseView extends FileView {
         this.applyColumnTypeToColumn(col, decision.type);
       }
       await this.columnOperations.renameColumn(col, result);
+      const updated = this.getConfig()?.schema.columns.find((candidate) => candidate.key === result.key);
+      if (!updated) return false;
+      if (result.type !== updated.type) {
+        await this.changeColumnType(updated, result.type);
+        if (updated.type !== result.type) return false;
+      }
+      if (result.type === "text" && (updated.textRenderMode ?? "plain") !== result.textRenderMode) {
+        this.setTextRenderMode(updated, result.textRenderMode ?? "plain");
+      } else if (result.type === "number" && (updated.numberDisplayStyle ?? "plain") !== result.numberDisplayStyle) {
+        this.setNumberDisplayStyle(updated, result.numberDisplayStyle ?? "plain");
+      }
     }).open();
   }
 
@@ -6534,7 +6783,9 @@ export class DatabaseView extends FileView {
     this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(), dbConfig, true);
     this.timelineInvalidRowsVersion += 1;
 
-    if (config.viewType !== "chart") this.renderSummary(config);
+    // 幂等清掉表单视图的自建节点（tab 切换不走 setViewType，残留会压在新视图顶部）。
+    if (config.viewType !== "form") this.formRenderer.destroy();
+    if (config.viewType !== "chart" && config.viewType !== "form") this.renderSummary(config);
     if (!this.containerEl_) return;
 
     if (config.viewType === "board") {
@@ -6549,6 +6800,8 @@ export class DatabaseView extends FileView {
       this.calendarRenderer.render(this.containerEl_, config, this.rows);
     } else if (config.viewType === "timeline") {
       this.calendarTimelineRenderer.renderTimeline(this.containerEl_, this.getTimelineRenderConfig(config), this.rows);
+    } else if (config.viewType === "form") {
+      this.renderForm(config);
     } else if (this.vs().groupByField) {
       this.renderGroupedTable(config, this.vs().groupByField);
     } else {
@@ -7956,70 +8209,8 @@ export class DatabaseView extends FileView {
     }
   }
 
-  private remapRecordPathsInConfig(
-    database: DatabaseConfig,
-    changes: FileRenameChange[],
-    direction: "old" | "new",
-  ): void {
-    const pathMap = new Map(changes.map((change) => (
-      direction === "new" ? [change.oldPath, change.newPath] : [change.newPath, change.oldPath]
-    )));
-    const remapPath = (path: string): string => pathMap.get(path) || path;
-    for (const view of database.views) {
-      const ranks = view.manualOrder?.ranks;
-      if (ranks) {
-        view.manualOrder = {
-          ...(view.manualOrder || {}),
-          ranks: Object.fromEntries(Object.entries(ranks).map(([path, rank]) => [remapPath(path), rank])),
-        };
-      }
-      if (view.boardCardOrders) {
-        view.boardCardOrders = Object.fromEntries(
-          Object.entries(view.boardCardOrders).map(([field, groups]) => [
-            field,
-            Object.fromEntries(Object.entries(groups).map(([group, paths]) => [group, paths.map(remapPath)])),
-          ]),
-        );
-      }
-      this.remapFileGroupState(view, pathMap);
-    }
-  }
-
-  private remapFileGroupState(view: ViewConfig, pathMap: Map<string, string>): void {
-    const fileGroupFields = new Set(["file.name", "file.basename", "file.path", "file.file"]);
-    const groupValueMap = (field: string): Map<string, string> => new Map(
-      Array.from(pathMap, ([oldPath, newPath]) => [
-        this.getFileGroupValueForPath(field, oldPath),
-        this.getFileGroupValueForPath(field, newPath),
-      ]),
-    );
-    const remapListMap = (source: Record<string, string[]> | undefined): Record<string, string[]> | undefined => {
-      if (!source) return source;
-      return Object.fromEntries(Object.entries(source).map(([field, values]) => {
-        if (!fileGroupFields.has(field)) return [field, values];
-        const valuesMap = groupValueMap(field);
-        return [field, values.map((value) => valuesMap.get(value) || value)];
-      }));
-    };
-    view.groupOrders = remapListMap(view.groupOrders);
-    view.collapsedGroups = remapListMap(view.collapsedGroups);
-    if (view.expandedGroupRows) {
-      view.expandedGroupRows = Object.fromEntries(
-        Object.entries(view.expandedGroupRows).map(([field, values]) => {
-          if (!fileGroupFields.has(field)) return [field, values];
-          const valuesMap = groupValueMap(field);
-          return [field, Object.fromEntries(Object.entries(values).map(([value, count]) => [valuesMap.get(value) || value, count]))];
-        }),
-      );
-    }
-  }
-
-  private getFileGroupValueForPath(field: string, path: string): string {
-    const name = path.slice(path.lastIndexOf("/") + 1);
-    if (field === "file.name") return name;
-    if (field === "file.basename") return name.replace(/\.md$/i, "");
-    if (field === "file.path" || field === "file.file") return path;
-    return path;
+  private remapRecordPathsInConfig(database: DatabaseConfig, changes: FileRenameChange[], direction: "old" | "new"): void {
+    remapRecordPathsInConfig(database, changes, direction);
   }
 
   private remapTransientRecordPaths(changes: FileRenameChange[], direction: "old" | "new"): void {
@@ -8579,6 +8770,7 @@ export class DatabaseView extends FileView {
   }
 
   private async copySelectedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
+    if (this.containerEl_) traceDatabaseInteraction(this.containerEl_.ownerDocument, "copy:dashboard", { format, stack: new Error().stack });
     const payload = this.getSelectedCellClipboardPayload(format);
     if (!payload) return;
     await navigator.clipboard.writeText(payload.content);
@@ -8969,6 +9161,11 @@ export class DatabaseView extends FileView {
     let remappedChanges: CellEditChange[] = [];
 
     try {
+      // Paste can create records too: use the same database-level template as
+      // the ordinary New action, including per-record Core title expansion.
+      const recordTemplate = prepared.rows.length > 0
+        ? await this.loadNewRecordTemplate(entry.config)
+        : undefined;
       for (const change of combinedChanges) {
         const col = config.schema.columns.find((candidate) => this.getFrontmatterWriteKey(candidate) === change.key);
         if (col) change.newValue = this.registerPastedOptionValue(col, change.newValue);
@@ -8983,9 +9180,15 @@ export class DatabaseView extends FileView {
           ));
           if (col) defaults[key] = this.registerPastedOptionValue(col, value);
         }
-        const createPlan = this.buildCreateEntryPlan(config, defaults);
+        let rowTemplate = recordTemplate;
+        let createPlan = this.buildCreateEntryPlan(config, defaults, rowTemplate?.frontmatter);
         if (row.fileName) createPlan.filename = row.fileName;
-        return { createPlan, requestedFileName: row.fileName };
+        if (rowTemplate?.engine === "core") {
+          rowTemplate = resolveCoreRecordTemplate(rowTemplate, createPlan.filename);
+          createPlan = this.buildCreateEntryPlan(config, defaults, rowTemplate.frontmatter);
+          if (row.fileName) createPlan.filename = row.fileName;
+        }
+        return { createPlan, requestedFileName: row.fileName, template: rowTemplate };
       });
 
       if (fileRenames.length > 0) {
@@ -8996,19 +9199,27 @@ export class DatabaseView extends FileView {
       const renamePathMap = new Map(fileRenames.map((change) => [change.oldPath, change.newPath]));
       const rowPaths = this.getRenderedTableRowPaths().map((path) => renamePathMap.get(path) || path);
       let afterPath = rowPaths[rowPaths.length - 1];
-      for (const { createPlan, requestedFileName } of createPlans) {
+      for (const { createPlan, requestedFileName, template } of createPlans) {
         this.suppressDataReload(2500);
         const file = await this.dataSource.createNote(
           createPlan.folder,
           createPlan.filename,
           createPlan.frontmatter,
-          { sourceInstanceId: this.instanceId }
+          { sourceInstanceId: this.instanceId },
+          template?.body || "",
         );
         const diagnostics = [...createPlan.diagnostics];
         if ((createPlan.hasExactFilenameRule || requestedFileName) && file.basename !== createPlan.filename) {
           diagnostics.push({ reason: "filenameSuffix", detail: file.basename });
         }
         created.push({ file, plan: createPlan, diagnostics });
+        if (template?.engine === "templater") {
+          try {
+            await runTemplaterOnCreatedFile(this.app, file);
+          } catch (error) {
+            new Notice(t("template.templaterFailed", { error: String(error) }));
+          }
+        }
         this.assignManualRankForNewEntry(config, file.path, { afterPath }, false);
         afterPath = file.path;
       }

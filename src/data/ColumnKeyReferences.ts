@@ -53,6 +53,7 @@ export function updateColumnKeyReferences(
   config.titleField = replaceValue(config.titleField);
   config.recordIconField = replaceValue(config.recordIconField);
   config.galleryImageField = replaceValue(config.galleryImageField);
+  config.formRequiredFields = replaceKeys(config.formRequiredFields);
   config.boardImageField = replaceValue(config.boardImageField);
   config.boardGroupField = replaceValue(config.boardGroupField);
   config.boardSubgroupField = replaceValue(config.boardSubgroupField);

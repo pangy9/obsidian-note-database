@@ -6,6 +6,7 @@ import { isNumberDisplayColumn } from "../data/ColumnDisplay";
 import { t } from "../i18n";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { createDropdownField, DropdownOption } from "./DropdownField";
+import { renderNumberDisplayStyleIcon } from "./NumberDisplayStyleIcon";
 
 export interface ColumnMenuActions {
   editColumn(col: ColumnDef): void;
@@ -33,6 +34,10 @@ export interface ColumnMenuActions {
 
 export interface ColumnMenuOptions {
   readonly?: boolean;
+  /** Display settings remain available when schema editing is disabled. */
+  displayOnly?: boolean;
+  /** Permit advanced field configuration while structural schema actions stay hidden. */
+  allowAdvancedConfig?: boolean;
   includeLayoutActions?: boolean;
   includeWidthActions?: boolean;
   /** Needed to resolve computed→number columns for the number display-style selector. */
@@ -57,7 +62,7 @@ export class ColumnMenu {
     event.preventDefault();
     event.stopPropagation();
     this.closeActiveColumnSubmenu();
-    const readonly = options.readonly === true;
+    const readonly = options.readonly === true || options.displayOnly === true;
     const includeLayoutActions = options.includeLayoutActions !== false;
     const includeWidthActions = options.includeWidthActions !== false;
     const menu = new Menu().setUseNativeMenu(false);
@@ -110,6 +115,24 @@ export class ColumnMenu {
         return item;
       });
 
+    }
+    if (readonly && options.allowAdvancedConfig) {
+      if (col.type === "computed") {
+        menu.addItem((item) => item
+          .setTitle(t("menu.openFormula"))
+          .setIcon("sigma")
+          .onClick(() => this.actions.editFormula(col))
+        );
+      }
+      if ((col.type === "relation" || col.type === "rollup") && this.actions.editRelationRollup) {
+        menu.addItem((item) => item
+          .setTitle(col.type === "relation" ? t("relation.configure") : t("rollup.configure"))
+          .setIcon(col.type === "relation" ? "link" : "sigma")
+          .onClick(() => this.actions.editRelationRollup?.(col))
+        );
+      }
+    }
+    if (!readonly || options.displayOnly) {
       if (isNumberDisplayColumn(col, options.computedFields)) {
         menu.addItem((item) => {
           item.setTitle(t("menu.numberDisplayStyle")).setIcon("paintbrush");
@@ -319,7 +342,7 @@ export class ColumnMenu {
         });
         const check = row.createSpan({ cls: "db-dropdown-option-check" });
         if (value === currentStyle) setIcon(check, "check");
-        this.renderNumberStyleMenuIcon(row.createSpan({ cls: "db-dropdown-option-icon db-number-style-menu-icon" }), value);
+        renderNumberDisplayStyleIcon(row.createSpan({ cls: "db-dropdown-option-icon" }), value);
         row.createSpan({ cls: "db-dropdown-option-label", text: t(key) });
         row.onclick = () => { this.actions.setNumberDisplayStyle(col, value); render(); };
       }
@@ -507,42 +530,6 @@ export class ColumnMenu {
       });
       sw.onclick = () => onChange(color);
     }
-  }
-
-  private renderNumberStyleMenuIcon(parent: HTMLElement, style: NumberDisplayStyle): void {
-    if (style === "plain") {
-      setIcon(parent, "hash");
-      return;
-    }
-    if (style === "rating") {
-      setIcon(parent, "star");
-      return;
-    }
-    if (style === "progress") {
-      const track = parent.createSpan({ cls: "db-number-style-menu-progress" });
-      track.createSpan({ cls: "db-number-style-menu-progress-fill" });
-      return;
-    }
-
-    const svg = parent.createSvg("svg", {
-      attr: { viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": "true" },
-    });
-    svg.createSvg("circle", {
-      attr: { cx: 8, cy: 8, r: 5.5, fill: "none", "stroke-width": 3 },
-    }).addClass("db-number-style-menu-ring-track");
-    svg.createSvg("circle", {
-      attr: {
-        cx: 8,
-        cy: 8,
-        r: 5.5,
-        fill: "none",
-        "stroke-width": 3,
-        "stroke-linecap": "round",
-        "stroke-dasharray": "34.6",
-        "stroke-dashoffset": "21",
-        transform: "rotate(-90 8 8)",
-      },
-    }).addClass("db-number-style-menu-ring-arc");
   }
 
   private createColumnMenuSubpopover(

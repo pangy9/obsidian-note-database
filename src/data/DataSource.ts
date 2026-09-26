@@ -6,7 +6,8 @@ import { evaluateComputedFields } from "./ComputedEvaluator";
 import { safeString } from "./SafeString";
 import { hasObsidianTagValue, normalizeStatusPresets, OPTION_COLORS, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { normalizeComputedSyncMode } from "./ComputedSync";
-import { fileHasLink, getBaseFileFieldType, getFileFieldValue, isBaseFileField } from "./FileFields";
+import { getBaseFileFieldType, isBaseFileField } from "./FileFields";
+import { fileHasLink, getFileFieldValue } from "./FileFieldObsidian";
 import { absorbTypeFilterIntoRules, getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, parseSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
 import { linkDatabaseSchema } from "./ColumnConfig";
 import { cloneFrontmatter, cloneFrontmatterValue, diffFrontmatter } from "./FrontmatterOverride";
@@ -444,6 +445,62 @@ export class DataSource {
     return file;
   }
 
+  /** Prepare exact creation content/path without writing, for reversible operations. */
+  prepareNoteCreation(folderPath: string, filename: string, frontmatter: Record<string, unknown>, body = ""): { path: string; content: string } {
+    const folder = this.normalizeVaultFolder(folderPath);
+    const name = filename.replace(/[\\/]/g, "-").trim() || "Untitled";
+    return {
+      path: this.getAvailablePath(normalizePath(folder ? `${folder}/${name}.md` : `${name}.md`)),
+      content: `---\n${stringifyYaml(frontmatter).trim()}\n---\n\n${body.replace(/^\r?\n+/, "")}`,
+    };
+  }
+
+  /** Exact create/delete for reversible operations. Never overwrites an occupied path.
+   * Plugin writes share this queue; an external filesystem writer is not locked by it. */
+  async patchNoteExistence(path: string, before: string | null, after: string | null, expectedFile: TFile | null, context?: DataWriteContext): Promise<TFile | null> {
+    if ((before === null) === (after === null)) throw new Error("Expected a create/delete transition");
+    let result: TFile | null = null;
+    await this.enqueueWrite(path, async () => {
+      context?.assertWritable?.();
+      const current = this.vault.getAbstractFileByPath(path);
+      if (before === null) {
+        if (current) throw new Error(`File already exists: ${path}`);
+        await this.ensureFolder(path.slice(0, Math.max(0, path.lastIndexOf("/"))));
+        context?.assertWritable?.();
+        if (this.vault.getAbstractFileByPath(path)) throw new Error(`File already exists: ${path}`);
+        result = await this.vault.create(path, after!);
+        try {
+          const parsed = parseDiskFrontmatter(after!, parseYaml);
+          if (!parsed.ok) throw parsed.error;
+          this.publishCommittedSnapshot(path, parsed.frontmatter);
+        } catch (error) { console.error("Note Database: restored file cache needs reconciliation", error); }
+      } else {
+        if (!(current instanceof TFile) || current !== expectedFile) throw new Error(`File identity changed: ${path}`);
+        const stamp = `${current.stat.mtime}:${current.stat.size}`;
+        const content = await this.vault.read(current);
+        context?.assertWritable?.();
+        if (this.vault.getAbstractFileByPath(path) !== current || stamp !== `${current.stat.mtime}:${current.stat.size}` || content !== before) {
+          throw new Error(`File changed: ${path}`);
+        }
+        await this.app.fileManager.trashFile(current);
+      }
+    }, context);
+    return result;
+  }
+
+  async renameNoteGuarded(file: TFile, newPath: string, context?: DataWriteContext): Promise<void> {
+    const oldPath = file.path;
+    if (oldPath === newPath) return;
+    const paths = [oldPath, newPath].sort();
+    await this.enqueueWrite(paths[0], () => this.enqueueWrite(paths[1], async () => {
+      context?.assertWritable?.();
+      if (this.vault.getAbstractFileByPath(oldPath) !== file || this.vault.getAbstractFileByPath(newPath)) {
+        throw new Error(`Rename conflict: ${oldPath} -> ${newPath}`);
+      }
+      await this.app.fileManager.renameFile(file, newPath);
+    }, context), context);
+  }
+
   /** 复制笔记全文(frontmatter + body)到同目录,返回新文件。nameSuffix 如 "copy"/"副本"。 */
   async duplicateNote(file: TFile, nameSuffix: string, context?: DataWriteContext): Promise<TFile> {
     const content = await this.app.vault.read(file);
@@ -768,6 +825,12 @@ export class DataSource {
           defaultColumnWidth: typeof source["defaultColumnWidth"] === "number" ? source["defaultColumnWidth"] : undefined,
           titleField: safeString(source["titleField"]) || undefined,
           galleryImageField: safeString(source["galleryImageField"]) || undefined,
+          formCoverImage: safeString(source["formCoverImage"]) || undefined,
+          formCoverMode: source["formCoverMode"] === "half" || source["formCoverMode"] === "wallpaper"
+            ? source["formCoverMode"] : "banner",
+          formRequiredFields: Array.isArray(source["formRequiredFields"])
+            ? source["formRequiredFields"].filter((key): key is string => typeof key === "string" && key.length > 0)
+            : undefined,
           galleryImageAspectRatio: typeof source["galleryImageAspectRatio"] === "number" ? source["galleryImageAspectRatio"] : undefined,
           galleryCardSize: typeof source["galleryCardSize"] === "number" ? source["galleryCardSize"] : undefined,
           galleryImageFit: source["galleryImageFit"] === "contain" ? "contain" : source["galleryImageFit"] === "cover" ? "cover" : undefined,
@@ -872,6 +935,7 @@ export class DataSource {
         name: safeString(source["name"] || fm["name"]),
         icon: safeString(source["icon"]) || undefined,
         coverImage: safeString(source["coverImage"]) || undefined,
+        quickFormEnabled: source["quickFormEnabled"] === true,
         coverImagePositionY: this.parseCoverPosition(source["coverImagePositionY"]),
         description: safeString(source["description"]) || undefined,
         sourceFolder: safeString(source["sourceFolder"]),
@@ -1017,6 +1081,15 @@ export class DataSource {
       defaultColumnWidth: typeof v["defaultColumnWidth"] === "number" ? v["defaultColumnWidth"] : undefined,
       titleField: safeString(v["titleField"]) || undefined,
       galleryImageField: safeString(v["galleryImageField"]) || undefined,
+      formTitle: safeString(v["formTitle"]) || undefined,
+      formCoverImage: safeString(v["formCoverImage"]) || undefined,
+      formCoverMode: v["formCoverMode"] === "half" || v["formCoverMode"] === "wallpaper"
+        ? v["formCoverMode"] : "banner",
+      formCoverPositionY: typeof v["formCoverPositionY"] === "number" ? v["formCoverPositionY"] : undefined,
+      formCoverHeight: typeof v["formCoverHeight"] === "number" ? v["formCoverHeight"] : undefined,
+      formRequiredFields: Array.isArray(v["formRequiredFields"])
+        ? v["formRequiredFields"].filter((key): key is string => typeof key === "string" && key.length > 0)
+        : undefined,
       galleryImageAspectRatio: typeof v["galleryImageAspectRatio"] === "number" ? v["galleryImageAspectRatio"] : undefined,
       galleryCardSize: typeof v["galleryCardSize"] === "number" ? v["galleryCardSize"] : undefined,
       galleryImageFit: v["galleryImageFit"] === "contain" ? "contain" : v["galleryImageFit"] === "cover" ? "cover" : undefined,
@@ -1304,6 +1377,7 @@ export class DataSource {
       sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
       recordIconField: dbConfig.recordIconField || "",
+      quickFormEnabled: dbConfig.quickFormEnabled === true,
       newRecordTemplate: dbConfig.newRecordTemplate,
       computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
       summaryFormulas: dbConfig.summaryFormulas || {},
@@ -1443,6 +1517,12 @@ export class DataSource {
       timelineAnchorTimeMinutes: view.timelineAnchorTimeMinutes,
       timelineColumnSizeMode: view.timelineColumnSizeMode || "",
       timelineCustomUnitWidth: typeof view.timelineCustomUnitWidth === "number" ? view.timelineCustomUnitWidth : undefined,
+      formTitle: view.formTitle || "",
+      formCoverImage: view.formCoverImage || "",
+      formCoverMode: view.formCoverMode || "banner",
+      formCoverPositionY: typeof view.formCoverPositionY === "number" ? view.formCoverPositionY : undefined,
+      formCoverHeight: typeof view.formCoverHeight === "number" ? view.formCoverHeight : undefined,
+      formRequiredFields: view.formRequiredFields || [],
       viewStates: view.viewStates || {},
     };
   }
@@ -1631,7 +1711,7 @@ export class DataSource {
   }
 
   private parseViewType(value: unknown): ViewConfig["viewType"] {
-    if (value === "board" || value === "gallery" || value === "list" || value === "chart" || value === "calendar" || value === "timeline") return value;
+    if (value === "board" || value === "gallery" || value === "list" || value === "chart" || value === "calendar" || value === "timeline" || value === "form") return value;
     return "table";
   }
 
@@ -1812,6 +1892,7 @@ export class DataSource {
     if (viewType === "chart") return t("common.chartView");
     if (viewType === "calendar") return t("common.calendarView");
     if (viewType === "timeline") return t("common.timelineView");
+    if (viewType === "form") return t("common.formView");
     return t("common.tableView");
   }
 

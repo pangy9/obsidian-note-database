@@ -1,7 +1,7 @@
 import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { makeModalDraggable } from "./views/modals/ModalDrag";
 import { DataSource } from "./data/DataSource";
-import { sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
+import { appendUntrackedDatabasePaths, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
@@ -20,13 +20,15 @@ import { BaseImportColumn, BaseImportConfirmModal } from "./views/modals/BaseImp
 import { BaseImportSelectionError, resolveBaseImportSelection, resolveBasePropertyDisplayName } from "./data/BaseImportView";
 import {
   confirmNewDatabasePropertyTypeConflicts,
+  prepareNewDatabasePropertyTypeConflictsForCreate,
   MutablePropertyTypeConflictEntry,
 } from "./views/PropertyTypeConflictWorkflow";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
 import { setLocale, t } from "./i18n";
 import { absorbTypeFilterIntoRules, combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { refreshVaultPropertyCache } from "./data/VaultProperties";
-import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
+import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
+import { getFileFieldValue } from "./data/FileFieldObsidian";
 import { hasDateTimeValue, parseDateTimeParts } from "./data/DateTimeFormat";
 import { linkDatabaseSchemas } from "./data/ColumnConfig";
 import { safeString, isRecord } from "./data/SafeString";
@@ -217,6 +219,7 @@ export default class NoteDatabasePlugin extends Plugin {
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
     this.computedSyncService = new DatabaseComputedSyncService(this.app, this.dataSource);
     this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleVaultPropertyCacheRefresh()));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => this.migrateDatabaseFileOrderOnce()));
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
       if (file instanceof TFile) this.scheduleDatabaseFileViewOpen(file);
       this.markDatabaseFileTabs();
@@ -338,6 +341,13 @@ export default class NoteDatabasePlugin extends Plugin {
       callback: () => this.showDatabaseFiles(),
     });
     this.addCommand({
+      id: "open-quick-form",
+      name: t("command.openQuickForm"),
+      callback: async () => {
+        await this.openQuickFormCommand();
+      },
+    });
+    this.addCommand({
       id: "import-csv-markdown",
       name: t("command.importCsvMarkdown"),
       callback: async () => {
@@ -370,7 +380,8 @@ export default class NoteDatabasePlugin extends Plugin {
         () => ctx.getSectionInfo(el),
         () => this.saveSettings(),
         "codeblock",
-        this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
+        this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+        this.settings.embeddedDatabaseReadOnly !== false
       ));
     });
     this.registerMarkdownCodeBlockProcessor("database-view", (source, el, ctx) => {
@@ -384,7 +395,8 @@ export default class NoteDatabasePlugin extends Plugin {
         () => ctx.getSectionInfo(el),
         () => this.saveSettings(),
         "codeblock",
-        this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder
+        this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
+        this.settings.embeddedDatabaseReadOnly !== false
       ));
     });
     window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
@@ -698,6 +710,7 @@ export default class NoteDatabasePlugin extends Plugin {
 
   /** Notify the database view and status bar that settings have changed */
   notifyViewSettingsChanged(): void {
+    this.app.workspace.trigger("note-database-embedded-readonly-change", this.settings.embeddedDatabaseReadOnly !== false);
     const order = this.settings.databaseFileOrder || [];
     const presets = this.settings.statusPresets || DEFAULT_SETTINGS.statusPresets;
     const defaultPresetId = this.settings.defaultStatusPresetId;
@@ -747,6 +760,60 @@ export default class NoteDatabasePlugin extends Plugin {
         }
       });
     }
+  }
+
+/** 命令面板入口：优先活跃视图直开；否则选库 → 复用已打开 leaf / 打开文件视图 → 校验身份后开表单。 */
+private async openQuickFormCommand(): Promise<void> {
+  // getActiveDbView() 返回第一个 Dashboard leaf，不代表用户当前所在的标签页。
+  const active = this.app.workspace.getActiveViewOfType(DatabaseView);
+  if (active) {
+    active.openQuickFormModal();
+    return;
+  }
+  const entries = this.dataSource.getViewDefFiles();
+  if (entries.length === 0) {
+    new Notice(t("settings.databaseFiles.emptyHint"));
+    return;
+  }
+  const picked = await new Promise<{ file: TFile } | null>((resolve) => {
+    new DatabasePickerModal(this.app, entries, (entry) => resolve(entry), () => resolve(null)).open();
+  });
+  if (!picked) return;
+  const existing = this.findOpenDatabaseFileView(picked.file.path);
+  if (existing) {
+    existing.openQuickFormModal();
+    return;
+  }
+  await this.openDatabaseFileView(picked.file);
+  const view = this.findOpenDatabaseFileView(picked.file.path);
+  if (!view || this.app.workspace.getActiveViewOfType(DatabaseView) !== view || view.getCurrentEntryPath() !== picked.file.path) {
+    new Notice(t("form.targetUnavailable"));
+    return;
+  }
+  view.openQuickFormModal();
+}
+
+/** 在已打开的数据库文件视图中按路径找实例（命令入口不盲取第一个 leaf）。 */
+private findOpenDatabaseFileView(sourcePath: string): DatabaseView | null {
+  for (const leaf of this.app.workspace.getLeavesOfType(DATABASE_FILE_VIEW_TYPE)) {
+    const view = leaf.view as unknown as DatabaseView;
+    if (typeof view.getCurrentEntryPath === "function" && view.getCurrentEntryPath() === sourcePath) {
+      return leaf.view instanceof DatabaseView ? view : null;
+    }
+  }
+  return null;
+  }
+
+  /**
+   * 一次性排序迁移（升级零感知）：把现有库的当前显示顺序（已记录索引序 + 未记录
+   * 字典序）固化进 databaseFileOrder；此后新建的库按创建时间追加末尾。
+   */
+  private migrateDatabaseFileOrderOnce(): void {
+    if (this.settings.databaseFileOrderMigrated) return;
+    this.settings.databaseFileOrderMigrated = true;
+    const paths = this.dataSource.getViewDefFiles().map((entry) => entry.file.path);
+    this.settings.databaseFileOrder = appendUntrackedDatabasePaths(this.settings.databaseFileOrder || [], paths);
+    void this.saveSettings();
   }
 
   private getEmbeddedDatabaseEntries(): EmbeddedDatabaseEntry[] {
@@ -951,6 +1018,20 @@ export default class NoteDatabasePlugin extends Plugin {
       });
     }
     return true;
+  }
+
+  async prepareNewDatabasePropertyTypeConflicts(config: DatabaseConfig) {
+    const existingEntries: MutablePropertyTypeConflictEntry[] = this.dataSource.getViewDefFiles().map((entry) => ({
+      config: entry.config,
+      sourcePath: entry.file.path,
+    }));
+    return prepareNewDatabasePropertyTypeConflictsForCreate(
+      this.app, this.dataSource, existingEntries, { config }, this.instanceId,
+      {
+        getDefaultStatusOptions: () => this.getDefaultStatusOptions(),
+        getDefaultStatusPresetId: () => this.getDefaultStatusPresetId(),
+      },
+    );
   }
 
   async exportCurrentViewAsCsvMarkdownZip(): Promise<void> {
@@ -2961,6 +3042,41 @@ class CsvMarkdownImportModal extends Modal {
     const name = this.databaseName || this.csvFiles[0]?.name.replace(/\.csv$/i, "") || "CSV Markdown import";
     const folder = this.defaultFolder || "Databases";
     return normalizePath(`${folder}/${name}`);
+  }
+}
+
+class DatabasePickerModal extends FuzzySuggestModal<{ file: TFile; label: string }> {
+  private chosen = false;
+  constructor(
+    app: App,
+    private entries: Array<{ file: TFile; config: { name?: string } }>,
+    private onChoose: (entry: { file: TFile }) => void,
+    private onCancel: () => void,
+  ) {
+    super(app);
+    this.setPlaceholder(t("command.openQuickForm"));
+    this.emptyStateText = t("settings.databaseFiles.emptyHint");
+  }
+
+  getItems(): Array<{ file: TFile; label: string }> {
+    return this.entries.map((entry) => ({
+      file: entry.file,
+      label: `${entry.config.name || entry.file.basename} (${entry.file.path})`,
+    }));
+  }
+
+  getItemText(item: { file: TFile; label: string }): string {
+    return item.label;
+  }
+
+  onChooseItem(item: { file: TFile }): void {
+    this.chosen = true;
+    this.onChoose(item);
+  }
+
+  onClose(): void {
+    super.onClose();
+    if (!this.chosen) this.onCancel();
   }
 }
 

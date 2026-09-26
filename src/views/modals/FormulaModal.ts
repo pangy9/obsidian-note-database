@@ -5,7 +5,7 @@ import { isImeComposing } from "../../data/KeyboardUtils";
 import { COLUMN_TYPE_LABELS, getColumnOptions, isOptionColumnType, toMultiSelectValuesForKey } from "../../data/ColumnTypes";
 import { ComputedFieldEngine } from "../../data/ComputedField";
 import { FORMULA_FILE_FIELDS } from "../../data/FormulaFields";
-import { getFileFieldValue } from "../../data/FileFields";
+import { getFileFieldValue } from "../../data/FileFieldObsidian";
 import { getComputedStorageKey } from "../../data/ColumnDisplay";
 import { ColumnDef, ComputedFieldDef, ComputedSyncMode, RowData, StatusOptionDef } from "../../data/types";
 import { getEffectiveLocale, t } from "../../i18n";

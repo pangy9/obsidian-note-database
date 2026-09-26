@@ -1,7 +1,8 @@
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "./types";
 import { DatabaseViewState } from "../views/ViewStateStore";
 import { isOptionColumnType } from "./ColumnTypes";
-import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
+import { isBaseFileField } from "./FileFields";
+import { getRowFileFieldValue } from "./FileFieldObsidian";
 import {
   updateColumnKeyReferences as updateColumnKeyReferencesCore,
   updateComputedFormulaReferences,

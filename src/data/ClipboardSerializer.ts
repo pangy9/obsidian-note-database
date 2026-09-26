@@ -1,6 +1,7 @@
 import { ColumnDef, RowData } from "./types";
 import { isObsidianTagsKey, toMultiSelectValuesForKey } from "./ColumnTypes";
-import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
+import { isBaseFileField } from "./FileFields";
+import { getRowFileFieldValue } from "./FileFieldObsidian";
 import { stringifyValue } from "./Stringify";
 
 export interface CellAddress {

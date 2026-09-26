@@ -53,6 +53,7 @@ export type CreateEntryDiagnosticReason =
   | "filenameInvalid"
   | "filenameNormalized"
   | "filenameEmpty"
+  | "filenameHintOverridden"
   | "unconstructable"
   | "readonlyFileField";
 
@@ -93,6 +94,9 @@ export interface CreateEntryPlanInput {
   intentionalContextKeys: Set<string>;
   /** 无文件名规则时的默认文件名基部（通常是 i18n defaults.untitledNote）。 */
   defaultFilename: string;
+  /** 用户提供的标题（快速采集表单的 file.name 字段）：无精确规则时优先于 defaultFilename；
+   *  有 contains 规则时仅当满足全部片段才采用，否则保留规则名并记 filenameHintOverridden。 */
+  filenameHint?: string;
   /** 文件夹规范化函数（注入以避免依赖 obsidian normalizePath）。 */
   normalizeFolder: (folder: string) => string;
 }
@@ -103,6 +107,8 @@ interface RuleApplyContext {
   contextFrontmatter: Record<string, unknown>;
   intentionalContextKeys: Set<string>;
   defaultFilename: string;
+  /** sanitize 后的用户标题（空串表示无 hint；来自 CreateEntryPlanInput.filenameHint）。 */
+  filenameHint: string;
   normalizeFolder: (folder: string) => string;
   sourceFolder: string;
   newRecordFolder: string;
@@ -136,6 +142,7 @@ export function planCreateEntry(input: CreateEntryPlanInput): CreateEntryPlan {
     contextFrontmatter: input.contextFrontmatter,
     intentionalContextKeys: input.intentionalContextKeys,
     defaultFilename: input.defaultFilename,
+    filenameHint: sanitizeFilenameHint(input.filenameHint),
     normalizeFolder: normalize,
     sourceFolder: normalize(input.sourceFolder || ""),
     newRecordFolder: input.newRecordFolder ? normalize(input.newRecordFolder) : "",
@@ -371,6 +378,14 @@ function applyFilenameContainsRules(ctx: RuleApplyContext): void {
     .map((fragment) => fragment === fragment.trim() ? fragment : `_${fragment}_`)
     .join(" ");
   plan.filename = candidate;
+
+  // 用户标题（filenameHint）满足全部 contains 片段时优先于机械拼接；不满足时规则优先，
+  // 记诊断提示标题被改写（不静默丢弃用户输入语义）。
+  if (ctx.filenameHint && rules.every((rule) => sourceRuleContainsValue(ctx.filenameHint, rule))) {
+    plan.filename = ctx.filenameHint;
+  } else if (ctx.filenameHint) {
+    plan.diagnostics.push({ reason: "filenameHintOverridden", field: "file.basename", op: "contains", detail: ctx.filenameHint });
+  }
 
   for (const rule of rules) {
     if (!sourceRuleContainsValue(candidate, rule)) {
@@ -726,12 +741,20 @@ function resolveFilename(ctx: RuleApplyContext): string {
     if (plan.hasExactFilenameRule) {
       // 空文件名规则：退回默认并记录原因。
       plan.diagnostics.push({ reason: "filenameEmpty" });
+      return ctx.defaultFilename;
     }
-    return ctx.defaultFilename;
+    // 无任何文件名规则：用户标题（表单 file.name）优先于默认名。
+    return ctx.filenameHint || ctx.defaultFilename;
   }
   // createNote 会做 [\\/] → "-" 安全化；精确文件名约束下记录风险。
   if (plan.hasExactFilenameRule && /[\\/]/.test(raw)) {
     plan.diagnostics.push({ reason: "filenameInvalid", detail: raw });
   }
   return raw;
+}
+
+/** sanitize 用户标题：路径分隔符替换为 "-"，去首尾空白；空输入回空串。 */
+function sanitizeFilenameHint(value: string | undefined): string {
+  if (!value) return "";
+  return value.replace(/[\\/]/g, "-").trim();
 }

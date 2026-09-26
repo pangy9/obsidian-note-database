@@ -1,4 +1,4 @@
-import { Menu, setIcon, setTooltip } from "obsidian";
+import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { formatCalendarTime, getCalendarSlotDuration } from "../data/CalendarLayoutModel";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { CalendarTitleParts, buildTimelineAxisBands, formatCalendarTitleParts } from "../data/CalendarTitleFormatter";
@@ -26,6 +26,9 @@ import { buildMiniCalendarEventIndex, MiniCalendarMode, renderMiniCalendar } fro
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { markNoteHoverLink } from "./HoverLinkPreview";
+import { promptMoveToPosition } from "./modals/MoveToPositionModal";
+import { getMovePositionNeighbors, getMoveTargetNeighbors } from "../data/MovePosition";
+import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
 
 const TIME_SNAP_MINUTES = CALENDAR_TIME_SNAP_MINUTES;
 
@@ -112,6 +115,7 @@ export function getTimelineTodayPositionStyle(
 }
 
 export interface CalendarTimelineRendererActions {
+  app?: App;
   openRow(row: RowData): void;
   openRecordDetail?(anchorEl: HTMLElement, row: RowData): void;
   showRowMenu?(event: MouseEvent, row: RowData): void;
@@ -183,6 +187,7 @@ export class CalendarTimelineRenderer {
   private flashTimeoutHandle: number | null = null;
   /** 进行中拖拽的清理函数：移除 capture 监听并复位 resize 标志；视图卸载时调用以避免泄漏/锁死。 */
   private activeTimelineDragCleanup: (() => void) | null = null;
+  private stopMobileTargetMode?: () => void;
   /** 上一次解析到的无效事件计数；cache miss（Promise）时沿用它做即时显示，避免每次刷新 hide→show 闪现。 */
   private timelineInvalidWarningCount: number | null = null;
 
@@ -196,6 +201,8 @@ export class CalendarTimelineRenderer {
    * 取消挂起的 flash RAF/定时器、中断进行中的拖拽并移除其 capture 监听器。
    * 避免反复打开/关闭时间线视图（尤其嵌入代码块）累积 observer/监听器/闭包泄漏。 */
   destroy(): void {
+    this.stopMobileTargetMode?.();
+    this.stopMobileTargetMode = undefined;
     this.disconnectTimelineResizeObserver();
     this.closeTimelineMiniCalendar();
     this.closeTimelineScaleMenu();
@@ -215,6 +222,8 @@ export class CalendarTimelineRenderer {
   }
 
   renderTimeline(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
+    this.stopMobileTargetMode?.();
+    this.stopMobileTargetMode = undefined;
     if (normalizeTimelineDayScale(config)) {
       this.actions.onConfigChange?.(t("undo.timelineScaleConfig"));
     }
@@ -1803,7 +1812,9 @@ export class CalendarTimelineRenderer {
       }));
     }
     if (this.canTimelineReorder(config)) {
-      const paths: string[] = laneEvents.map((candidate) => candidate.row.file.path).filter((path) => path !== event.row.file.path);
+      const lanePaths = laneEvents.map((candidate) => candidate.row.file.path);
+      const currentIndex = lanePaths.indexOf(event.row.file.path);
+      const paths = lanePaths.filter((path) => path !== event.row.file.path);
       menu.addSeparator();
       menu.addItem((item) => item.setTitle(t("mobile.moveTop")).setIcon("chevrons-up").setDisabled(paths.length === 0).onClick(() => {
         this.actions.reorderTimelineEvent?.(event.row, undefined, paths[0]);
@@ -1811,6 +1822,47 @@ export class CalendarTimelineRenderer {
       menu.addItem((item) => item.setTitle(t("mobile.moveBottom")).setIcon("chevrons-down").setDisabled(paths.length === 0).onClick(() => {
         this.actions.reorderTimelineEvent?.(event.row, paths[paths.length - 1], undefined);
       }));
+      if (this.actions.app) menu.addItem((item) => item.setTitle(t("mobile.moveToPosition")).setIcon("list-ordered")
+        .setDisabled(currentIndex < 0 || lanePaths.length <= 1).onClick(() => {
+          void promptMoveToPosition(this.actions.app!, currentIndex + 1, laneEvents.map((candidate) => candidate.row.file.basename)).then((position) => {
+            if (position == null || position - 1 === currentIndex) return;
+            const neighbors = getMovePositionNeighbors(lanePaths, event.row.file.path, position);
+            if (neighbors) this.actions.reorderTimelineEvent?.(event.row, neighbors.previousPath, neighbors.nextPath);
+          });
+        }));
+      const root = mouseEvent.target instanceof HTMLElement
+        ? mouseEvent.target.closest<HTMLElement>(".db-timeline") : null;
+      const canCrossLane = this.canMoveTimelineAcrossLane(config);
+      const locations = canCrossLane
+        ? lanes.flatMap((lane) => lane.events.map((candidate) => ({ row: candidate.row, laneKey: lane.key })))
+        : laneEvents.map((candidate) => ({ row: candidate.row, laneKey: groupKey }));
+      if (root && currentIndex >= 0 && locations.length > 1) menu.addItem((item) => item.setTitle(t("mobile.chooseTarget"))
+        .setIcon("mouse-pointer-2").onClick(() => {
+          this.stopMobileTargetMode?.();
+          const labels = new Map(locations.map((location) => [location.row.file.path, location.row.file.basename]));
+          this.stopMobileTargetMode = startMobileRecordTargetMode({
+            root,
+            bannerHost: root.parentElement || root,
+            movedPath: event.row.file.path,
+            eligiblePaths: new Set(locations.map((location) => location.row.file.path)),
+            labelForPath: (path) => labels.get(path) || path,
+            onPlace: (targetPath, placement) => {
+              const target = locations.find((location) => location.row.file.path === targetPath);
+              if (!target) return;
+              const targetPaths = target.laneKey === groupKey
+                ? lanePaths : locations.filter((location) => location.laneKey === target.laneKey).map((location) => location.row.file.path);
+              const neighbors = getMoveTargetNeighbors(targetPaths, event.row.file.path, targetPath, placement);
+              if (!neighbors) return;
+              if (target.laneKey !== groupKey && config.timelineGroupField) {
+                void this.actions.moveTimelineEventToGroup?.(
+                  event.row, config.timelineGroupField, groupKey, target.laneKey, neighbors.previousPath, neighbors.nextPath
+                );
+              } else {
+                this.actions.reorderTimelineEvent?.(event.row, neighbors.previousPath, neighbors.nextPath);
+              }
+            },
+          });
+        }));
     }
     if (this.canMoveTimelineAcrossLane(config) && config.timelineGroupField) {
       menu.addSeparator();

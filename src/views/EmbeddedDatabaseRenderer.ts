@@ -1,5 +1,12 @@
-import { App, HoverPopover, MarkdownRenderChild, MarkdownSectionInformation, Menu, normalizePath, Notice, setIcon, setTooltip, TFile } from "obsidian";
+import { App, HoverPopover, MarkdownRenderChild, MarkdownSectionInformation, normalizePath, Notice, setIcon, setTooltip, TFile } from "obsidian";
 import { t } from "../i18n";
+import { confirmWithModal } from "./modals/ConfirmModal";
+import { EmbeddedDataOperations } from "./EmbeddedDataOperations";
+import { openBulkEditFieldMenu } from "./BulkEditFieldMenu";
+import { resolveBulkEditInitialValue } from "../data/BulkEdit";
+import { guardSelectionAction } from "./SelectionActionGuard";
+import { installInteractionDiagnostics, traceDatabaseInteraction } from "./InteractionDiagnostics";
+import { PhysicalShortcutGuard } from "../data/PhysicalShortcutGuard";
 import { DataChangeBatch, DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { RefreshCoordinator } from "../data/RefreshCoordinator";
 import { isRefreshBlockedByDrag } from "../data/RefreshBlockers";
@@ -9,25 +16,30 @@ import { RowPipeline } from "../data/RowPipeline";
 import { buildRelationRollups } from "../data/RelationRollup";
 import { parseRelationValues } from "../data/RelationLinks";
 import { collectRelationReferenceDeps, isRelationDependencyChange, resolvesRelationMissingTarget, type RelationMissingRef } from "../data/RelationDependency";
-import { ColumnDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId, NumberDisplayStyle } from "../data/types";
+import { ColumnDef, ComputedFieldDef, DatabaseConfig, FilterRule, GroupOrderMode, RowData, ViewConfig, generateId } from "../data/types";
 import { setDateDisplayMode } from "../data/DateTimeFormat";
 import {
   isObsidianTagsKey,
+  normalizeOptionValueForKey,
   normalizeObsidianTagValue,
   toBooleanValue,
   toMultiSelectValuesForKey,
+  toValidObsidianTagValues,
 } from "../data/ColumnTypes";
 import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
 import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { getEffectiveFilterRules } from "../data/FilterRules";
-import { CellAddress, serializeSelectedCells, getCellDisplayText } from "../data/ClipboardSerializer";
+import { CellAddress, serializeSelectedCells, getCellDisplayText, parseClipboardTable } from "../data/ClipboardSerializer";
+import { getTablePasteValue, planTablePasteLayout } from "../data/TablePastePlan";
 import { createCsvMarkdownZip } from "../data/CsvMarkdownZipExport";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
 import { safeString } from "../data/SafeString";
 import { CsvMarkdownExportModal } from "./modals/CsvMarkdownExportModal";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { CellRenderer } from "./CellRenderer";
+import { canEditEmbeddedColumn } from "../data/EmbeddedEditing";
+import { MAX_EMBED_HEIGHT, MIN_EMBED_HEIGHT, parseEmbeddedHeight, updateEmbeddedHeightBlock, updateEmbeddedHeightOption } from "../data/EmbeddedHeight";
 import { ColumnHeaderController } from "./ColumnHeaderController";
 import { ColumnManagerRenderer } from "./ColumnManagerRenderer";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
@@ -52,7 +64,7 @@ import {
   formatCalendarTimelineSearchResultDate,
 } from "../data/CalendarTimelineSearchResults";
 import { InvalidTimelineEventsScanner } from "../data/InvalidTimeEvents";
-import { CalendarRenderer } from "./CalendarRenderer";
+import { CalendarCreateTimeRange, CalendarRenderer } from "./CalendarRenderer";
 import {
   closeRecordDetailPanel,
   getOpenRecordDetailPath,
@@ -61,6 +73,8 @@ import {
 } from "./RecordDetailPanel";
 import { CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { FileTitleDisplay, getFileTitleDisplay } from "./FileTitleDisplay";
+import { FormRenderer } from "./FormRenderer";
+import { FormCreateInput, validateCreatedFrontmatter } from "../data/FormModel";
 import { TableRenderer } from "./TableRenderer";
 import { isHTMLElement } from "./DomGuards";
 import { ToolbarRenderer } from "./ToolbarRenderer";
@@ -77,11 +91,22 @@ import { createRenderedTextWidthMeasurer } from "./InlineMarkdownRenderer";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
-import { isNumberDisplayColumn } from "../data/ColumnDisplay";
+import { ColumnMenu } from "./ColumnMenu";
+import { planCreateEntry } from "../data/CreateEntryPlan";
+import { getDefaultCellValue } from "../data/ColumnTypes";
+import { ParsedRecordTemplate, parseRecordTemplate, resolveCoreRecordTemplate } from "../data/RecordTemplate";
+import { runTemplaterOnCreatedFile } from "../data/TemplaterRuntime";
+import { CalendarEventDateChange } from "../data/CalendarInteractionModel";
 import { getRequiredSourceRules, getSourceRuleTree, getSourceRuleTypedValue, mergeDbAndViewSourceRuleTrees } from "../data/SourceRules";
-import { getRowFileFieldValue, isFileFieldKey } from "../data/FileFields";
+import { isFileFieldKey } from "../data/FileFields";
+import { getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { applyRangeSelection } from "../data/RangeSelection";
 import { installNoteHoverPreview } from "./HoverLinkPreview";
+import { FormulaModal, FormulaSaveResult } from "./modals/FormulaModal";
+import { RelationRollupConfigModal, RelationRollupConfigResult, RelationTargetChangeImpact } from "./modals/RelationRollupConfigModal";
+import { normalizeComputedSyncMode } from "../data/ComputedSync";
+import { hasRelationValue, planRelationTargetChange } from "../data/RelationTargetChange";
+import { cloneFrontmatterValue } from "../data/FrontmatterOverride";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
@@ -125,10 +150,12 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private chartRenderer = new ChartRenderer();
   private calendarToolbarRenderer = new CalendarToolbarRenderer();
   private chartToolbarRenderer = new ChartToolbarRenderer();
-  private calendarRenderer = new CalendarRenderer({
+  private calendarRenderer = new CalendarRenderer(this.withEmbeddedReadonly<ConstructorParameters<typeof CalendarRenderer>[0]>({
     openRow: (row) => this.dataSource.openNote(row.file),
     openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
-    isReadOnly: true,
+    isReadOnly: this.isEmbedReadOnly(),
+    updateEventDates: (row, changes) => this.updateEmbeddedEventDates(row, changes),
+    createEntryForDate: (config, dateKey, timeRange) => { void this.createEmbeddedCalendarEntry(config, dateKey, timeRange); },
     updateCalendarScale: (scale, anchorDateKey) => this.updateCalendarScale(scale, anchorDateKey),
     onConfigChange: () => {
       if (!this.config) return;
@@ -141,11 +168,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     openCalendarInvalidEvents: () => this.openEmbeddedInvalidEvents(),
     renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
     applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.currentDbConfig),
-  });
-  private calendarTimelineRenderer = new CalendarTimelineRenderer({
+  }));
+  private calendarTimelineRenderer = new CalendarTimelineRenderer(this.withEmbeddedReadonly<ConstructorParameters<typeof CalendarTimelineRenderer>[0]>({
+    app: this.app,
     openRow: (row) => this.dataSource.openNote(row.file),
     openRecordDetail: (anchorEl, row) => this.openRecordDetailPanel(anchorEl, row),
-    isReadOnly: true,
+    isReadOnly: this.isEmbedReadOnly(),
+    updateEventDates: (row, changes) => this.updateEmbeddedEventDates(row, changes),
+    reorderTimelineEvent: (row, before, after) => this.moveRowToPosition(row.file.path, before, after),
     isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
     toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
@@ -162,8 +192,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
     renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
     applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.currentDbConfig),
-  });
-  /** 嵌入式展开：只读预览（嵌入式 record mutation 只读，字段不可编辑，仅展示 + 打开笔记）。 */
+  }));
+  /** 嵌入式展开预览。 */
   private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
     const config = this.config;
     if (!config || !this.containerEl) return;
@@ -177,12 +207,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       app: this.app,
       actions: {
         getRelationScopePaths: (col) => this.getRelationScopePaths(col),
-        editCell: () => {},
+        editCell: (target, record, column, event) => {
+          if (!this.isEmbedReadOnly()) this.cellRenderer.startEdit(target, record, column, event);
+        },
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
         applyConditionalFormat: (element, r, view, targetField) =>
           applyConditionalFormat(element, r, view, this.currentDbConfig, targetField),
-        isReadOnly: true,
+        isReadOnly: this.isEmbedReadOnly(),
       },
     });
   }
@@ -207,6 +239,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private groupOrderPopover?: HTMLElement;
   private removeGroupOrderPopoverListener?: () => void;
   private config?: ViewConfig;
+  private readonly formRenderer = new FormRenderer();
   private currentDbConfig?: DatabaseConfig;
   private currentSourcePath = "";
   private currentViewIndex = 0;
@@ -215,6 +248,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private lastSelectedRowPath: string | null = null;
   private cellSelection: { anchor: CellAddress; focus: CellAddress } | null = null;
   private isSelectingCells = false;
+  private showCellFillInput = false;
   private suppressDataReloadUntil = 0;
   private readonly handleOutsideClickBound = (event: MouseEvent) => this.handleOutsideClick(event);
   private readonly handleWindowFocusBound = () => this.handleWindowFocus();
@@ -227,10 +261,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private unsubscribe?: () => void;
   private unsubscribeViewConfig?: () => void;
   private configHistoryStack: DatabaseConfig[] = [];
+  private dataOperations: EmbeddedDataOperations;
+  private unloaded = false;
+  private closeBulkFieldMenu?: () => void;
+  private pendingConfigSave: Promise<void> = Promise.resolve();
   private headerChromeHiddenOverride: boolean | null = null;
   private embedCodeBlockHosts: HTMLElement[] = [];
   private refreshCoordinator: RefreshCoordinator;
   private pendingSourceReload = false;
+  private embedHeightPx: number | null = null;
+  private embedHeightGripEl?: HTMLElement;
 
   constructor(
     private app: App,
@@ -242,35 +282,66 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     private getSectionInfo: () => MarkdownSectionInformation | null,
     private onConfigChanged: () => Promise<void>,
     private persistMode: "codeblock" | "frontmatter" = "codeblock",
-    private defaultRecordFolder = ""
+    private defaultRecordFolder = "",
+    private embeddedReadOnly = true,
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
+    const readOnly = () => this.isEmbedReadOnly();
+    this.dataOperations = new EmbeddedDataOperations(this.app, this.dataSource, this.instanceId,
+      () => this.currentSourcePath && this.currentDbConfig && this.config?.id ? {
+        path: this.currentSourcePath, dbId: this.currentDbConfig.id, viewId: this.config.id,
+      } : undefined,
+      () => !this.unloaded && !this.isEmbedReadOnly(),
+      () => this.refreshAfterDataOperation(),
+      () => this.pendingConfigSave,
+      (busy) => {
+        this.containerEl.setAttribute("aria-busy", String(busy));
+        this.containerEl.querySelectorAll<HTMLButtonElement>(".db-selection-status-bar button").forEach((button) => { button.disabled = busy; });
+      });
     const shouldHideResultCreateEntryButtons = () =>
-      isCodeBlock || (this.config ? this.vs(this.config).searchText.trim().length > 0 : false);
+      this.isEmbedReadOnly() || (this.config ? this.vs(this.config).searchText.trim().length > 0 : false);
     this.cellRenderer = new CellRenderer(
       this.dataSource,
       () => this.refreshAfterSave(),
       undefined,
       undefined,
-      undefined,
-      isCodeBlock,
-      undefined,
-      undefined,
+      (col, row) => this.showEmbeddedFormulaModal(col, row),
+      isCodeBlock && embeddedReadOnly,
+      async (row, col, transaction) => {
+        await this.dataOperations.editField([row.file.path], col, transaction.value, transaction);
+        const live = this.config?.schema.columns.find((candidate) => candidate.key === col.key);
+        if (live) { col.statusOptions = live.statusOptions; col.statusPresetId = live.statusPresetId; }
+      },
+      async (row, col, value) => { await this.dataOperations.editField([row.file.path], col, value); },
       (row) => this.getFileTitleInfo(row),
       () => this.config?.schema.computedFields || [],
       this.app,
       undefined,
-      undefined,
+      async (row, newName) => {
+        const oldPath = row.file.path;
+        const parent = row.file.parent?.path;
+        const newPath = normalizePath(parent ? `${parent}/${newName}.md` : `${newName}.md`);
+        if (oldPath === newPath) return true;
+        const ok = await this.dataOperations.rename(oldPath, newPath);
+        if (ok && this.selectedRows.delete(oldPath)) this.selectedRows.add(newPath);
+        if (ok) {
+          this.cellSelection = null;
+          this.renderEmbedCellSelectionClasses();
+          this.renderEmbedSelectionStatusBar();
+        }
+        return ok;
+      },
       this.instanceId,
-      undefined,
+      (col, row) => this.showEmbeddedRelationRollupModal(col, row),
       (col) => this.getRelationScopePaths(col),
+      (col) => this.persistMode !== "codeblock" || (!this.isEmbedReadOnly() && canEditEmbeddedColumn(col)),
     );
     this.rowMenu = new RowMenu({
       app: this.app,
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
-      isReadOnly: isCodeBlock,
+      get isReadOnly() { return readOnly(); },
     });
     this.columnHeaderController = new ColumnHeaderController({
       getConfig: () => this.config,
@@ -281,7 +352,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       setUndoLabel: (_label: string) => { /* no-op in embed mode */ },
       refresh: () => { if (this.config) this.renderResults(this.config); },
     });
-    this.tableRenderer = new TableRenderer({
+    this.tableRenderer = new TableRenderer(this.app, {
       getVisibleColumns: (config, rows) => getVisibleColumns(config, rows, this.vs(config), this.pendingShowColumns),
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
@@ -290,27 +361,31 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       setupColumnHeader: (th, col) => this.columnHeaderController.setup(th, col),
       setupRow: (tr, row) => this.rowMenu.attachToRow(tr, row),
       renderCell: (td, row, col) => {
-        if (isCodeBlock) this.renderReadOnlyCell(td, row, col);
+        if (this.isEmbedReadOnly()) this.renderReadOnlyCell(td, row, col);
         else this.cellRenderer.renderCell(td, row, col);
         td.toggleClass("db-cell-range-selected", this.isEmbedCellSelected(row.file.path, col.key));
         this.setupEmbedCellSelection(td, row, col);
       },
+      setupFillHandle: (td, row, col) => this.setupEmbeddedFillHandle(td, row, col),
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
-      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
+      moveRowsToGroup: (row, field, from, to) => this.updateBoardGroup(row, field, to, from),
+      moveRowToGroupAndPosition: (row, field, from, to, before, after) => this.moveEmbeddedRecord(row, [{ field, fromGroupKey: from, toGroupKey: to }], before, after),
+      createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
-      isReadOnly: isCodeBlock,
+      get isReadOnly() { return readOnly(); },
     });
     this.boardRenderer = new BoardRenderer(this.app, {
       getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
-      updateGroup: (row, field, value) => this.updateBoardGroup(row, field, value),
+      createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
+      updateGroup: (row, field, value, fromValue) => this.updateBoardGroup(row, field, value, fromValue),
+      moveRowWithGroupUpdatesAndPosition: (row, groups, before, after) => this.moveEmbeddedRecord(row, groups, before, after),
       updateGroupOrder: (field, order) => this.updateBoardGroupOrder(field, order),
       updateCardOrder: (field, groupKey, paths) => this.updateBoardCardOrder(field, groupKey, paths),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
@@ -329,14 +404,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
-      isReadOnly: isCodeBlock,
+      get isReadOnly() { return readOnly(); },
       canReorderGroups: true,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.galleryRenderer = new GalleryRenderer(this.app, {
       getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
+      createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -345,6 +420,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
       updateCardSize: (width) => this.updateGalleryCardSize(width),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
+      moveRowsToGroup: (row, field, from, to) => this.updateBoardGroup(row, field, to, from),
+      moveRowToGroupAndPosition: (row, field, from, to, before, after) => this.moveEmbeddedRecord(row, [{ field, fromGroupKey: from, toGroupKey: to }], before, after),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
@@ -353,13 +430,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
-      isReadOnly: isCodeBlock,
+      get isReadOnly() { return readOnly(); },
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.listRenderer = new ListRenderer(this.app, {
       getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
-      createEntry: (defaults) => { if (!isCodeBlock) void this.createBlankEntry(defaults); },
+      createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
       isRowSelected: (row) => this.selectedRows.has(row.file.path),
       toggleRowSelected: (row, selected, event) => this.toggleRowSelected(row, selected, event),
       areAllRowsSelected: (rows) => rows.length > 0 && rows.every((row) => this.selectedRows.has(row.file.path)),
@@ -367,6 +444,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       editCell: (target, row, col, event) => this.cellRenderer.startEdit(target, row, col, event),
       getColumns: (config) => getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns),
       moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
+      moveRowsToGroup: (row, field, from, to) => this.updateBoardGroup(row, field, to, from),
+      moveRowToGroupAndPosition: (row, field, from, to, before, after) => this.moveEmbeddedRecord(row, [{ field, fromGroupKey: from, toGroupKey: to }], before, after),
       isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
       toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
@@ -375,11 +454,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
-      isReadOnly: isCodeBlock,
+      get isReadOnly() { return readOnly(); },
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
     this.refreshCoordinator = new RefreshCoordinator({
-      isBlocked: () => this.cellRenderer.hasActiveEditor(this.containerEl) ||
+      isBlocked: () => this.dataOperations.busy || this.cellRenderer.hasActiveEditor(this.containerEl) ||
         isRefreshBlockedByDrag(this.containerEl) ||
         Date.now() < this.suppressDataReloadUntil,
       isEligible: () => this.containerEl.isConnected && (!this.hasObservedVisibility || this.isIntersecting),
@@ -419,7 +498,20 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private readonly handleEmbedKeydownBound = (event: KeyboardEvent) => this.handleEmbedKeydown(event);
+  private readonly physicalShortcutGuard = new PhysicalShortcutGuard();
   private readonly handleMouseUpBound = () => { this.isSelectingCells = false; };
+
+  private syncEmbeddedSelectionBarHorizontalPosition(): void {
+    const viewportWidth = Math.max(0, this.containerEl.clientWidth - 16);
+    this.containerEl.querySelectorAll<HTMLElement>(":scope > .db-selection-status-bar:not(.db-embed-history-only)")
+      .forEach((bar) => {
+        // The bar is a direct sticky child of the scroll container; letting
+        // sticky own both axes avoids the old summary-relative transform drift.
+        bar.setCssProps({ transform: "translate3d(0, 0, 0)" });
+        bar.style.maxWidth = `${viewportWidth}px`;
+      });
+  }
+
 
   private renderEmbeddedRecordIcon(parent: HTMLElement, row: RowData, config: ViewConfig, compact = false): HTMLElement | null {
     if (config.showRecordIcon !== true || !this.currentDbConfig) return null;
@@ -428,8 +520,33 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   onload(): void {
+    this.register(installInteractionDiagnostics(this.containerEl, this.instanceId));
+    // A configuration save started from the same embed must not race a data transaction.
+    for (const type of ["pointerdown", "mousedown", "click", "dblclick", "keydown"] as const) {
+      this.registerDomEvent(this.containerEl, type, (event) => {
+        if (!this.dataOperations.busy) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, { capture: true });
+    }
+    const doc = this.containerEl.ownerDocument;
+    this.registerDomEvent(doc, "keydown", (event) => this.physicalShortcutGuard.handleKeyDown(event), { capture: true });
+    this.registerDomEvent(doc, "keyup", (event) => this.physicalShortcutGuard.handleKeyUp(event), { capture: true });
+    this.registerDomEvent(doc, "mousedown", (event) => this.physicalShortcutGuard.beginPointerGesture(event), { capture: true });
+    this.registerDomEvent(doc, "mouseup", () => {
+      this.physicalShortcutGuard.endPointerGesture();
+      this.getRefreshWindow().requestAnimationFrame(() => this.physicalShortcutGuard.settlePointerGesture());
+    }, { capture: true });
+    this.registerDomEvent(this.getRefreshWindow(), "blur", () => this.physicalShortcutGuard.reset());
     this.containerEl.addClass("note-database-container");
     this.containerEl.addClass("note-database-embed");
+    if (this.persistMode === "codeblock") {
+      this.embedHeightPx = parseEmbeddedHeight(this.parseEmbeddedOptions().height);
+      this.applyEmbeddedHeight(this.embedHeightPx);
+      this.renderEmbeddedHeightGrip();
+    }
+    this.registerDomEvent(this.containerEl, "scroll", () => this.syncEmbeddedSelectionBarHorizontalPosition(), { passive: true });
+    this.registerDomEvent(this.getRefreshWindow(), "resize", () => this.syncEmbeddedSelectionBarHorizontalPosition(), { passive: true });
     installNoteHoverPreview(this, this.containerEl, this.app, this);
     this.markEmbedCodeBlockHost();
     this.unsubscribe = this.dataSource.onDataChanged((batch) => this.handleDataChanged(batch));
@@ -439,11 +556,29 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.getRefreshWindow().addEventListener("focus", this.handleWindowFocusBound);
     this.containerEl.addEventListener("keydown", this.handleEmbedKeydownBound);
     this.registerEvent(this.app.workspace.on("css-change", () => this.chartRenderer.refreshTheme()));
+    this.registerEvent(this.app.workspace.on("note-database-embedded-readonly-change" as never, (setting: unknown) => {
+      const value = setting !== false;
+      if (this.embeddedReadOnly === value) return;
+      this.embeddedReadOnly = value;
+      this.cellRenderer.setReadOnly(this.isEmbedReadOnly());
+      this.closeBulkFieldMenu?.();
+      this.closePopovers();
+      closeRecordDetailPanel();
+      this.cellSelection = null;
+      this.selectedRows.clear();
+      this.isSelectingCells = false;
+      this.render();
+    }));
     this.observeVisibility();
     this.render();
   }
 
   onunload(): void {
+    this.unloaded = true;
+    this.formRenderer.destroy();
+    this.closeBulkFieldMenu?.();
+    this.cellRenderer.cancelActiveInlineEditor();
+    this.cellRenderer.closeActiveBulkEditor();
     this.refreshCoordinator.destroy();
     this.chartRenderer.destroy();
     this.calendarRenderer.destroy();
@@ -463,6 +598,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.intersectionObserver?.disconnect();
     this.clearFileViewWidthClass();
     this.clearEmbedCodeBlockHost();
+    this.embedHeightGripEl?.remove();
+    this.embedHeightGripEl = undefined;
     // 取消可能仍在调度的无效时间事件分块扫描，避免卸载后继续占用 idle 回调
     this.timelineInvalidEventsScanner.clear();
   }
@@ -569,6 +706,123 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.restoreScroll(viewTypeChanged ? { top: 0, left: pos.left } : pos);
     this.restoreDescriptionScroll(descriptionScroll);
     this.restoreEmbeddedHostViewport(hostViewport);
+  }
+
+  private applyEmbeddedHeight(height: number | null): void {
+    this.containerEl.toggleClass("db-embed-custom-height", height != null);
+    if (height == null) this.containerEl.style.removeProperty("--db-embed-height");
+    else this.containerEl.style.setProperty("--db-embed-height", `${height}px`);
+  }
+
+  private renderEmbeddedHeightGrip(): void {
+    if (this.persistMode !== "codeblock" || !this.containerEl.parentElement) return;
+    this.embedHeightGripEl?.remove();
+    // 放在滚动容器外侧：底边始终贴着代码块边框，不随表格内容滚动。
+    const grip = this.containerEl.ownerDocument.createElement("div");
+    grip.className = "db-embed-height-grip";
+    grip.setAttribute("role", "separator");
+    grip.setAttribute("tabindex", "0");
+    grip.setAttribute("aria-orientation", "horizontal");
+    grip.setAttribute("aria-label", t("embed.resizeHeight"));
+    grip.setAttribute("title", t("embed.resizeHeight"));
+    grip.setAttribute("aria-valuemin", String(MIN_EMBED_HEIGHT));
+    grip.setAttribute("aria-valuemax", String(MAX_EMBED_HEIGHT));
+    this.containerEl.insertAdjacentElement("afterend", grip);
+    this.embedHeightGripEl = grip;
+    grip.createSpan({ cls: "db-embed-height-grip-mark" });
+    const visibleHeight = () => Math.round(this.containerEl.getBoundingClientRect().height);
+    const maxHeight = () => Math.max(MIN_EMBED_HEIGHT, Math.min(MAX_EMBED_HEIGHT, Math.floor(this.getRefreshWindow().innerHeight * 0.9)));
+    const preview = (height: number | null): void => {
+      this.applyEmbeddedHeight(height);
+      grip.setAttribute("aria-valuenow", String(height ?? visibleHeight()));
+    };
+    grip.setAttribute("aria-valuenow", String(this.embedHeightPx ?? visibleHeight()));
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+    let draftHeight = 0;
+    grip.onpointerdown = (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragging = true;
+      startY = event.clientY;
+      startHeight = visibleHeight();
+      draftHeight = startHeight;
+      grip.addClass("is-dragging");
+      grip.setPointerCapture(event.pointerId);
+    };
+    grip.onpointermove = (event) => {
+      if (!dragging) return;
+      draftHeight = Math.max(MIN_EMBED_HEIGHT, Math.min(maxHeight(), Math.round(startHeight + event.clientY - startY)));
+      preview(draftHeight);
+    };
+    grip.onpointerup = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      grip.removeClass("is-dragging");
+      if (grip.hasPointerCapture(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+      event.stopPropagation();
+      if (Math.abs(draftHeight - startHeight) < 3) { preview(this.embedHeightPx); return; }
+      void this.commitEmbeddedHeight(draftHeight);
+    };
+    grip.onpointercancel = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      grip.removeClass("is-dragging");
+      if (grip.hasPointerCapture(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+      preview(this.embedHeightPx);
+    };
+    let keyboardDraft: number | null = null;
+    grip.onkeydown = (event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      event.stopPropagation();
+      keyboardDraft = Math.max(MIN_EMBED_HEIGHT, Math.min(maxHeight(),
+        (keyboardDraft ?? visibleHeight()) + (event.key === "ArrowDown" ? 20 : -20)));
+      preview(keyboardDraft);
+    };
+    grip.onkeyup = (event) => {
+      if ((event.key !== "ArrowUp" && event.key !== "ArrowDown") || keyboardDraft == null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const height = keyboardDraft;
+      keyboardDraft = null;
+      void this.commitEmbeddedHeight(height);
+    };
+    grip.ondblclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.commitEmbeddedHeight(null);
+    };
+  }
+
+  private async commitEmbeddedHeight(height: number | null): Promise<void> {
+    if (height === this.embedHeightPx) return;
+    const previous = this.embedHeightPx;
+    this.embedHeightPx = height;
+    this.applyEmbeddedHeight(height);
+    try {
+      const file = this.app.vault.getAbstractFileByPath(this.sourcePath);
+      const section = this.getSectionInfo();
+      if (!(file instanceof TFile) || !section) throw new Error("Code block location is unavailable");
+      this.suppressDataReload(2500);
+      this.dataSource.markPluginWrite(file.path, this.instanceId);
+      await this.app.vault.process(file, (content) => {
+        const newline = content.includes("\r\n") ? "\r\n" : "\n";
+        const lines = content.split(/\r?\n/);
+        const block = lines.slice(section.lineStart, section.lineEnd + 1).join(newline);
+        const updated = updateEmbeddedHeightBlock(block, height);
+        if (!updated) throw new Error("Database code block changed before its height was saved");
+        lines.splice(section.lineStart, section.lineEnd - section.lineStart + 1, ...updated.split(/\r?\n/));
+        return lines.join(newline);
+      });
+      this.source = updateEmbeddedHeightOption(this.source, height);
+    } catch (error) {
+      this.embedHeightPx = previous;
+      if (!this.unloaded) this.applyEmbeddedHeight(previous);
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+    }
   }
 
   private saveScroll(): { top: number; left: number } {
@@ -900,7 +1154,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         sourcePath: mutation.dbPath || this.currentSourcePath,
       };
     }
-    if (this.hasObservedVisibility && !this.isIntersecting) {
+    if (this.dataOperations.busy || this.cellRenderer.hasActiveEditor(this.containerEl) || (this.hasObservedVisibility && !this.isIntersecting)) {
       this.pendingSourceReload = true;
       this.pendingRefreshWhileHidden = true;
       this.refreshCoordinator.mark([mutation.dbPath || this.currentSourcePath]);
@@ -939,9 +1193,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.applyViewTypeClass(config.viewType || "table");
     const target = this.containerEl;
     const staleViewSelector = config.viewType === "chart"
-      ? ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-calendar, .db-timeline, .db-empty"
-      : ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-chart, .db-chart-empty, .db-chart-number, .db-calendar, .db-timeline, .db-empty";
+      ? ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-calendar, .db-timeline, .db-form-stage, .db-empty"
+      : ".db-summary, .db-table-wrap, .db-grouped-table, .db-board, .db-gallery, .db-gallery-grouped, .db-gallery-total-header, .db-list, .db-list-grouped, .db-list-total-header, .db-chart, .db-chart-empty, .db-chart-number, .db-calendar, .db-timeline, .db-form-stage, .db-empty";
     target.querySelectorAll(staleViewSelector).forEach((el) => el.remove());
+    this.formRenderer.destroy();
     if (!config.schema.columns || config.schema.columns.length === 0) {
       target.createDiv({ cls: "db-empty", text: t("errors.noColumns") });
       this.restoreEmbeddedHostViewport(hostViewport);
@@ -959,7 +1214,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const pipelineConfig = config.viewType === "chart" ? { ...config, manualOrder: undefined } : config;
     this.rows = this.buildRowsWithRelations(records, pipelineConfig, this.vs(config), this.currentDbConfig, true);
     this.timelineInvalidRowsVersion += 1;
-    if (config.viewType !== "chart") {
+    if (config.viewType !== "chart" && config.viewType !== "form") {
       this.summaryRenderer.render(target, this.rows, config, this.currentDbConfig, {
         onChange: () => {
           this.persistEmbeddedConfigLocally(config);
@@ -1012,6 +1267,32 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         sortDirection: state.sortDirection,
         sortRules: state.sortRules,
       }, this.rows);
+    } else if (config.viewType === "form") {
+      const effective = this.getEffectiveConfig(config);
+      const sourcePath = this.currentSourcePath;
+      this.formRenderer.render(target, config, effective.sourceRuleTree, new Set(this.vs(config).hiddenColumns), {
+        app: this.app,
+        getSourcePath: () => sourcePath,
+        getRelationRecords: (col) => {
+          const relationId = col.relationConfig?.targetDatabaseId;
+          const database = this.dataSource.getViewDefFiles().map((entry) => entry.config)
+            .find((candidate) => candidate.id === relationId);
+          return database ? this.dataSource.getRecordsForDatabase(database) : [];
+        },
+        submitForm: (input) => this.submitEmbeddedForm(input, sourcePath),
+        updateOptions: (col, before, next, removed) => {
+          if (this.isEmbedReadOnly() || this.currentSourcePath !== sourcePath) return Promise.resolve(false);
+          return this.dataOperations.editField([], col, null, {
+            previousOptions: before,
+            nextOptions: next,
+            cleanupRemovedValues: removed,
+            setValue: false,
+          });
+        },
+      }, {
+        readOnly: this.isEmbedReadOnly(),
+        draftKey: `embed:${sourcePath}:${config.id}`,
+      });
     } else if (this.vs(config).groupByField) {
       const field = this.vs(config).groupByField;
       const groups = withEmptyOptionGroups(config, field, this.queryEngine.groupBy(this.rows, field, [], config.schema.columns.find((c) => c.key === field), config));
@@ -1030,6 +1311,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         },
       });
     }
+    const visiblePaths = new Set(this.rows.map((row) => row.file.path));
+    for (const path of this.selectedRows) if (!visiblePaths.has(path)) this.selectedRows.delete(path);
+    this.renderEmbedSelectionStatusBar();
     this.renderCalendarTimelineSearchResultsPanel(config);
     this.revealPendingSearchResult();
     if (options.viewport === "reset-top") {
@@ -1180,7 +1464,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private applyViewTypeClass(viewType: NonNullable<ViewConfig["viewType"]>): void {
-    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline"] as const) {
+    for (const type of ["table", "board", "gallery", "list", "chart", "calendar", "timeline", "form"] as const) {
       this.containerEl.toggleClass(`db-view-${type}`, viewType === type);
     }
   }
@@ -1363,8 +1647,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       copyViewCode: () => { void this.copyEmbeddedViewCode(config); },
       exportData: (format) => this.exportData(config, format),
       exportCsvMarkdownZip: () => { void this.exportCsvMarkdownZip(); },
-      createEntry: (defaults) => { if (this.persistMode !== "codeblock") void this.createBlankEntry(defaults); },
-      isReadOnly: this.persistMode === "codeblock",
+      createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
+      isReadOnly: this.isEmbedReadOnly(),
       showChartOptions: this.persistMode !== "codeblock",
       addDatabase: () => {},
       deleteDatabase: () => {},
@@ -2078,87 +2362,144 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (checkbox) checkbox.disabled = true;
   }
 
-  /** Limited column context menu for embedded view: hide, wrap, sort only */
+  private isEmbedReadOnly(): boolean {
+    return this.persistMode === "codeblock" && this.embeddedReadOnly;
+  }
+
+  private showEmbeddedFormulaModal(col: ColumnDef, restoreFocusRow?: RowData): void {
+    if (this.isEmbedReadOnly() || !this.config || !this.currentDbConfig || col.type !== "computed") return;
+    const computedKey = col.computedKey || col.key;
+    const computedField = this.config.schema.computedFields.find((field) => field.key === computedKey);
+    const baseFile = this.app.vault.getAbstractFileByPath(this.currentSourcePath);
+    const baseFrontmatter = baseFile instanceof TFile
+      ? this.app.metadataCache.getFileCache(baseFile)?.frontmatter : undefined;
+    new FormulaModal(
+      this.app, col, computedField, this.rows, this.config.schema.columns,
+      normalizeComputedSyncMode(this.currentDbConfig.computedSyncMode),
+      async (result) => this.applyEmbeddedFormulaResult(col, result),
+      baseFile instanceof TFile ? baseFile : undefined, baseFrontmatter, undefined,
+      restoreFocusRow?.file.path,
+    ).open();
+  }
+
+  private async applyEmbeddedFormulaResult(col: ColumnDef, result: FormulaSaveResult): Promise<boolean> {
+    const key = col.computedKey || col.key;
+    return this.dataOperations.changeDatabase(t("undo.formulaConfig"), (db) => {
+      const live = db.schema.columns.find((candidate) => candidate.key === col.key);
+      if (!live || live.type !== "computed") throw new Error("Formula column changed");
+      live.computedKey = key;
+      const existing = db.schema.computedFields.find((field) => field.key === key);
+      const next: ComputedFieldDef = {
+        key, label: live.label, expression: result.expression,
+        type: result.resultType, expressionSyntax: result.expressionSyntax,
+      };
+      if (existing) Object.assign(existing, next);
+      else db.schema.computedFields.push(next);
+    });
+  }
+
+  private showEmbeddedRelationRollupModal(col: ColumnDef, _restoreFocusRow?: RowData): void {
+    if (this.isEmbedReadOnly() || !this.currentDbConfig || (col.type !== "relation" && col.type !== "rollup")) return;
+    const databases = this.dataSource.getViewDefFiles().map((entry) => entry.config);
+    if (!databases.some((database) => database.id === this.currentDbConfig?.id)) databases.push(this.currentDbConfig);
+    new RelationRollupConfigModal(
+      this.app, col, this.currentDbConfig, databases,
+      async (result) => this.applyEmbeddedRelationRollupResult(col, databases, result),
+      true,
+      (targetId) => this.getEmbeddedRelationTargetImpact(col, databases, targetId),
+    ).open();
+  }
+
+  private getEmbeddedRelationTargetImpact(col: ColumnDef, databases: DatabaseConfig[], targetId: string): RelationTargetChangeImpact {
+    const target = databases.find((database) => database.id === targetId);
+    if (!target || col.type !== "relation" || !this.config || !this.currentDbConfig) {
+      return { clearRecordCount: 0, dependentRollupCount: 0, invalidatedRollupLabels: [] };
+    }
+    const records = this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(this.config));
+    const plan = planRelationTargetChange(this.currentDbConfig, col.key, target);
+    return {
+      clearRecordCount: records.filter((record) => hasRelationValue(record.frontmatter[col.key])).length,
+      dependentRollupCount: plan.dependentRollupCount,
+      invalidatedRollupLabels: plan.invalidatedRollupLabels,
+    };
+  }
+
+  private async applyEmbeddedRelationRollupResult(
+    col: ColumnDef, databases: DatabaseConfig[], result: RelationRollupConfigResult,
+  ): Promise<void> {
+    if (!this.config || !this.currentDbConfig) return;
+    if (result.type === "rollup") {
+      await this.dataOperations.changeDatabase(t("undo.rollupConfig"), (db) => {
+        const live = db.schema.columns.find((candidate) => candidate.key === col.key);
+        if (!live || live.type !== "rollup") throw new Error("Rollup column changed");
+        live.rollupConfig = { relationField: result.relationField, targetField: result.targetField, aggregation: result.aggregation };
+        live.relationConfig = undefined;
+      });
+      return;
+    }
+    const previousTarget = col.relationConfig?.targetDatabaseId || "";
+    const changed = Boolean(previousTarget && previousTarget !== result.targetDatabaseId);
+    const target = databases.find((database) => database.id === result.targetDatabaseId);
+    if (changed && !target) throw new Error(t("relation.targetDatabaseRequired"));
+    const records = changed
+      ? this.dataSource.getRecordsForDatabase(this.getEffectiveConfig(this.config))
+        .filter((record) => hasRelationValue(record.frontmatter[col.key]))
+        .map((record) => ({ path: record.file.path, updates: { [col.key]: null } }))
+      : [];
+    await this.dataOperations.changeDatabase(changed ? t("undo.relationTargetChange") : t("undo.relationConfig"), (db) => {
+      const live = db.schema.columns.find((candidate) => candidate.key === col.key);
+      if (!live || live.type !== "relation") throw new Error("Relation column changed");
+      live.relationConfig = { targetDatabaseId: result.targetDatabaseId };
+      live.rollupConfig = undefined;
+      if (changed && target) {
+        const plan = planRelationTargetChange(db, col.key, target);
+        for (const change of plan.rollupChanges) {
+          const rollup = db.schema.columns.find((candidate) => candidate.key === change.columnKey);
+          if (rollup?.rollupConfig) rollup.rollupConfig.targetField = change.nextTargetField;
+        }
+      }
+    }, records);
+  }
+
+  private withEmbeddedReadonly<T extends { isReadOnly?: boolean }>(actions: T): T {
+    Object.defineProperty(actions, "isReadOnly", { get: () => this.isEmbedReadOnly() });
+    return actions;
+  }
+
   private showColumnContextMenu(event: MouseEvent, col: ColumnDef, anchorEl?: HTMLElement, includeWidthActions = true): void {
-    event.preventDefault();
-    event.stopPropagation();
     const config = this.config;
     if (!config) return;
-    const menu = new Menu().setUseNativeMenu(false);
-
-    menu.addItem((item) => item
-      .setTitle(t("menu.hideProperty", { name: col.label }))
-      .setIcon("eye-off")
-      .onClick(() => {
-        this.vs(config).hiddenColumns.add(col.key);
-        this.persistEmbeddedConfigLocally(config);
-        this.updateToolbarIndicators(config);
-        this.renderResults(config);
-        this.saveEmbeddedConfigInBackground();
-      })
-    );
-    menu.addItem((item) => item
-      .setTitle(col.wrap ? t("menu.disableWrap") : t("menu.enableWrap"))
-      .setIcon("wrap-text")
-      .onClick(() => {
-        col.wrap = !col.wrap || undefined;
-        this.persistEmbeddedConfigLocally(config);
-        this.renderResults(config);
-        this.saveEmbeddedConfigInBackground();
-      })
-    );
-    if (isNumberDisplayColumn(col, config.schema.computedFields)) {
-      const currentStyle = col.numberDisplayStyle ?? "plain";
-      const numberStyles: { value: NumberDisplayStyle; key: string }[] = [
-        { value: "plain", key: "menu.numberStylePlain" },
-        { value: "rating", key: "menu.numberStyleRating" },
-        { value: "progress", key: "menu.numberStyleProgress" },
-        { value: "ring", key: "menu.numberStyleRing" },
-      ];
-      for (const { value, key } of numberStyles) {
-        menu.addItem((item) => item
-          .setTitle(t(key))
-          .setChecked(currentStyle === value)
-          .onClick(() => {
-            col.numberDisplayStyle = value === "plain" ? undefined : value;
-            this.persistEmbeddedConfigLocally(config);
-            this.renderResults(config);
-            this.saveEmbeddedConfigInBackground();
-          })
-        );
-      }
-    }
-    if (includeWidthActions) {
-      menu.addItem((item) => item
-        .setTitle(t("menu.autoFitColumn"))
-        .setIcon("ruler-dimension-line")
-        .onClick(() => this.autoFitColumn(config, col))
-      );
-      menu.addItem((item) => item
-        .setTitle(t("menu.autoFitAllColumns"))
-        .setIcon("scan-line")
-        .onClick(() => this.autoFitAllColumns(config))
-      );
-    }
-    menu.addItem((item) => item
-      .setTitle(t("menu.sortBy", { name: col.label }))
-      .setIcon("arrow-up-down")
-      .onClick(() => this.sortByColumn(col))
-    );
-    if (this.getColumnSortDirection(config, col)) {
-      menu.addItem((item) => item
-        .setTitle(t("menu.clearSort"))
-        .setIcon("x")
-        .onClick(() => this.clearColumnSort(config, col))
-      );
-    }
-
-    if (anchorEl?.isConnected) {
-      const rect = anchorEl.getBoundingClientRect();
-      menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
-    } else {
-      menu.showAtMouseEvent(event);
-    }
+    const saveDisplay = (change: () => void) => {
+      change();
+      this.persistEmbeddedConfigLocally(config);
+      this.renderResults(config);
+      this.saveEmbeddedConfigInBackground();
+    };
+    const unsupported = () => { new Notice(t("notice.editInFullView")); };
+    const menu = new ColumnMenu({
+      editColumn: unsupported,
+      editFormula: (column) => this.showEmbeddedFormulaModal(column),
+      editRelationRollup: (column) => this.showEmbeddedRelationRollupModal(column),
+      editStatusOptions: unsupported,
+      showOptionsEditor: unsupported, changeColumnType: unsupported,
+      insertColumn: unsupported, duplicateColumn: unsupported, moveColumn: unsupported,
+      deleteColumn: unsupported,
+      hideColumn: (column) => saveDisplay(() => { this.vs(config).hiddenColumns.add(column.key); }),
+      toggleColumnWrap: (column) => saveDisplay(() => { column.wrap = !column.wrap || undefined; }),
+      setTextRenderMode: (column, mode) => saveDisplay(() => { column.textRenderMode = mode === "plain" ? undefined : mode; }),
+      setNumberDisplayStyle: (column, style) => saveDisplay(() => { column.numberDisplayStyle = style === "plain" ? undefined : style; }),
+      updateNumberDisplayConfig: (column, partial) => saveDisplay(() => { column.numberDisplayConfig = { ...column.numberDisplayConfig, ...partial }; }),
+      sortByColumn: (column) => this.sortByColumn(column),
+      getColumnSortDirection: (column) => this.getColumnSortDirection(config, column),
+      clearColumnSort: (column) => this.clearColumnSort(config, column),
+      autoFitColumn: (column) => this.autoFitColumn(config, column),
+      autoFitAllColumns: () => this.autoFitAllColumns(config),
+    });
+    menu.show(event, col, anchorEl, {
+      displayOnly: true, includeLayoutActions: false, includeWidthActions,
+      allowAdvancedConfig: !this.isEmbedReadOnly(),
+      computedFields: config.schema.computedFields,
+    });
   }
 
   private autoFitColumn(config: ViewConfig, col: ColumnDef): void {
@@ -2317,57 +2658,40 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private updateBoardGroupOrder(field: string, order: string[]): void {
-    const config = this.config;
-    if (!config) return;
-    config.groupOrders = { ...(config.groupOrders || {}), [field]: order };
-    this.persistEmbeddedConfigLocally(config);
-    this.renderResults(config);
-    this.saveEmbeddedConfigInBackground();
+    void this.dataOperations.changeView(t("undo.viewConfig"), (view) => {
+      view.groupOrders = { ...(view.groupOrders || {}), [field]: [...order] };
+    });
   }
 
   private updateBoardCardOrder(field: string, groupKey: string, paths: string[]): void {
-    const config = this.config;
-    if (!config) return;
-    config.boardCardOrders = {
-      ...(config.boardCardOrders || {}),
-      [field]: {
-        ...(config.boardCardOrders?.[field] || {}),
-        [groupKey]: paths,
-      },
-    };
-    this.persistEmbeddedConfigLocally(config);
-    this.renderResults(config);
-    this.saveEmbeddedConfigInBackground();
+    void this.dataOperations.changeView(t("undo.viewConfig"), (view) => {
+      view.boardCardOrders = { ...(view.boardCardOrders || {}),
+        [field]: { ...(view.boardCardOrders?.[field] || {}), [groupKey]: [...paths] } };
+    });
   }
 
   private moveRowToPosition(movedPath: string, beforePath?: string, afterPath?: string): void {
-    const config = this.config;
-    if (!config) return;
-    this.ensureManualRanks(config);
-    const ranks = config.manualOrder?.ranks;
-    if (!ranks) return;
-
-    const beforeRank = beforePath ? ranks[beforePath] : undefined;
-    const afterRank = afterPath ? ranks[afterPath] : undefined;
-    let newRank = rankBetween(beforeRank, afterRank);
-    if (newRank === null) {
-      const rebalanced = rebalanceRanks(ranks);
-      config.manualOrder = { ...(config.manualOrder || {}), ranks: rebalanced };
-      newRank = rankBetween(
-        beforePath ? rebalanced[beforePath] : undefined,
-        afterPath ? rebalanced[afterPath] : undefined
-      );
-    }
-    if (!newRank || !config.manualOrder?.ranks) return;
-    config.manualOrder.ranks[movedPath] = newRank;
-    this.persistEmbeddedConfigLocally(config);
-    this.renderResults(config);
-    this.saveEmbeddedConfigInBackground();
+    const paths = [...new Set(this.rows.map((row) => row.file.path))];
+    void this.dataOperations.changeView(t("undo.viewConfig"), (view) => {
+      let ranks = view.manualOrder?.ranks;
+      if (!ranks || !Object.keys(ranks).length) ranks = generateRanks(paths);
+      let rank = rankBetween(beforePath ? ranks[beforePath] : undefined, afterPath ? ranks[afterPath] : undefined);
+      if (rank === null) {
+        ranks = rebalanceRanks(ranks);
+        rank = rankBetween(beforePath ? ranks[beforePath] : undefined, afterPath ? ranks[afterPath] : undefined);
+      }
+      if (rank) view.manualOrder = { ...view.manualOrder, ranks: { ...ranks, [movedPath]: rank } };
+    });
   }
 
-  private ensureManualRanks(config: ViewConfig): void {
-    if (config.manualOrder?.ranks && Object.keys(config.manualOrder.ranks).length > 0) return;
-    config.manualOrder = { ...(config.manualOrder || {}), ranks: generateRanks(this.rows.map((row) => row.file.path)) };
+  private async moveEmbeddedRecord(row: RowData, groups: Array<{ field: string; fromGroupKey?: string; toGroupKey: string }>, before?: string, after?: string): Promise<void> {
+    const paths = this.getEmbeddedMovePaths(row);
+    await this.dataOperations.moveMany(paths, groups, this.rows.map((candidate) => candidate.file.path), before, after);
+  }
+
+  private getEmbeddedMovePaths(row: RowData): string[] {
+    if (!this.selectedRows.has(row.file.path) || this.selectedRows.size < 2) return [row.file.path];
+    return this.rows.map((candidate) => candidate.file.path).filter((path) => this.selectedRows.has(path));
   }
 
   private updateBoardColumnWidth(width: number): void {
@@ -2690,20 +3014,176 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
   }
 
-  private async updateBoardGroup(row: RowData, field: string, value: string): Promise<void> {
-    new Notice(t("notice.embedReadonly", { action: t("notice.editEntry") }));
+  private async updateBoardGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void> {
+    if (this.isEmbedReadOnly()) return;
+    const col = this.config?.schema.columns.find((column) => column.key === field);
+    if (!col) return;
+    try {
+      await this.dataOperations.moveMany(
+        this.getEmbeddedMovePaths(row),
+        [{ field, fromGroupKey: fromValue, toGroupKey: value }],
+        this.rows.map((candidate) => candidate.file.path),
+      );
+    } catch (error) {
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+      throw error;
+    } finally {
+      await this.refreshAfterSave();
+    }
   }
 
   private async deleteRow(row: RowData): Promise<void> {
-    new Notice(t("notice.embedReadonly", { action: t("notice.deleteEntry") }));
+    if (this.isEmbedReadOnly()) return;
+    try {
+      await this.dataOperations.delete([row.file.path]);
+    } catch (error) {
+      new Notice(t("errors.deleteFailed", { error: String(error) }));
+    }
   }
 
-  private async createBlankEntry(defaults: Record<string, unknown> = {}): Promise<void> {
-    new Notice(t("notice.embedReadonly", { action: t("notice.createEntry") }));
+  private async submitEmbeddedForm(input: FormCreateInput, sourcePath: string): Promise<boolean> {
+    if (this.isEmbedReadOnly() || this.currentSourcePath !== sourcePath) {
+      new Notice(t("form.targetUnavailable"));
+      return false;
+    }
+    const formPlan = this.formRenderer.getPlan();
+    return this.createBlankEntry(input.defaults, {
+      filenameHint: input.filenameHint,
+      validatePlan: (frontmatter, filename) => validateCreatedFrontmatter(frontmatter, formPlan, filename)
+        .missing.map((field) => field.col.label || field.col.key),
+    });
+  }
+
+  private async createBlankEntry(
+    defaults: Record<string, unknown> = {},
+    options: { filenameHint?: string; validatePlan?: (frontmatter: Record<string, unknown>, filename: string) => string[] } = {},
+  ): Promise<boolean> {
+    if (this.isEmbedReadOnly() || !this.config) return false;
+    const requestSourcePath = this.currentSourcePath;
+    const config = this.getEffectiveConfig(this.config);
+    try {
+      const setting = this.currentDbConfig?.newRecordTemplate;
+      let template: ParsedRecordTemplate | undefined;
+      if (setting?.path) {
+        const file = this.app.vault.getAbstractFileByPath(normalizePath(setting.path));
+        if (!(file instanceof TFile)) throw new Error(t("template.missing"));
+        template = parseRecordTemplate(await this.app.vault.read(file), setting.engine || "markdown");
+      }
+      const columnDefaults: Record<string, unknown> = {};
+      for (const col of config.schema.columns) {
+        if (!isFileFieldKey(col.key) && col.type !== "computed" && col.type !== "rollup" && canEditEmbeddedColumn(col)) {
+          columnDefaults[col.key] = getDefaultCellValue(col);
+        }
+      }
+      const buildPlan = () => planCreateEntry({
+        sourceRuleTree: getSourceRuleTree(config.sourceRuleTree, config.sourceRules, config.sourceLogic),
+        schema: config.schema, sourceFolder: config.sourceFolder || "",
+        newRecordFolder: config.newRecordFolder, fallbackFolder: this.defaultRecordFolder,
+        contextFrontmatter: { ...columnDefaults, ...template?.frontmatter, ...defaults },
+        intentionalContextKeys: new Set(Object.keys(defaults)), defaultFilename: t("defaults.untitledNote"),
+        filenameHint: options.filenameHint,
+        normalizeFolder: (folder) => this.normalizeVaultFolder(folder),
+      });
+      let plan = buildPlan();
+      if (template?.engine === "core") {
+        template = resolveCoreRecordTemplate(template, plan.filename);
+        plan = buildPlan();
+      }
+      if (this.currentSourcePath !== requestSourcePath || this.isEmbedReadOnly()) return false;
+      const missing = options.validatePlan?.(plan.frontmatter, plan.filename) || [];
+      if (missing.length > 0) {
+        new Notice(t("form.createBlockedMissing", { fields: missing.join(", ") }));
+        return false;
+      }
+      return await this.dataOperations.create(
+        plan.folder,
+        plan.filename,
+        plan.frontmatter,
+        template?.body || "",
+        template?.engine === "templater"
+          ? (file) => runTemplaterOnCreatedFile(this.app, file)
+          : undefined,
+      );
+    } catch (error) {
+      new Notice(t("errors.createFailed", { error: String(error) }));
+      return false;
+    }
+  }
+
+  private async createEmbeddedCalendarEntry(
+    config: ViewConfig, dateKey: string, range?: CalendarCreateTimeRange,
+  ): Promise<void> {
+    if (this.isEmbedReadOnly()) return;
+    const startField = config.calendarStartDateField || getDefaultEventDateField(config);
+    const endField = config.calendarEndDateField;
+    const startCol = config.schema.columns.find((column) => column.key === startField);
+    if (!startCol || isFileFieldKey(startCol.key) || (startCol.type !== "date" && startCol.type !== "datetime")) {
+      new Notice(t("calendar.noWritableDateField"));
+      return;
+    }
+    const format = (col: ColumnDef, day: string, minutes: number | undefined) => {
+      if (col.type !== "datetime" || minutes == null) return day;
+      const safe = Math.max(0, Math.min(1439, Math.round(minutes)));
+      return `${day}T${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+    };
+    const defaults: Record<string, unknown> = {
+      [startCol.key]: format(startCol, dateKey, range?.startTimeMinutes ?? (startCol.type === "datetime" ? 0 : undefined)),
+    };
+    const endCol = endField ? config.schema.columns.find((column) => column.key === endField) : undefined;
+    if (endCol && !isFileFieldKey(endCol.key) && (endCol.type === "date" || endCol.type === "datetime")) {
+      defaults[endCol.key] = format(
+        endCol, dateKey,
+        range?.endTimeMinutes ?? (endCol.type === "datetime" ? 23 * 60 + 59 : undefined),
+      );
+    }
+    await this.createBlankEntry(defaults);
   }
 
   private async refreshAfterSave(): Promise<void> {
     if (this.config) this.renderResults(this.config);
+  }
+
+  private refreshAfterDataOperation(): void {
+    if (this.unloaded || !this.containerEl.isConnected) return;
+    try {
+      const entry = this.dataSource.getViewDefFiles().find(({ file }) => file.path === this.currentSourcePath);
+      const view = entry?.config.views.find((candidate) => candidate.id === this.config?.id);
+      if (entry && view) {
+        this.currentDbConfig = this.cloneDatabaseConfig(entry.config);
+        this.config = this.cloneConfig(view);
+        this.pendingDatabaseOverride = undefined;
+      }
+      if (this.config) this.renderResults(this.config);
+    } catch (error) {
+      console.error("Note Database: committed embedded operation refresh failed", error);
+      new Notice(t("errors.refreshFailed"));
+    }
+  }
+
+  private async updateEmbeddedEventDates(row: RowData, changes: CalendarEventDateChange): Promise<void> {
+    if (this.isEmbedReadOnly() || !this.config) return;
+    const updates: Record<string, unknown> = {};
+    const add = (field: string | undefined, date: string | undefined, minutes?: number) => {
+      if (!field || !date) return true;
+      const col = this.config?.schema.columns.find((column) => column.key === field);
+      if (!col || isFileFieldKey(field) || (col.type !== "date" && col.type !== "datetime")) return false;
+      const time = Math.max(0, Math.min(1439, Math.round(minutes ?? 0)));
+      updates[field] = col.type === "datetime" && minutes != null
+        ? `${date}T${String(Math.floor(time / 60)).padStart(2, "0")}:${String(time % 60).padStart(2, "0")}` : date;
+      return true;
+    };
+    if ((changes.changedEdge !== "end" && !add(changes.startField, changes.startDateKey, changes.startTimeMinutes)) ||
+        (changes.changedEdge !== "start" && !add(changes.endField, changes.endDateKey, changes.endTimeMinutes))) {
+      new Notice(t("calendar.noWritableDateField"));
+      return;
+    }
+    try {
+      await this.dataOperations.edit(row.file.path, updates, t("undo.timelineDates"));
+    } catch (error) {
+      new Notice(t("errors.updateFailed", { error: String(error) }));
+    } finally {
+      await this.refreshAfterSave();
+    }
   }
 
   private getDefaultFrontmatterFromSourceRules(config: ViewConfig): Record<string, unknown> {
@@ -2803,6 +3283,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private toggleRowSelected(row: RowData, selected: boolean, event?: MouseEvent): void {
+    this.cellRenderer.closeActiveBulkEditor();
+    this.closeBulkFieldMenu?.();
+    this.cellSelection = null;
     this.lastSelectedRowPath = applyRangeSelection({
       orderedIds: this.getOrderedSelectionRowPaths(),
       selectedIds: this.selectedRows,
@@ -2815,6 +3298,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private toggleRowsSelected(rows: RowData[], selected: boolean): void {
+    this.cellRenderer.closeActiveBulkEditor();
+    this.closeBulkFieldMenu?.();
+    this.cellSelection = null;
     for (const row of rows) {
       if (selected) this.selectedRows.add(row.file.path);
       else this.selectedRows.delete(row.file.path);
@@ -2851,11 +3337,23 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private async deleteSelectedRows(): Promise<void> {
-    if (this.selectedRows.size > 0) {
-      new Notice(t("notice.embedReadonly", { action: t("notice.deleteEntry") }));
+    if (this.isEmbedReadOnly()) return;
+    const requestSourcePath = this.currentSourcePath;
+    const paths = [...this.selectedRows];
+    if (!paths.length || !await confirmWithModal(this.app, {
+      title: t("common.delete"), message: t("confirm.deleteSelected", { count: paths.length }),
+      confirmText: t("common.delete"), danger: true,
+    })) return;
+    if (this.currentSourcePath !== requestSourcePath || this.isEmbedReadOnly()) return;
+    try {
+      if (await this.dataOperations.delete(paths)) this.selectedRows.clear();
+    } catch (error) {
+      console.error("Note Database: embedded bulk delete failed", error);
+      new Notice(t("errors.updateFailed"));
+    } finally {
+      this.lastSelectedRowPath = null;
+      await this.refreshAfterSave();
     }
-    this.selectedRows.clear();
-    this.lastSelectedRowPath = null;
   }
 
   private persistEmbeddedConfigLocally(config = this.config): void {
@@ -2910,7 +3408,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private saveEmbeddedConfigInBackground(mutationOverride?: ViewConfigMutation): void {
-    void this.saveEmbeddedConfigToSource(mutationOverride).catch((err) => {
+    const save = this.saveEmbeddedConfigToSource(mutationOverride);
+    this.pendingConfigSave = save;
+    void save.catch((err) => {
       console.error("Note Database: failed to save embedded view config", err);
       new Notice(t("errors.saveViewConfigFailed", { error: String(err) }));
     });
@@ -3008,6 +3508,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     }
     if (config.id) lines.push(`viewId: ${config.id}`);
     if (this.shouldHideHeaderChrome()) lines.push("hideHeader: true");
+    if (this.embedHeightPx != null) lines.push(`height: ${this.embedHeightPx}`);
     return lines.join("\n");
   }
 
@@ -3387,6 +3888,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       if (!sourceCol) continue;
       sourceCol.wrap = col.wrap;
       sourceCol.numberDisplayStyle = col.numberDisplayStyle;
+      sourceCol.numberDisplayConfig = col.numberDisplayConfig;
+      sourceCol.textRenderMode = col.textRenderMode;
     }
     this.stateStore.persist(origView, this.vs(this.config));
   }
@@ -3397,10 +3900,20 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (!this.containerEl.isConnected) return;
     const target = event.target;
     const eventTarget = isHTMLElement(target) ? target : null;
-    const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .modal") != null;
+    const isEditing = eventTarget?.closest("input, textarea, select, .db-cell-editing, .db-cell-popover-editing, .modal") != null;
     if (isEditing) return;
+    // Data undo/redo is button-only; leave history shortcuts to the host editor.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && this.cellSelection) {
+      if (this.cellRenderer.hasActiveEditor(this.containerEl)) {
+        traceDatabaseInteraction(this.containerEl.ownerDocument, "copy:blocked-editor", { instance: this.instanceId });
+        return;
+      }
       event.preventDefault();
+      event.stopPropagation();
+      if (!this.physicalShortcutGuard.allowsModShortcut(event)) {
+        traceDatabaseInteraction(this.containerEl.ownerDocument, "copy:blocked-orphan-shortcut", { instance: this.instanceId });
+        return;
+      }
       void this.copySelectedEmbedCells("tsv");
       return;
     }
@@ -3411,6 +3924,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private async copySelectedEmbedCells(format: "tsv" | "markdown" | "csv" = "tsv"): Promise<void> {
+    traceDatabaseInteraction(this.containerEl.ownerDocument, "copy:embedded", { instance: this.instanceId, format, stack: new Error().stack });
     const selected = this.getSelectedEmbedCellAddresses();
     if (selected.length === 0) return;
     if (!this.config) return;
@@ -3422,6 +3936,127 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const content = serializeSelectedCells(format, selected, rowPaths, colKeys, rowByPath, colByKey, getCellDisplayText);
     await navigator.clipboard.writeText(content);
     new Notice(t("notice.copiedCells", { count: selected.length }));
+  }
+
+  private isEmbeddedBatchColumn(col: ColumnDef): boolean {
+    return canEditEmbeddedColumn(col) && col.key !== "file.name" && col.type !== "computed" && col.type !== "rollup";
+  }
+
+  private normalizeEmbeddedBatchValue(col: ColumnDef, input: unknown): unknown {
+    if (input == null || input === "") return null;
+    if (col.key === "file.tags") return toValidObsidianTagValues(input);
+    if (col.type === "number" || col.type === "currency") {
+      const parsed = Number(input);
+      return Number.isFinite(parsed) ? parsed : input;
+    }
+    if (col.type === "checkbox") return toBooleanValue(input);
+    if (col.type === "multi-select") return toMultiSelectValuesForKey(col.key, input);
+    if (col.type === "select" || col.type === "status") return normalizeOptionValueForKey(col.key, input);
+    return cloneFrontmatterValue(input);
+  }
+
+  private getEmbeddedBatchTargets(): Array<{ row: RowData; col: ColumnDef }> {
+    if (!this.config) return [];
+    const rows = new Map(this.rows.map((row) => [row.file.path, row]));
+    const columns = new Map(this.config.schema.columns.map((col) => [col.key, col]));
+    return this.getSelectedEmbedCellAddresses().flatMap((address) => {
+      const row = rows.get(address.rowPath);
+      const col = columns.get(address.colKey);
+      return row && col && this.isEmbeddedBatchColumn(col) ? [{ row, col }] : [];
+    });
+  }
+
+  private async pasteEmbeddedCells(): Promise<void> {
+    if (!this.config || !this.cellSelection) return;
+    const matrix = parseClipboardTable(await navigator.clipboard.readText());
+    if (!matrix.length) return;
+    const rowPaths = this.getEmbedTableRowPaths();
+    const colKeys = this.getEmbedTableColKeys();
+    const layout = planTablePasteLayout(rowPaths, colKeys, this.getSelectedEmbedCellAddresses(), matrix);
+    if (!layout) return;
+    const rows = new Map(this.rows.map((row) => [row.file.path, row]));
+    const columns = new Map(this.config.schema.columns.map((col) => [col.key, col]));
+    const writes: Array<{ path: string; column: ColumnDef; value: unknown }> = [];
+    let skipped = layout.newRows * layout.usableCols;
+    for (let r = 0; r < layout.existingRows; r++) {
+      for (let c = 0; c < layout.usableCols; c++) {
+        const row = rows.get(rowPaths[layout.startRow + r]);
+        const col = columns.get(colKeys[layout.startCol + c]);
+        if (!row || !col || !this.isEmbeddedBatchColumn(col)) { skipped++; continue; }
+        writes.push({ path: row.file.path, column: col, value: this.normalizeEmbeddedBatchValue(col, getTablePasteValue(matrix, r, c)) });
+      }
+    }
+    if (!writes.length) {
+      new Notice(t("notice.noEditableCellsSkipped", { skipped }));
+      return;
+    }
+    await this.dataOperations.editCells(writes, t("undo.pasteCells"));
+    this.showEmbeddedBatchNotice("pasted", writes.length, skipped);
+  }
+
+  private async fillEmbeddedCells(value: unknown, source?: { row: RowData; col: ColumnDef }): Promise<void> {
+    const targets = this.getEmbeddedBatchTargets();
+    const writes = targets.flatMap(({ row, col }) => {
+      if (source && row.file.path === source.row.file.path && col.key === source.col.key) return [];
+      const sourceValue = source
+        ? source.row.frontmatter[source.col.key === "file.tags" ? "tags" : source.col.key]
+        : value;
+      return [{ path: row.file.path, column: col, value: this.normalizeEmbeddedBatchValue(col, sourceValue) }];
+    });
+    if (!writes.length) return;
+    await this.dataOperations.editCells(writes, t("undo.fillCells"));
+    this.showCellFillInput = false;
+    this.showEmbeddedBatchNotice("filled", writes.length, 0);
+  }
+
+  private async clearEmbeddedCells(): Promise<void> {
+    const targets = this.getEmbeddedBatchTargets();
+    if (!targets.length) return;
+    if (targets.length > 20 && !await confirmWithModal(this.app, {
+      title: t("common.delete"), message: t("confirm.clearCells", { count: targets.length }),
+      confirmText: t("common.delete"), danger: true,
+    })) return;
+    await this.dataOperations.editCells(
+      targets.map(({ row, col }) => ({ path: row.file.path, column: col, value: null })),
+      t("undo.clearCells"),
+    );
+    this.showEmbeddedBatchNotice("cleared", targets.length, 0);
+  }
+
+  private showEmbeddedBatchNotice(action: "filled" | "pasted" | "cleared", count: number, skipped: number): void {
+    const base = action === "filled" ? "notice.filledCells" : action === "pasted" ? "notice.pastedCells" : "notice.clearedCells";
+    new Notice(t(skipped ? `${base}Skipped` : base, { count, skipped }));
+  }
+
+  private setupEmbeddedFillHandle(td: HTMLElement, row: RowData, col: ColumnDef): void {
+    if (this.isPhoneLayout() || !this.isEmbeddedBatchColumn(col)) return;
+    td.addClass("db-fillable-cell");
+    const handle = td.createSpan({ cls: "db-cell-fill-handle", attr: { title: t("cell.dragFill") } });
+    handle.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const source: CellAddress = { rowPath: row.file.path, colKey: col.key };
+      this.cellSelection = { anchor: source, focus: source };
+      td.addClass("is-fill-source");
+      const onMove = (move: MouseEvent) => {
+        const target = this.containerEl.ownerDocument.elementFromPoint(move.clientX, move.clientY)
+          ?.closest<HTMLElement>('td[data-note-database-row-path][data-note-database-column-key]');
+        const targetPath = target?.dataset.noteDatabaseRowPath;
+        if (!targetPath || target.dataset.noteDatabaseColumnKey !== col.key) return;
+        this.cellSelection = { anchor: source, focus: { rowPath: targetPath, colKey: col.key } };
+        this.renderEmbedCellSelectionClasses();
+        this.renderEmbedSelectionStatusBar();
+      };
+      const onUp = () => {
+        this.containerEl.ownerDocument.removeEventListener("mousemove", onMove, true);
+        this.containerEl.ownerDocument.removeEventListener("mouseup", onUp, true);
+        td.removeClass("is-fill-source");
+        void this.fillEmbeddedCells(undefined, { row, col });
+      };
+      this.containerEl.ownerDocument.addEventListener("mousemove", onMove, true);
+      this.containerEl.ownerDocument.addEventListener("mouseup", onUp, true);
+    });
   }
 
   /** Get row paths in the order they appear in the rendered table DOM */
@@ -3459,7 +4094,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return;
       if (!this.config) return;
+      if (isHTMLElement(event.target)) {
+        const control = event.target.closest("input, textarea, select, button, a, [contenteditable=true]");
+        // Live Preview's host editor is contenteditable too. Only controls
+        // inside this cell should opt out of table range selection.
+        if (control && td.contains(control)) return;
+      }
+      if (event.detail > 1 && !event.shiftKey) return;
+      this.selectedRows.clear();
       event.preventDefault(); // prevent browser text selection during drag
+      event.stopPropagation();
       const addr: CellAddress = { rowPath: row.file.path, colKey: col.key };
       if (this.isPhoneLayout()) {
         if (this.cellSelection) {
@@ -3543,12 +4187,102 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     });
   }
 
-  /** Render a full Dashboard-style selection status bar.
-   *  Paste/fill/clear/undo buttons are rendered but hidden via CSS (.note-database-embed .db-embed-hide).
-   *  Only copy actions are wired up. */
+  /** History remains accessible after an edit filters the selected records out of the view. */
+  private renderEmbeddedHistoryActions(bar: HTMLElement): void {
+    if (this.isEmbedReadOnly()) return;
+    if (this.dataOperations.canUndo) {
+      const undo = bar.createEl("button", { cls: "db-selection-action db-selection-undo", text: t("toolbar.undo"),
+        attr: { type: "button", title: this.dataOperations.undoLabel || t("toolbar.undo") } });
+      undo.disabled = this.dataOperations.busy;
+      undo.onclick = () => { this.cellRenderer.closeActiveBulkEditor(); void this.dataOperations.replay("undo"); };
+    }
+    if (this.dataOperations.canRedo) {
+      const redo = bar.createEl("button", { cls: "db-selection-action", text: t("toolbar.redo"), attr: { type: "button" } });
+      redo.disabled = this.dataOperations.busy;
+      redo.onclick = () => { this.cellRenderer.closeActiveBulkEditor(); void this.dataOperations.replay("redo"); };
+    }
+  }
+
+  private openEmbeddedBulkEdit(anchor: HTMLElement): void {
+    if (this.isEmbedReadOnly() || this.dataOperations.busy || !this.config) return;
+    this.cellRenderer.closeActiveBulkEditor();
+    this.closeBulkFieldMenu?.();
+    const paths = [...this.selectedRows];
+    const dbPath = this.currentSourcePath;
+    const selectionValid = () => !this.unloaded && !this.isEmbedReadOnly() && this.currentSourcePath === dbPath &&
+      paths.length === this.selectedRows.size && paths.every((path) => this.selectedRows.has(path));
+    this.closeBulkFieldMenu = openBulkEditFieldMenu({
+      anchor, columns: this.config.schema.columns.filter(canEditEmbeddedColumn),
+      computedFields: this.config.schema.computedFields || [],
+      onSelect: (column) => {
+        if (!selectionValid()) return;
+        const records = this.rows.filter((row) => paths.includes(row.file.path));
+        const representative = records[0];
+        if (!representative) return;
+        const key = column.key === "file.tags" ? "tags" : column.key;
+        const initial = resolveBulkEditInitialValue(column, records.map((row) => this.dataSource.getFrontmatterSnapshot(row.file)[key]));
+        const confirm = async (count: number) => {
+          // Close native/mobile editor before opening the confirmation modal.
+          this.cellRenderer.closeActiveBulkEditor();
+          const accepted = await confirmWithModal(this.app, {
+            title: t("bulkEdit.confirmTitle"),
+            message: `${t("bulkEdit.confirmChanged", { count })}\n${t("bulkEdit.embeddedScopeWarning")}`,
+            confirmText: t("bulkEdit.apply"),
+          });
+          return accepted === true && selectionValid();
+        };
+        this.cellRenderer.startEditSession(anchor, representative, { ...column }, initial.value, {
+          mixed: initial.mixed,
+          anchorEl: () => this.containerEl.querySelector<HTMLElement>(".db-selection-status-bar"),
+          commitValue: async (value) => {
+            if (selectionValid()) await this.dataOperations.editField(paths, column, value, undefined, confirm);
+          },
+          commitOptionTransaction: async (transaction) => {
+            if (selectionValid()) await this.dataOperations.editField(paths, column, transaction.value, transaction, confirm);
+          },
+        });
+      },
+    });
+  }
+
   private renderEmbedSelectionStatusBar(): void {
     this.containerEl.querySelectorAll(".db-selection-status-bar").forEach((el) => el.remove());
-    this.containerEl.toggleClass("has-selection-status", !!this.cellSelection);
+    if (this.cellSelection && this.getSelectedEmbedCellAddresses().length === 0) {
+      this.cellSelection = null;
+      this.isSelectingCells = false;
+    }
+    const hasHistory = !this.isEmbedReadOnly() && (this.dataOperations.canUndo || this.dataOperations.canRedo);
+    this.containerEl.toggleClass("has-selection-status", !!this.cellSelection || this.selectedRows.size > 0);
+    if (!this.cellSelection && (this.selectedRows.size > 0 || hasHistory)) {
+      const bar = this.containerEl.createDiv({ cls: "db-selection-status-bar" });
+      bar.toggleClass("db-embed-history-only", this.selectedRows.size === 0);
+      if (this.selectedRows.size > 0) {
+        const checkbox = bar.createEl("input", { cls: "db-selection-clear-checkbox", type: "checkbox" });
+        checkbox.checked = true;
+        checkbox.onchange = () => {
+          this.cellRenderer.closeActiveBulkEditor();
+          this.closeBulkFieldMenu?.();
+          this.selectedRows.clear();
+          this.lastSelectedRowPath = null;
+          if (this.config) this.renderResults(this.config);
+        };
+        bar.createSpan({ cls: "db-selection-count", text: t("toolbar.selectedCount", { count: this.selectedRows.size }) });
+        if (!this.isEmbedReadOnly()) {
+          const edit = bar.createEl("button", { cls: "db-selection-action", text: t("bulkEdit.editField") });
+          edit.disabled = this.dataOperations.busy;
+          edit.onclick = () => this.openEmbeddedBulkEdit(edit);
+          const button = bar.createEl("button", { cls: "db-selection-delete", text: t("common.delete") });
+          button.disabled = this.dataOperations.busy;
+          button.onclick = () => { void this.deleteSelectedRows(); };
+        }
+      }
+      this.renderEmbeddedHistoryActions(bar);
+      const summary = this.containerEl.querySelector<HTMLElement>(":scope > .db-summary");
+      if (summary) this.containerEl.insertBefore(bar, summary);
+      else this.containerEl.prepend(bar);
+      this.syncEmbeddedSelectionBarHorizontalPosition();
+      return;
+    }
     if (!this.cellSelection) return;
     const config = this.config || this.getEmbeddedConfig();
     if (!config || config.viewType !== "table") return;
@@ -3574,19 +4308,34 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     copyMdBtn.onclick = () => { void this.copySelectedEmbedCells("markdown"); };
     const copyCsvBtn = bar.createEl("button", { cls: "db-selection-action", text: t("selection.copyCsv"), attr: { type: "button" } });
     copyCsvBtn.onclick = () => { void this.copySelectedEmbedCells("csv"); };
+    for (const button of [copyTsvBtn, copyMdBtn, copyCsvBtn]) {
+      guardSelectionAction(button);
+    }
+    this.renderEmbeddedHistoryActions(bar);
 
-    // Edit-only buttons — rendered but hidden in embedded view via CSS
-    bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.pasteCells"), attr: { type: "button" } });
-    bar.createEl("button", { cls: "db-selection-action db-embed-hide", text: t("selection.fillValue"), attr: { type: "button" } });
-    bar.createEl("button", { cls: "db-selection-delete db-embed-hide", text: t("selection.clearCells"), attr: { type: "button" } });
+    if (!this.isEmbedReadOnly()) {
+      const paste = bar.createEl("button", { cls: "db-selection-action", text: t("selection.pasteCells"), attr: { type: "button" } });
+      paste.onclick = () => { void this.pasteEmbeddedCells(); };
+      const fill = bar.createEl("button", { cls: "db-selection-action", text: t("selection.fillValue"), attr: { type: "button" } });
+      fill.onclick = () => { this.showCellFillInput = !this.showCellFillInput; this.renderEmbedSelectionStatusBar(); };
+      const clear = bar.createEl("button", { cls: "db-selection-delete", text: t("selection.clearCells"), attr: { type: "button" } });
+      clear.onclick = () => { void this.clearEmbeddedCells(); };
+      if (this.showCellFillInput) {
+        const form = bar.createEl("form", { cls: "db-selection-fill-form" });
+        const input = form.createEl("input", {
+          cls: "db-selection-fill-input", attr: { type: "text", placeholder: t("selection.fillPlaceholder") },
+        });
+        form.onsubmit = (event) => { event.preventDefault(); void this.fillEmbeddedCells(input.value); };
+        window.setTimeout(() => input.focus(), 0);
+      }
+    }
 
-    const summary = this.containerEl.querySelector(".db-summary");
+    const summary = this.containerEl.querySelector<HTMLElement>(":scope > .db-summary");
     if (summary) {
-      bar.addClass("is-summary-overlay");
-      summary.before(bar);
+      this.containerEl.insertBefore(bar, summary);
+      this.syncEmbeddedSelectionBarHorizontalPosition();
     } else {
-      const tableWrap = this.containerEl.querySelector(".db-table-wrap");
-      if (tableWrap) tableWrap.before(bar);
+      this.containerEl.prepend(bar);
     }
   }
 

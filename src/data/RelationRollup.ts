@@ -1,6 +1,7 @@
 import { TFile, type App } from "obsidian";
 import { evaluateComputedFields } from "./ComputedEvaluator";
-import { getRowFileFieldValue, isFileFieldKey } from "./FileFields";
+import { isFileFieldKey } from "./FileFields";
+import { getRowFileFieldValue } from "./FileFieldObsidian";
 import { parseRelationValues } from "./RelationLinks";
 import { toChartNumber } from "./ChartAggregation";
 import { stringifyValue } from "./Stringify";

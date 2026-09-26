@@ -1,4 +1,5 @@
 import { setIcon, setTooltip } from "obsidian";
+import { isFormWritableColumn } from "../data/FormModel";
 import { applyRangeSelection } from "../data/RangeSelection";
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
@@ -24,6 +25,8 @@ export interface ColumnManagerActions {
   deleteColumn(col: ColumnDef): void;
   /** When true, edit/delete/add buttons are hidden (used by embedded/read-only views) */
   isReadOnly?: boolean;
+  /** 切换属性为快速采集必填（视图级 formRequiredFields；嵌入只读宿主不传则不渲染星标）。 */
+  toggleFormRequired?(col: ColumnDef): void;
 }
 
 export class ColumnManagerRenderer {
@@ -47,12 +50,17 @@ export class ColumnManagerRenderer {
     const panel = containerEl.createDiv({
       cls: "db-column-manager",
     });
+
     const header = containerEl.querySelector(".db-header") || containerEl.querySelector(".db-toolbar");
     if (header?.parentElement) {
       header.parentElement.insertBefore(panel, header.nextSibling);
     }
 
     this.renderHeader(panel, columns, config, state, actions);
+    if (config.viewType === "form") {
+      // 说明位于「属性」标题的下一行，字号与属性行名称一致（12px）。
+      panel.createDiv({ cls: "db-column-manager-form-hint", text: t("form.columnManagerFormHint") });
+    }
     columns.forEach((col, index) => {
       this.renderColumnRow(panel, col, config, state, actions, columns, index, columns.length);
     });
@@ -204,25 +212,31 @@ export class ColumnManagerRenderer {
     };
 
     const requiredReason = this.getRequiredColumnReason(config, state, col);
-    const cb = row.createEl("input", { attr: { type: "checkbox" } });
-    cb.checked = !state.hiddenColumns.has(col.key);
-    if (requiredReason) {
-      cb.checked = true;
-      cb.disabled = true;
+    // 表单视图：不可填写列（公式/汇总/只读 file.* 虚拟字段）不参与表单（始终隐藏）
+    // ——显隐开关渲染为灰色填充块，比「禁用的空 checkbox」更直观地表达「固定不可更改」。
+    if (config.viewType === "form" && !isFormWritableColumn(col)) {
+      row.createSpan({ cls: "db-column-visibility-fixed", attr: { title: t("form.columnManagerFormHint") } });
+    } else {
+      const cb = row.createEl("input", { attr: { type: "checkbox" } });
+      cb.checked = !state.hiddenColumns.has(col.key);
+      if (requiredReason) {
+        cb.checked = true;
+        cb.disabled = true;
+      }
+      cb.onclick = (event) => {
+        const selectedKeys = new Set(columns.filter((candidate) => !state.hiddenColumns.has(candidate.key)).map((candidate) => candidate.key));
+        if (requiredReason) selectedKeys.add(col.key);
+        this.lastSelectedColumnVisibilityKey = applyRangeSelection({
+          orderedIds: this.getColumnVisibilityKeys(columns, config, state),
+          selectedIds: selectedKeys,
+          anchorId: this.lastSelectedColumnVisibilityKey,
+          targetId: col.key,
+          selected: cb.checked,
+          range: event.shiftKey,
+        });
+        this.syncColumnVisibility(columns, config, state, actions, selectedKeys);
+      };
     }
-    cb.onclick = (event) => {
-      const selectedKeys = new Set(columns.filter((candidate) => !state.hiddenColumns.has(candidate.key)).map((candidate) => candidate.key));
-      if (requiredReason) selectedKeys.add(col.key);
-      this.lastSelectedColumnVisibilityKey = applyRangeSelection({
-        orderedIds: this.getColumnVisibilityKeys(columns, config, state),
-        selectedIds: selectedKeys,
-        anchorId: this.lastSelectedColumnVisibilityKey,
-        targetId: col.key,
-        selected: cb.checked,
-        range: event.shiftKey,
-      });
-      this.syncColumnVisibility(columns, config, state, actions, selectedKeys);
-    };
 
     const typeEl = row.createSpan({
       cls: "db-column-type",
@@ -244,7 +258,25 @@ export class ColumnManagerRenderer {
         attr: { title: requiredReason },
       });
     }
-    const wrapBtn = row.createEl("button", {
+    // 所有行共用同一个右对齐操作组：有没有「必填」按钮都以删除按钮为右边界。
+    const rowActions = row.createDiv({ cls: "db-column-manager-actions" });
+    // 采集必填星标：挂在行尾操作组最左（wrap 之前），不挤占属性名空间；
+    // 公式/汇总列不可填写，不提供必填标记。
+    if (actions.toggleFormRequired && isFormWritableColumn(col)) {
+      const requiredBtn = rowActions.createEl("button", {
+        cls: "clickable-icon db-column-manager-required-toggle",
+        attr: { type: "button", "aria-label": t("form.markRequired") },
+      });
+      setIcon(requiredBtn, "square-asterisk");
+      requiredBtn.toggleClass("is-active", (config.formRequiredFields || []).includes(col.key));
+      setTooltip(requiredBtn, t("form.markRequired"), { delay: 100 });
+      requiredBtn.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        actions.toggleFormRequired?.(col);
+      };
+    }
+    const wrapBtn = rowActions.createEl("button", {
       cls: `clickable-icon db-column-wrap-toggle${col.wrap ? " is-active" : ""}`,
       attr: {},
     });
@@ -253,11 +285,11 @@ export class ColumnManagerRenderer {
     wrapBtn.onclick = () => actions.toggleColumnWrap(col);
 
     if (!actions.isReadOnly) {
-      const editBtn = row.createEl("button", { cls: "clickable-icon" });
+      const editBtn = rowActions.createEl("button", { cls: "clickable-icon" });
       setIcon(editBtn, "edit");
       editBtn.onclick = () => actions.editColumn(col);
 
-      const deleteBtn = row.createEl("button", {
+      const deleteBtn = rowActions.createEl("button", {
         cls: "clickable-icon db-column-delete-btn",
         attr: {},
       });

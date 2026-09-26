@@ -2,7 +2,8 @@ import { getColumnOptionValues, hasObsidianTagValue, isObsidianAliasesKey, isObs
 import { getColumnDisplayType } from "./ColumnDisplay";
 import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
 import { getDateGroupMode } from "./GroupDisplay";
-import { getRowFileFieldValue, isBaseFileField } from "./FileFields";
+import { isBaseFileField } from "./FileFields";
+import { getRowFileFieldValue } from "./FileFieldObsidian";
 import { compareMultiSelect } from "./MultiSelect";
 import { stringifyValue } from "./Stringify";
 import { ColumnDef, DateGroupMode, RowData, FilterRule, SortRule, ViewConfig } from "./types";

@@ -22,7 +22,8 @@ import { isImeComposing } from "../data/KeyboardUtils";
 import { closeActiveOptionColorPicker, openOptionColorPicker } from "./OptionColorPicker";
 import { normalizeExternalUrlTarget, parseTextLink } from "../data/TextLink";
 import { parseInlineMarkdown } from "../data/InlineMarkdown";
-import { getFileFieldFixedType, getRowFileFieldValue, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getFileFieldFixedType, isFileFieldKey, isReadonlyFileField } from "../data/FileFields";
+import { getRowFileFieldValue } from "../data/FileFieldObsidian";
 import { getRenamedMarkdownPath } from "../data/FileRenamePlan";
 import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
@@ -44,6 +45,7 @@ import { shouldCommitEmptyBulkDateClear } from "../data/BulkEdit";
 import { SerialTaskQueue } from "../data/SerialTaskQueue";
 import type { TableCellNavigationIntent } from "../data/TableKeyboardNavigation";
 import { markNoteHoverLink } from "./HoverLinkPreview";
+import { renderMobileOptionMoveControls } from "./MobileOptionReorder";
 
 export interface CellOptionTransaction {
   previousOptions?: StatusOptionDef[];
@@ -99,7 +101,15 @@ export class CellRenderer {
     private sourceInstanceId?: string,
     private editRelationRollup?: (col: ColumnDef, row: RowData) => void,
     private getRelationScopePaths?: (col: ColumnDef) => ReadonlySet<string> | undefined,
+    private canEditColumn?: (col: ColumnDef) => boolean,
   ) {}
+
+  setReadOnly(value: boolean): void {
+    this.isReadOnly = value;
+    this.cancelActiveInlineEditor();
+    this.closeActiveOptionPopover();
+    this.closeActiveBulkEditor();
+  }
 
   private finishInlineEdit(
     row: RowData,
@@ -153,11 +163,11 @@ export class CellRenderer {
 
     if (this.isEmptyValue(value)) {
       td.createSpan({ cls: "db-empty-value", text: t("common.empty") });
-      if (!this.isReadOnly && col.type === "computed") {
+      if (!this.isReadOnly && this.isColumnAllowed(col) && col.type === "computed") {
         this.makeComputedEditable(td, row, col);
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickEditFormula"));
       }
-      if (!this.isReadOnly && col.type === "rollup") {
+      if (!this.isReadOnly && this.isColumnAllowed(col) && col.type === "rollup") {
         this.makeRollupConfigurable(td, row, col);
         setFieldTooltip(td, t("common.empty"), t("cell.doubleClickConfigureRollup"));
       }
@@ -236,10 +246,10 @@ export class CellRenderer {
         }
     }
 
-    if (!this.isReadOnly && col.type === "computed") {
+    if (!this.isReadOnly && this.isColumnAllowed(col) && col.type === "computed") {
       this.makeComputedEditable(td, row, col);
       setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickEditFormula"));
-    } else if (!this.isReadOnly && col.type === "rollup") {
+    } else if (!this.isReadOnly && this.isColumnAllowed(col) && col.type === "rollup") {
       this.makeRollupConfigurable(td, row, col);
       setFieldTooltip(td, this.getTooltipValue(col, value), t("cell.doubleClickConfigureRollup"));
     } else if (!this.isReadOnly && this.isEditableCellColumn(col)) {
@@ -301,9 +311,14 @@ export class CellRenderer {
   }
 
   private isEditableCellColumn(col: ColumnDef): boolean {
+    if (!this.isColumnAllowed(col)) return false;
     if (col.type === "computed" || col.type === "rollup") return false;
     if (!isFileFieldKey(col.key)) return true;
     return col.key === "file.tags" || col.key === "file.name";
+  }
+
+  private isColumnAllowed(col: ColumnDef): boolean {
+    return !this.canEditColumn || this.canEditColumn(col);
   }
 
   private renderStatus(td: HTMLElement, col: ColumnDef, status: string): void {
@@ -357,16 +372,16 @@ export class CellRenderer {
     setFieldTooltip(td, toBooleanValue(value) ? t("common.true") : t("common.false"));
     const checkbox = td.createEl("input", { attr: { type: "checkbox" } });
     checkbox.checked = toBooleanValue(value);
-    if (this.isReadOnly) {
+    if (this.isReadOnly || !this.isColumnAllowed(col)) {
       checkbox.disabled = true;
-    } else if (col.type === "computed") {
+    } else if (this.isColumnAllowed(col) && col.type === "computed") {
       // Keep events bubbling to the cell so computed checkbox formulas are editable.
       checkbox.addClass("db-computed-checkbox-preview");
       this.makeComputedEditable(td, row, col);
       return;
     }
     checkbox.onclick = (event) => event.stopPropagation();
-    if (this.isReadOnly) return;
+    if (this.isReadOnly || !this.isColumnAllowed(col)) return;
     checkbox.onchange = () => {
       void this.saveValue(row, col, checkbox.checked);
     };
@@ -451,6 +466,7 @@ export class CellRenderer {
     session?: CellEditSession,
     checkboxFinishIntent: TableCellNavigationIntent = "down",
   ): void {
+    if (this.isReadOnly || (this.canEditColumn && !this.canEditColumn(col))) return;
     if (isReadonlyFileField(col.key)) {
       new Notice(t("fileField.readonly", { label: col.label || col.key }));
       return;
@@ -974,6 +990,7 @@ export class CellRenderer {
       ? this.persistFileTagColorOptions(optionDefs)
       : cloneOptions(optionDefs.filter((option) => registeredOptionValues.has(option.value)));
     const commitOptionTransaction = async (transaction: CellOptionTransaction) => {
+      if (this.isReadOnly) return;
       try {
         if (session?.commitOptionTransaction) {
           await session.commitOptionTransaction(transaction);
@@ -1085,36 +1102,12 @@ export class CellRenderer {
           window.activeDocument.addEventListener("mouseup", onUp);
         };
 
-        const moveControls = item.createSpan({ cls: "db-mobile-reorder-controls" });
-        if (isFileTags || isTransient) moveControls.addClass("is-hidden");
-        const upBtn = moveControls.createEl("button", {
-          attr: { type: "button", title: t("menu.moveUp"), "aria-label": t("menu.moveUp") },
-        });
-        setIcon(upBtn, "arrow-up");
-        upBtn.disabled = idx === 0;
-        upBtn.onclick = (event) => {
-          if (isFileTags) return;
-          event.preventDefault();
-          event.stopPropagation();
+        renderMobileOptionMoveControls(item, idx, optionDefs.length, (target) => {
           const [moved] = optionDefs.splice(idx, 1);
-          optionDefs.splice(idx - 1, 0, moved);
+          optionDefs.splice(target, 0, moved);
           commitOptions();
           renderOptionList();
-        };
-        const downBtn = moveControls.createEl("button", {
-          attr: { type: "button", title: t("menu.moveDown"), "aria-label": t("menu.moveDown") },
-        });
-        setIcon(downBtn, "arrow-down");
-        downBtn.disabled = idx >= optionDefs.length - 1;
-        downBtn.onclick = (event) => {
-          if (isFileTags) return;
-          event.preventDefault();
-          event.stopPropagation();
-          const [moved] = optionDefs.splice(idx, 1);
-          optionDefs.splice(idx + 1, 0, moved);
-          commitOptions();
-          renderOptionList();
-        };
+        }, isFileTags || isTransient);
 
         // Color dot — opens color picker
         const dot = item.createSpan({ cls: "db-option-color-dot" });
@@ -2520,6 +2513,7 @@ export class CellRenderer {
     session: CellEditSession | undefined,
     intent: CellEditCommitIntent = "replace",
   ): Promise<void> {
+    if (this.isReadOnly) return;
     if (session) await session.commitValue(value, intent);
     else await this.saveValue(row, col, value);
   }
@@ -2700,8 +2694,9 @@ export class CellRenderer {
     const bounds = getVisiblePopoverBounds(container);
 
     const relationPopover = popover.hasClass("db-relation-popover");
-    const minWidth = relationPopover ? 360 : 160;
-    const maxWidth = relationPopover ? 520 : 260;
+    const phoneOptionPopover = !relationPopover && window.activeDocument.body.classList.contains("is-phone");
+    const minWidth = relationPopover ? 360 : phoneOptionPopover ? 340 : 160;
+    const maxWidth = relationPopover ? 520 : phoneOptionPopover ? 360 : 260;
     const width = Math.min(
       Math.max(popoverRect.width || rect.width, rect.width, minWidth),
       maxWidth,

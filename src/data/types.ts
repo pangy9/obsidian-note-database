@@ -172,7 +172,7 @@ export interface ViewModeStateDef {
   sortRules?: SortRule[];
 }
 
-export type DatabaseViewType = "table" | "board" | "gallery" | "list" | "chart" | "calendar" | "timeline";
+export type DatabaseViewType = "table" | "board" | "gallery" | "list" | "chart" | "calendar" | "timeline" | "form";
 export type ChartType = "bar" | "horizontal-bar" | "line" | "area" | "pie" | "donut" | "number" | "stacked-bar" | "grouped-bar" | "percent-stacked-bar" | "mixed";
 export type ChartAggregation =
   | "count"
@@ -277,6 +277,8 @@ export interface DatabaseConfig {
   conditionalFormats?: ConditionalFormatRule[];
   /** Optional vault Markdown template used by every record creation entry point. */
   newRecordTemplate?: NewRecordTemplateConfig;
+  /** 开启后该库的新建按钮弹出快速采集表单（替代直接建空记录）。 */
+  quickFormEnabled?: boolean;
   schema: RecordSchema;
   /** Database-specific status presets. Global presets are used when this is empty. */
   statusPresets?: StatusPresetDef[];
@@ -381,6 +383,17 @@ export interface ViewConfig {
   manualOrder?: { ranks?: Record<string, string> };
   /** Gallery cover image property. */
   galleryImageField?: string;
+  /** Form view: standalone form title; falls back to the view name when unset. */
+  formTitle?: string;
+  /** Form view: cover image (web URL / wikilink / vault path), parsed via parseCoverImage. */
+  formCoverImage?: string;
+  formCoverMode?: "banner" | "half" | "wallpaper";
+  /** Form view: cover focal position (0-100, % from top); default 50. */
+  formCoverPositionY?: number;
+  /** Form view: cover height in px; default 150. */
+  formCoverHeight?: number;
+  /** Form view: extra required field keys (source-rule-required fields are always required). */
+  formRequiredFields?: string[];
   /** Optional card/list title property. When absent, renderers fall back to visible file.name. */
   titleField?: string;
   /** Gallery cover aspect ratio as width / height. */
@@ -549,6 +562,8 @@ export interface PluginSettings {
   databases: DatabaseConfig[];
   databaseFolder: string;
   databaseFileOrder?: string[];
+  /** Set after the one-time databaseFileOrder migration (freeze legacy order on upgrade). */
+  databaseFileOrderMigrated?: boolean;
   /** Open db_view Markdown files in a fresh tab when launched from the file explorer. */
   databaseFilesAlwaysOpenInNewTab?: boolean;
   /** Reuse an existing database-file tab instead of opening another one. */
@@ -559,6 +574,8 @@ export interface PluginSettings {
   recentRecordIcons?: string[];
   /** Show the database icon in the header (global toggle). Default true. */
   showDatabaseIcon?: boolean;
+  /** Keep embedded code-block databases read-only (default true for compatibility). */
+  embeddedDatabaseReadOnly?: boolean;
   /** Last plugin version whose changelog was shown to the user. */
   lastChangelogVersion?: string;
   language?: LocaleCode;

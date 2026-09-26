@@ -6,6 +6,8 @@ import { positionToolbarPopover } from "./PopoverPosition";
 export interface DropdownOption {
   value: string;
   text: string;
+  /** Secondary explanatory text; shown in the row and as a native hover tooltip. */
+  description?: string;
   section?: string;
   disabled?: boolean;
   disabledReason?: string;
@@ -170,11 +172,13 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
       attr: { type: "button", role: "option", "aria-selected": option.value === options.value ? "true" : "false" },
     });
     row.setAttr("data-value", option.value);
-    row.setAttr("data-search-text", `${option.text} ${option.value} ${option.disabledReason || ""}`.toLowerCase());
+    row.setAttr("data-search-text", `${option.text} ${option.value} ${option.description || option.disabledReason || ""}`.toLowerCase());
     row.disabled = option.disabled === true;
     if (option.disabledReason) {
       row.setAttr("title", option.disabledReason);
       row.setAttr("aria-label", `${option.text}: ${option.disabledReason}`);
+    } else if (option.description) {
+      row.setAttr("title", option.description);
     }
     const check = row.createSpan({ cls: "db-dropdown-option-check" });
     if (option.value === options.value) setIcon(check, "check");
@@ -185,7 +189,7 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     }
     const text = row.createSpan({ cls: "db-dropdown-option-text" });
     text.createSpan({ cls: "db-dropdown-option-label", text: option.text });
-    if (option.disabledReason) text.createSpan({ cls: "db-dropdown-option-reason", text: option.disabledReason });
+    if (option.description || option.disabledReason) text.createSpan({ cls: "db-dropdown-option-reason", text: option.description || option.disabledReason });
     if (option.swatches?.length) {
       const swatches = row.createSpan({ cls: "db-dropdown-option-swatches", attr: { "aria-hidden": "true" } });
       for (const color of option.swatches.slice(0, 5)) {

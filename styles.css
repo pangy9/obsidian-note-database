@@ -1728,6 +1728,151 @@
   height: 14px;
 }
 
+.note-database-container .db-mobile-reorder-controls .db-mobile-reorder-button,
+.note-database-modal .db-mobile-reorder-controls .db-mobile-reorder-button {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: var(--db-radius-sm);
+}
+
+.note-database-container .db-mobile-reorder-controls .db-mobile-reorder-button svg,
+.note-database-modal .db-mobile-reorder-controls .db-mobile-reorder-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-database-container .db-cell-option-item .db-mobile-reorder-controls,
+.note-database-modal .db-status-option-row .db-mobile-reorder-controls {
+  gap: 0;
+}
+
+.note-database-container .db-cell-option-item .db-mobile-reorder-controls {
+  margin-right: -4px;
+}
+
+.db-move-position-modal .db-move-position-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin: 8px 0;
+  font-size: 16px;
+}
+
+.db-move-position-modal .db-move-position-preview {
+  margin: 12px 0 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  overflow: hidden;
+}
+
+.db-move-position-modal .db-move-position-preview-row {
+  display: flex;
+  gap: 12px;
+  min-height: 36px;
+  align-items: center;
+  padding: 6px 10px;
+}
+
+.db-move-position-modal .db-move-position-preview-row + .db-move-position-preview-row {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.db-move-position-modal .db-move-position-preview-row.is-moved {
+  background: var(--background-secondary);
+  font-weight: 600;
+}
+
+.db-move-position-modal .db-move-position-preview-role {
+  flex: 0 0 4em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.db-move-position-modal .db-move-position-preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-mobile-target-banner {
+  position: sticky;
+  top: 8px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.note-database-container .db-mobile-target-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  color: var(--text-muted);
+}
+
+.note-database-container .db-mobile-target-banner-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.note-database-container .db-mobile-target-copy {
+  flex: 1 1 170px;
+  min-width: 0;
+}
+
+.note-database-container .db-mobile-target-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container .db-mobile-target-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.note-database-container .db-mobile-target-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.note-database-container .db-mobile-target-banner button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 4px 10px;
+}
+
+.note-database-container .is-mobile-target-selected {
+  background: var(--background-modifier-hover);
+}
+
+.note-database-container tr.is-mobile-target-selected > td {
+  background: var(--background-modifier-hover);
+}
+
+.is-phone .note-database-container .db-mobile-target-actions {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+}
+
 .note-database-container .db-selection-delete:hover {
   background: transparent;
   color: var(--text-error);
@@ -2181,14 +2326,24 @@
   display: flex;
   align-items: baseline;
   min-width: 0;
+  overflow: hidden;
   gap: 0;
 }
 
 .note-database-modal .db-dropdown-field-value {
+  min-width: 0;
   overflow: hidden;
   color: var(--text-normal);
   font-size: 13px;
   font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-modal .db-dropdown-field-disabled-reason {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2683,11 +2838,11 @@
   height: 14px;
 }
 
-.db-column-menu-subpopover .db-number-style-menu-icon {
+.db-number-style-menu-icon {
   color: var(--text-faint);
 }
 
-.db-column-menu-subpopover .db-number-style-menu-progress {
+.db-number-style-menu-icon .db-number-style-menu-progress {
   display: block;
   width: 16px;
   height: 6px;
@@ -2696,7 +2851,7 @@
   background: var(--background-modifier-border);
 }
 
-.db-column-menu-subpopover .db-number-style-menu-progress-fill {
+.db-number-style-menu-icon .db-number-style-menu-progress-fill {
   display: block;
   width: 42%;
   height: 100%;
@@ -2704,11 +2859,11 @@
   background: var(--text-accent);
 }
 
-.db-column-menu-subpopover .db-number-style-menu-ring-track {
+.db-number-style-menu-icon .db-number-style-menu-ring-track {
   stroke: var(--background-modifier-border);
 }
 
-.db-column-menu-subpopover .db-number-style-menu-ring-arc {
+.db-number-style-menu-icon .db-number-style-menu-ring-arc {
   stroke: var(--text-accent);
 }
 
@@ -5085,17 +5240,21 @@
 }
 
 .note-database-container .db-table tr.is-drop-before td,
-.note-database-container .db-table tr.is-drop-after td {
+.note-database-container .db-table tr.is-drop-after td,
+.note-database-embed.note-database-container table.db-table tr.is-drop-before td,
+.note-database-embed.note-database-container table.db-table tr.is-drop-after td {
   position: relative;
   background: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-primary));
 }
 
-.note-database-container .db-table tr.is-drop-before td {
+.note-database-container .db-table tr.is-drop-before td,
+.note-database-embed.note-database-container table.db-table tr.is-drop-before td {
   box-shadow: inset 0 3px 0 -1px var(--interactive-accent),
     inset 0 18px 14px -18px var(--interactive-accent);
 }
 
-.note-database-container .db-table tr.is-drop-after td {
+.note-database-container .db-table tr.is-drop-after td,
+.note-database-embed.note-database-container table.db-table tr.is-drop-after td {
   box-shadow: inset 0 -3px 0 -1px var(--interactive-accent),
     inset 0 -18px 14px -18px var(--interactive-accent);
 }
@@ -9722,17 +9881,25 @@ body.is-phone .note-database-container .db-record-detail-panel {
 
 /* ============================================================================
  *  16. 列管理面板的行（拖拽排序 + 可见性 + 换行 + 上移下移 + 编辑 + 隐藏）
- *  grid-template-columns: 拖拽 | 图标 | 名称 | 换行 | 上移 | 下移 | 编辑 | 隐藏
+ *  grid-template-columns: 拖拽 | 可见性 | 图标 | 名称 | 右对齐操作组
  * ============================================================================ */
 
 .note-database-container .db-column-manager-row {
   display: grid;
-  grid-template-columns: 18px 20px 18px minmax(120px, 1fr) auto auto auto;
+  grid-template-columns: 18px 20px 18px minmax(80px, 1fr) auto;
   align-items: center;
   gap: 6px;
   min-height: 30px;
   border-radius: var(--db-radius-lg);
   padding: 2px 4px;
+}
+
+.note-database-container .db-column-manager-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  justify-self: end;
 }
 
 .note-database-container .db-column-manager-row:hover {
@@ -12320,6 +12487,46 @@ body.is-phone .note-database-container .db-record-detail-panel {
   line-height: 1.4;
 }
 
+.note-database-embed.note-database-container.db-embed-custom-height {
+  height: var(--db-embed-height);
+  max-height: 90vh;
+}
+
+/* 调整区是滚动容器的兄弟节点，贴在外框下边缘，不会跟随表格内容滚动。 */
+.note-database-embed.note-database-container + .db-embed-height-grip {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 16px;
+  margin: -12px 0 12px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.db-embed-height-grip .db-embed-height-grip-mark {
+  width: 36px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--background-modifier-border-hover);
+  transition: background-color 120ms ease, width 120ms ease;
+}
+
+.db-embed-height-grip:hover .db-embed-height-grip-mark,
+.db-embed-height-grip:focus-visible .db-embed-height-grip-mark,
+.db-embed-height-grip.is-dragging .db-embed-height-grip-mark {
+  width: 48px;
+  background: var(--interactive-accent);
+}
+
+.db-embed-height-grip:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
 .note-database-embed-headerless.note-database-container {
   --db-table-header-top: 0px;
   --db-group-header-top: 0px;
@@ -12432,6 +12639,19 @@ body.is-phone .note-database-container .db-record-detail-panel {
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Selection gutters use the shared column width (40px desktop / 48px phone).
+   Embedded data-cell padding must not consume their control area: 39px would
+   otherwise shrink to 23px in rows and 5px in headers. Keep hover geometry fixed. */
+.note-database-embed.note-database-container table.db-table th.db-select-col,
+.note-database-embed.note-database-container table.db-table td.db-select-col,
+.note-database-embed.note-database-container table.db-table th.db-select-col:hover,
+.note-database-embed.note-database-container table.db-table td.db-select-col:hover {
+  padding: 0;
+  text-align: center;
+  line-height: 0;
+  transition: none;
 }
 
 /* Embedded table rules above intentionally restate the native table borders
@@ -15330,6 +15550,48 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   top: var(--db-table-header-top);
 }
 
+.note-database-embed.note-database-container > .db-summary {
+  position: relative;
+}
+
+.note-database-embed.note-database-container.db-view-table > .db-summary,
+.note-database-embed.note-database-container.has-selection-status > .db-summary {
+  /* The status bar is in normal flow above the summary; do not reserve a second
+   * toolbar-sized blank row when a cell selection opens it. */
+  min-height: 0;
+}
+
+.note-database-embed.note-database-container.has-selection-status > .db-summary {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.note-database-embed.note-database-container > .db-selection-status-bar {
+  visibility: visible;
+  position: sticky;
+  top: var(--db-table-header-top);
+  left: 0;
+  margin: 0;
+  height: var(--db-selection-status-height);
+  min-height: var(--db-selection-status-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.note-database-embed.note-database-container > .db-selection-status-bar > * {
+  flex: 0 0 auto;
+}
+
+.note-database-embed.note-database-container > .db-selection-status-bar.db-embed-history-only {
+  position: static;
+  margin-left: auto;
+  width: auto;
+  flex: 0 0 auto;
+}
+
 
 /* ============================================================================
  *  25. 响应式适配（窄屏/移动端）
@@ -15452,8 +15714,44 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   display: inline-flex;
 }
 
-.is-phone .note-database-container .db-column-manager-row {
-  grid-template-columns: 18px auto 20px 18px minmax(120px, 1fr) auto auto auto;
+/* Keep option sorting attached to its list; give the two direct actions room to tap. */
+.is-phone .note-database-container .db-cell-option-popover:not(.db-relation-popover) {
+  box-sizing: border-box;
+  max-width: none;
+}
+
+.is-phone .note-database-container .db-cell-option-item {
+  min-height: 46px;
+  gap: 6px;
+}
+
+.is-phone .note-database-container .db-cell-option-item .db-option-mobile-reorder-controls {
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-right: 0;
+}
+
+.is-phone .note-database-container .db-option-mobile-reorder-controls .db-option-mobile-move-button {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.is-phone .note-database-container .db-option-mobile-reorder-controls .db-option-mobile-move-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.is-phone .note-database-modal .db-status-option-mobile-controls {
+  gap: 2px;
+}
+
+.is-phone .note-database-modal .db-status-option-mobile-controls .db-option-mobile-move-button {
+  width: 32px;
+  height: 36px;
+  min-width: 32px;
+  min-height: 36px;
 }
 
 .is-phone .note-database-settings .setting-group {
@@ -15569,7 +15867,8 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 }
 
 .is-phone .note-database-container .db-column-manager-row {
-  grid-template-columns: auto 20px minmax(96px, 1fr) auto auto auto auto auto;
+  /* 拖拽手柄在手机端隐藏；实际只有排序、显隐、类型、名称、操作组五列。 */
+  grid-template-columns: auto 20px 18px minmax(0, 1fr) auto;
 }
 
 .is-phone .note-database-modal .db-status-option-row {
@@ -16446,4 +16745,1220 @@ img.db-text-md-image {
 .db-column-manager .db-column-drag {
   user-select: none !important;
   -webkit-user-select: none !important;
+}
+
+/* ── 快速采集表单（form view + QuickFormModal，FormRenderer 共用）── */
+
+/* 表单弹层挂在 body，避免被 Modal/表单滚动区裁切；零尺寸容器只提供
+ * .note-database-container 样式作用域和定位基准，不遮挡其余界面。 */
+.note-database-container.db-form-popover-portal {
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 10000;
+  width: 0;
+  height: 0;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  scrollbar-gutter: auto;
+  background: transparent;
+  pointer-events: none;
+}
+
+.db-form-popover-portal > * {
+  pointer-events: auto;
+}
+
+/* 控件统一 border-box：width:100% + padding/border 不再撑出横向滚动
+ * （项目无全局 box-sizing 重置，input/textarea 默认 content-box 会溢出 22px）。 */
+.note-database-container .db-form input,
+.note-database-modal .db-form input,
+.db-form input,
+.note-database-container .db-form textarea,
+.note-database-modal .db-form textarea,
+.db-form textarea,
+.db-form button {
+  box-sizing: border-box;
+}
+
+.note-database-container .db-form,
+.db-form {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  gap: 16px;
+}
+
+/* 半幅/墙纸是表单后面的整幅画布；表单始终是不透明的白色阅读面。 */
+.db-form-stage {
+  position: relative;
+  box-sizing: border-box;
+  isolation: isolate;
+  width: calc(100% + 48px);
+  min-height: calc(100vh - 180px);
+  margin: 0 -24px;
+  padding: 30px 24px 64px;
+}
+
+.db-form-stage-half,
+.db-form-stage-wallpaper {
+  background: var(--background-secondary);
+}
+
+.db-form-stage-half::before,
+.db-form-stage-wallpaper::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image: var(--db-form-cover-image);
+  background-position: var(--db-form-cover-position, center);
+  background-size: cover;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+.db-form-stage-half::before {
+  bottom: auto;
+  height: min(52vh, 460px);
+  mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+}
+
+.db-form-stage-wallpaper::before {
+  filter: brightness(0.78);
+}
+
+.db-form-stage.is-cover-repositionable {
+  cursor: grab;
+}
+
+.db-form-stage.is-cover-repositionable > .db-form {
+  cursor: default;
+}
+
+.db-form-stage.is-cover-repositioning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.db-form-stage-half > .db-form,
+.db-form-stage-wallpaper > .db-form {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 560px;
+  padding: 28px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 16px;
+  background: var(--background-primary);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
+}
+
+/* 工具栏宽度切换「全宽」时，表单跟随容器解除限宽（Modal 态不受影响）。 */
+.note-database-container.db-width-wide .db-form {
+  max-width: none;
+}
+
+/* 快捷采集是单列工作面板：固定边界、一个滚动区、底部动作留在视野内。 */
+.modal.db-quick-form-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: min(820px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+}
+
+.modal.db-quick-form-modal .modal-content.db-quick-form-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 24px 26px 20px;
+}
+
+.db-quick-form-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 0 28px 16px 0;
+}
+
+.db-quick-form-heading h3 {
+  margin: 0;
+  font-family: var(--db-title-font-family);
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.db-quick-form-source {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-database-container.db-form-modal-host {
+  height: auto;
+  overflow: hidden;
+  padding: 0;
+  scrollbar-gutter: auto;
+}
+
+.db-form-modal-host,
+.db-form-modal-host > .db-form-stage,
+.db-form-modal-host > .db-form-stage > .db-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+}
+
+.db-form-modal-host > .db-form-stage {
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.db-form-modal-host > .db-form-stage > .db-form {
+  max-width: none;
+  gap: 0;
+}
+
+.db-form-modal-host .db-form-stage-half,
+.db-form-modal-host .db-form-stage-wallpaper {
+  padding: 16px;
+  border-radius: 12px;
+}
+
+.db-form-modal-host .db-form-stage-half > .db-form,
+.db-form-modal-host .db-form-stage-wallpaper > .db-form {
+  min-height: 0;
+  padding: 18px;
+}
+
+.db-form-scroll {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.note-database-modal .db-form-scroll {
+  max-height: none;
+  padding: 0 2px 18px;
+}
+
+.db-quick-form-modal .db-form-actions {
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 14px 0 0;
+  background: var(--background-primary);
+}
+
+.db-form-cover {
+  height: 150px;
+  border-radius: var(--db-radius-lg);
+  overflow: hidden;
+  flex: 0 0 auto;
+  background: var(--background-secondary);
+}
+
+.db-form-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.db-form-cover.is-repositionable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.db-form-cover.is-repositioning {
+  cursor: grabbing;
+}
+
+.db-form-cover .db-form-cover-resize {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background-primary) 70%, var(--background-modifier-border));
+  opacity: 0;
+  transition: opacity 120ms ease;
+  cursor: ns-resize;
+  padding: 0;
+}
+
+/* 手柄仅 hover 时浮出（拖动焦点整体仍可拖）。 */
+.db-form-cover:hover .db-form-cover-resize,
+.db-form-cover .db-form-cover-resize:focus-visible {
+  opacity: 0.85;
+}
+
+.db-form-cover {
+  position: relative;
+}
+
+/* 换图入口：右下角小照片按钮，hover 浮出（对齐数据库封面行为）。 */
+.db-form-cover .db-form-cover-change {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  cursor: pointer;
+}
+
+.db-form-cover:hover .db-form-cover-change,
+.db-form-cover .db-form-cover-change:focus-visible {
+  opacity: 1;
+}
+
+.db-form-cover .db-form-cover-change svg {
+  width: 15px;
+  height: 15px;
+}
+
+.db-form-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* 无封面时标题上方留白；封面自身提供间隔，有封面时回归常规间距。 */
+  margin-top: 25px;
+}
+
+.db-form-cover + .db-form-header {
+  margin-top: 0;
+}
+
+.db-form-title {
+  overflow: hidden;
+  font-family: var(--db-title-font-family);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  color: var(--text-normal);
+}
+
+.db-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.db-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 错误红边画在内部输入框上，字段自身不占额外内边距——
+   * 旧的 padding+负 margin 组合会让字段比行宽扩出 8px，已移除。 */
+  border-radius: var(--db-radius-lg);
+}
+
+.db-form-field.db-form-has-error .db-form-field-name {
+  color: var(--text-error);
+}
+
+.db-form-field.db-form-has-error .db-form-input,
+.db-form-field.db-form-has-error .db-form-textarea,
+.db-form-field.db-form-has-error .db-form-multiselect-trigger,
+.db-form-field.db-form-has-error .db-date-value-field {
+  border-color: var(--text-error);
+}
+
+.db-form-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.db-form-field-type-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.db-form-field-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-form-required-mark {
+  color: var(--text-error);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.db-form-locked-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.note-database-container .db-form-input,
+.note-database-modal .db-form-input,
+.note-database-container .db-form-textarea,
+.note-database-modal .db-form-textarea,
+.db-form-input,
+.db-form-textarea {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--db-radius-lg);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+.db-form-textarea {
+  min-height: 72px;
+  max-height: 260px;
+  overflow-y: auto;
+  resize: vertical;
+}
+
+/* 对齐搜索栏的无外圈高亮语义：聚焦只显示光标，不加边框/光晕（错误红边除外）。 */
+.note-database-container .db-form-input:focus,
+.note-database-modal .db-form-input:focus,
+.db-form-input:focus,
+.db-form-input:focus-visible,
+.note-database-container .db-form-textarea:focus,
+.db-form-textarea:focus,
+.db-form-textarea:focus-visible {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: var(--background-secondary) !important;
+}
+
+.db-form-locked-value {
+  padding: 8px 10px;
+  border-radius: var(--db-radius-lg);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.db-form-readonly-hint {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.db-form-rating {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 26px;
+}
+
+.db-form-rating-star {
+  position: relative;
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.db-form-rating-star-bg,
+.db-form-rating-star-fg {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db-form-rating-star svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  max-width: none;
+}
+
+.db-form-rating-star-bg svg {
+  fill: var(--text-faint);
+  stroke: var(--text-faint);
+  opacity: 0.3;
+}
+
+.db-form-rating-star-fg svg {
+  fill: var(--db-number-color, var(--text-accent));
+  stroke: var(--db-number-color, var(--text-accent));
+}
+
+.db-form-rating.is-outline .db-form-rating-star-bg svg,
+.db-form-rating.is-outline .db-form-rating-star-fg svg {
+  fill: none;
+}
+
+.db-form-rating.is-emoji .db-form-rating-star-bg {
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+.db-form-rating.is-emoji .db-form-rating-star-bg span,
+.db-form-rating.is-emoji .db-form-rating-star-fg span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  font-size: 16px;
+  line-height: 18px;
+}
+
+.db-form-rating-star:hover {
+  background: transparent;
+}
+
+.db-form-rating-star:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.db-form-rating-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.db-form-rating-clear:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.db-form-progress-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 42px;
+}
+
+.db-form-progress-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.db-form-progress-track-base {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  left: 0;
+  display: block;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 32%, var(--background-primary));
+}
+
+.db-form-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--db-number-color, var(--text-accent));
+}
+
+.db-form-progress-ring {
+  display: block;
+  width: 66px;
+  height: 66px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.db-form-progress-ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.db-form-progress-ring-track {
+  stroke: color-mix(in srgb, var(--text-muted) 42%, var(--background-primary));
+}
+
+.db-form-progress-ring-arc {
+  stroke: var(--db-number-color, var(--text-accent));
+}
+
+.db-form-progress-track:focus-visible,
+.db-form-progress-ring:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 3px;
+}
+
+.db-form .db-form-progress-number {
+  flex: 0 0 64px;
+  width: 64px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 2px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.db-form .db-form-progress-number:hover,
+.db-form .db-form-progress-number:focus {
+  border-bottom-color: var(--background-modifier-border-hover);
+  background: transparent;
+}
+
+.db-form .db-date-value-field,
+.db-form .db-dropdown-field {
+  width: 100%;
+}
+
+.db-form-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.db-form-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 2px 6px 2px 10px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  font-size: 12px;
+}
+
+.db-form-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.db-form-chip-remove:hover {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.db-form-multiselect-popover {
+  position: absolute;
+  z-index: var(--layer-popover, 60);
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100vw - 32px));
+  max-height: 320px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-lg);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  overflow: hidden;
+}
+
+.db-form-multiselect-search {
+  margin: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 13px;
+  outline: none;
+}
+
+.db-form-multiselect-search:focus {
+  border-color: var(--interactive-accent);
+}
+
+.db-form-multiselect-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 4px 4px;
+}
+
+.db-form-multiselect-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text-normal);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.db-form-multiselect-option:hover {
+  background: var(--background-modifier-hover);
+}
+
+.db-form-multiselect-check {
+  flex: 0 0 16px;
+  color: var(--interactive-accent);
+  font-weight: 700;
+}
+
+.db-form-multiselect-empty {
+  padding: 10px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.db-form-multiselect-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.db-form-multiselect-done {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.db-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+/* 对齐工具栏 .db-new-button：accent 实心、hover 为 accent 与 on-accent 的混合。 */
+.db-form-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 14px;
+  border: 0;
+  border-radius: var(--db-radius-md);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.db-form-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--interactive-accent) 88%, var(--text-on-accent) 12%);
+  color: var(--text-on-accent);
+}
+
+.db-form-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 次级动作（清空）：透明底 + 弱化边框字色，hover 仅轻微背景（不进主题色）。 */
+.db-form-action.db-form-secondary {
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 500;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.db-form-action.db-form-secondary:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.db-embed-form-unsupported {
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 移动端：触控目标与 iOS 防缩放（input 16px）。 */
+body.is-mobile .db-form-input,
+body.is-mobile .db-form-textarea,
+body.is-mobile .db-form-multiselect-search {
+  font-size: 16px;
+}
+
+body.is-mobile .db-form-chip {
+  min-height: 32px;
+}
+
+body.is-mobile .db-form-actions {
+  flex-direction: column-reverse;
+  align-items: stretch;
+}
+
+body.is-mobile .db-form-action {
+  width: 100%;
+  min-height: 40px;
+}
+
+body.is-mobile .modal.db-quick-form-modal {
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
+  padding: 18px 16px max(18px, env(safe-area-inset-bottom));
+}
+
+/* 列管理器：行首「采集必填」星标按钮与表单视图说明。 */
+.note-database-container .db-column-manager-required-toggle {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.note-database-container .db-column-manager-required-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.note-database-container .db-column-manager-required-toggle.is-active {
+  color: var(--text-error);
+}
+
+/* 表单视图下公式/汇总列的「固定隐藏」指示块（灰色填充，代替禁用 checkbox）。 */
+.note-database-container .db-column-visibility-fixed {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border-hover);
+}
+
+.note-database-container .db-column-manager .db-column-manager-form-hint {
+  margin: 2px 4px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* 创建成功 Notice 可点击跳转。 */
+.db-clickable-notice {
+  cursor: pointer;
+}
+
+/* 表单 select 触发按钮：无值时为占位样式，有值时内嵌色彩 status-badge。 */
+/* 多选弹层选项行的选项色点（status-color-* 提供配色）。 */
+.db-form .db-form-multiselect-dot,
+.db-form-multiselect-popover .db-form-multiselect-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+/* 值行：与输入框同款卡片底（常态可见，非透明）、左对齐、宽度严格收在行内。 */
+.db-form .db-form-field-value-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 10px;
+  margin: 0;
+  border-radius: var(--db-radius-lg);
+  background: var(--background-secondary);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.db-form .db-form-field-value-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.db-form .db-form-field-value-row .db-multi-select-values,
+.db-form-chips .db-relation-values {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  column-gap: 6px;
+  padding: 2px 0;
+}
+
+.db-form-select-placeholder {
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+/* 当前数值紧随属性名；显示样式作为一组辅助信息贴右侧。 */
+.db-form-style-hints {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.db-form-style-hint,
+.db-form-value-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 400;
+  flex: 0 0 auto;
+}
+
+.db-form-value-hint {
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.db-form-style-hint-icon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+}
+
+.db-form-style-hint-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* 与表格单元格共用选项行视觉，搜索区另留紧凑内边距。 */
+.db-form-option-popover .db-cell-option-search {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md);
+  background: var(--background-primary);
+  font-size: 13px;
+}
+
+.db-form-option-popover .db-cell-option-list {
+  min-height: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.db-form-option-popover .db-option-check {
+  min-width: 14px;
+  text-align: center;
+}
+
+.db-form-relation-popover {
+  max-height: min(320px, calc(100vh - 24px)) !important;
+}
+
+.db-form-relation-popover .db-relation-option-list {
+  max-height: 192px;
+}
+
+.db-color-picker-popup {
+  z-index: 10020;
+}
+
+.db-form.is-readonly .db-form-fields {
+  opacity: 0.78;
+}
+
+.db-form.is-readonly .db-form-field-control {
+  cursor: default;
+}
+
+/* 格式化文本在输入框原位置显示；聚焦改原文，失焦恢复渲染。 */
+.db-form-text-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+.db-form-text-shell > [hidden] {
+  display: none !important;
+}
+
+.db-form .db-form-text-preview {
+  box-sizing: border-box;
+  min-height: 36px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--db-radius-lg);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.db-form .db-form-text-preview :is(strong, em, a, code, span) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.db-form .db-form-text-preview:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* 覆盖数据库标题输入框的更高优先级规则，避免编辑时跳回大标题字号。 */
+.note-database-container .db-form input.db-form-title-edit,
+.note-database-container .db-form input.db-form-title-edit:hover,
+.note-database-container .db-form input.db-form-title-edit:focus,
+.note-database-container .db-form input.db-form-title-edit:focus-visible {
+  font-family: var(--db-title-font-family);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+.db-add-database-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.db-add-database-header h3 {
+  margin: 0;
+}
+
+.db-starter-picker {
+  flex: 0 1 210px;
+  min-width: 150px;
+}
+
+.db-starter-picker .db-dropdown-field {
+  width: 100%;
+}
+
+.db-starter-picker .db-dropdown-field:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.db-starter-picker .db-dropdown-field:focus-visible {
+  outline: 1px solid var(--text-accent);
+  outline-offset: -2px;
+}
+
+.db-starter-dropdown.db-dropdown-popover {
+  width: min(360px, calc(100vw - 24px)) !important;
+  max-width: min(360px, calc(100vw - 24px)) !important;
+  overflow-x: hidden !important;
+}
+
+.db-starter-dropdown .db-dropdown-option {
+  align-items: start;
+  min-height: 56px;
+  padding: 11px 10px;
+}
+
+.db-starter-dropdown .db-dropdown-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.db-starter-dropdown .db-dropdown-option-label {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.db-starter-dropdown .db-dropdown-option-reason {
+  display: block;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-starter-preview {
+  margin-top: 12px;
+  padding: 14px 16px 14px 28px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+}
+
+.db-starter-preview:empty {
+  display: none;
+}
+
+.db-starter-preview-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.db-starter-preview-icon {
+  display: inline-flex;
+  color: var(--text-accent);
+}
+
+.db-starter-preview-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.db-starter-description {
+  margin-top: 4px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.db-starter-views {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 7px;
+  margin-top: 7px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+}
+
+.db-starter-views-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.db-starter-view-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.db-starter-view-item svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+
+.db-starter-counts {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.db-starter-samples {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+@media (max-width: 600px) {
+  .db-add-database-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .db-starter-picker {
+    flex-basis: auto;
+    width: 100%;
+  }
+
+  .db-starter-preview {
+    padding: 12px 12px 12px 22px;
+  }
 }

@@ -5,7 +5,8 @@ import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleNode } from "./types
 import { hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
 import { hasDateTimeValue } from "./DateTimeFormat";
 import { getSourceRuleTree, matchesBaseSourceType, matchesSourceRuleTree, sourceRuleContainsValue, sourceRuleValuesLooseEqual, sourceRuleValuesStrictEqual } from "./SourceRules";
-import { fileHasLink, getFileFieldFixedType, getFileFieldValue, isBaseFileField, isFileFieldKey } from "./FileFields";
+import { getFileFieldFixedType, isBaseFileField, isFileFieldKey } from "./FileFields";
+import { fileHasLink, getFileFieldValue } from "./FileFieldObsidian";
 import { stringifyValue } from "./Stringify";
 
 const MAX_SOURCE_RULE_MATCH_TEXT_LENGTH = 10000;

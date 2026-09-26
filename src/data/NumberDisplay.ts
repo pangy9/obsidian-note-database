@@ -48,3 +48,17 @@ export function ringGeometry(percent: number, radius: number): { circumference: 
   const dashOffset = circumference * (1 - clamped / 100);
   return { circumference, dashOffset };
 }
+
+/** Convert a pointer position on an editable horizontal progress track to its value. */
+export function progressValueFromBarPointer(clientX: number, left: number, width: number, divisor: number): number {
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(divisor) || divisor <= 0) return 0;
+  return Math.round(clampNumber((clientX - left) / width, 0, 1) * divisor);
+}
+
+/** Editable ring starts at 12 o'clock and increases clockwise, matching the displayed arc. */
+export function progressValueFromRingPointer(clientX: number, clientY: number, centerX: number, centerY: number, divisor: number): number {
+  if (!Number.isFinite(divisor) || divisor <= 0) return 0;
+  const angle = Math.atan2(clientX - centerX, centerY - clientY);
+  const fraction = (angle + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+  return Math.round(fraction * divisor);
+}

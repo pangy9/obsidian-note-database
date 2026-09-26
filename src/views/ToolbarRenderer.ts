@@ -140,8 +140,9 @@ export class ToolbarRenderer {
     const viewType = currentView?.viewType || "table";
     const isChartView = viewType === "chart";
     const isCalendarTimelineView = viewType === "calendar" || viewType === "timeline";
-    const showSortButton = viewType !== "chart";
-    const showGroupButton = viewType !== "chart" && viewType !== "calendar";
+    const isFormView = viewType === "form";
+    const showSortButton = viewType !== "chart" && !isFormView;
+    const showGroupButton = viewType !== "chart" && viewType !== "calendar" && !isFormView;
     const showColumnButton = viewType !== "chart";
 
     if (actions.hideHeaderChrome) return;
@@ -232,7 +233,6 @@ export class ToolbarRenderer {
 
       const titleActions = titleRow.createDiv({ cls: "db-title-actions" });
       this.renderFullViewButton(titleActions, actions);
-      if (!actions.isReadOnly && !isChartView) this.renderNewButton(titleActions, actions);
       if (currentDb?.description) {
         header.createDiv({
           cls: "db-description db-description-embed",
@@ -255,10 +255,10 @@ export class ToolbarRenderer {
       // Embedded views still show a single active tab so the toolbar shape stays consistent.
       this.renderViewTabs(left, currentDb, currentViewIndex, actions);
     }
-    if (phoneLayout && !isChartView) this.renderSearch(left, state, actions);
+    if (phoneLayout && !isChartView && !isFormView) this.renderSearch(left, state, actions);
 
     if (!actions.hideWidthSelect) this.renderWidthSelect(right, currentEntry, currentView, actions);
-    this.renderFilterButton(right, state, actions);
+    if (!isFormView) this.renderFilterButton(right, state, actions);
     if (showSortButton) this.renderSortButton(right, state, actions);
     this.renderViewConfigButton(right, actions);
     if (showGroupButton) {
@@ -271,14 +271,15 @@ export class ToolbarRenderer {
       this.renderComputedSyncButton(right, actions);
     }
     this.renderDatabaseRefreshButton(right, actions);
-    this.renderExportButton(right, actions);
+    // 表单是录入界面，没有“当前结果集”；复制 CSV/Markdown 表格会误导为导出表单。
+    if (!isFormView) this.renderExportButton(right, actions);
     if (actions.showDatabaseChrome && !actions.hideDatabaseActions && actions.openDatabaseFile) this.renderDatabaseFileButton(right, actions);
     if (isChartView && actions.toggleChartOptions && actions.showChartOptions === true) this.renderChartOptionsButton(right, actions);
     if (isCalendarTimelineView && currentView && actions.updateViewConfig) {
       this.renderCalendarTimelineOptionsButton(right, currentView, currentDb, actions);
     }
-    if (!phoneLayout && !isChartView) this.renderSearch(right, state, actions);
-    if (!actions.isReadOnly && !isChartView) this.renderNewButton(right, actions);
+    if (!phoneLayout && !isChartView && !isFormView) this.renderSearch(right, state, actions);
+    if (!actions.isReadOnly && !isChartView && !isFormView) this.renderNewButton(right, actions);
   }
 
   private isPhoneLayout(): boolean {
@@ -890,6 +891,7 @@ export class ToolbarRenderer {
       { value: "chart", text: t("common.chartView"), icon: this.getViewTypeIcon("chart") },
       { value: "calendar", text: t("common.calendarView"), icon: this.getViewTypeIcon("calendar") },
       { value: "timeline", text: t("common.timelineView"), icon: this.getViewTypeIcon("timeline") },
+      { value: "form", text: t("common.formView"), icon: this.getViewTypeIcon("form") },
     ];
   }
 
@@ -940,6 +942,7 @@ export class ToolbarRenderer {
     this.renderViewTabPopoverRow(panel, t("common.chartView"), this.getViewTypeIcon("chart"), () => actions.addView("chart"));
     this.renderViewTabPopoverRow(panel, t("common.calendarView"), this.getViewTypeIcon("calendar"), () => actions.addView("calendar"));
     this.renderViewTabPopoverRow(panel, t("common.timelineView"), this.getViewTypeIcon("timeline"), () => actions.addView("timeline"));
+    this.renderViewTabPopoverRow(panel, t("common.formView"), this.getViewTypeIcon("form"), () => actions.addView("form"));
     positionToolbarPopover(panel, anchorEl);
     const onOutside = (outsideEvent: MouseEvent) => {
       const target = outsideEvent.target as Node | null;
@@ -962,6 +965,7 @@ export class ToolbarRenderer {
     if (viewType === "chart") return "bar-chart";
     if (viewType === "calendar") return "calendar-days";
     if (viewType === "timeline") return "chart-gantt";
+    if (viewType === "form") return "clipboard-list";
     return "table";
   }
 

@@ -7,7 +7,7 @@ import { DeleteDatabaseModal } from "./views/modals/DeleteDatabaseModal";
 import { DEFAULT_STATUS_PRESET_ID, getBuiltinStatusPresets, normalizeStatusPresets, resolveDefaultStatusPresetId } from "./data/ColumnTypes";
 import { StatusPresetManagerModal } from "./views/modals/StatusPresetManagerModal";
 import { AddDatabaseModal } from "./views/modals/AddDatabaseModal";
-import { buildDatabaseWithInferredColumns } from "./views/modals/AddDatabaseFlow";
+import { createDatabaseFromModalResult } from "./views/modals/AddDatabaseFlow";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { confirmWithModal } from "./views/modals/ConfirmModal";
 import { createDropdownField, DropdownOption } from "./views/DropdownField";
@@ -23,12 +23,14 @@ export const DEFAULT_SETTINGS = {
   databases: DEFAULT_DATABASES,
   databaseFolder: "database",
   databaseFileOrder: [] as string[],
+  databaseFileOrderMigrated: false,
   databaseFilesAlwaysOpenInNewTab: false,
   databaseFilesPreventDuplicateTabs: true,
   statusPresets: getBuiltinStatusPresets(),
   defaultStatusPresetId: DEFAULT_STATUS_PRESET_ID,
   recentRecordIcons: [] as string[],
   showDatabaseIcon: true,
+  embeddedDatabaseReadOnly: true,
   lastChangelogVersion: "",
   language: "system" as LocaleCode,
 };
@@ -38,12 +40,14 @@ export function createDefaultSettings(): PluginSettings {
     databases: [],
     databaseFolder: DEFAULT_SETTINGS.databaseFolder,
     databaseFileOrder: [],
+    databaseFileOrderMigrated: false,
     databaseFilesAlwaysOpenInNewTab: DEFAULT_SETTINGS.databaseFilesAlwaysOpenInNewTab,
     databaseFilesPreventDuplicateTabs: DEFAULT_SETTINGS.databaseFilesPreventDuplicateTabs,
     statusPresets: getBuiltinStatusPresets(),
     defaultStatusPresetId: DEFAULT_SETTINGS.defaultStatusPresetId,
     recentRecordIcons: [],
     showDatabaseIcon: DEFAULT_SETTINGS.showDatabaseIcon,
+    embeddedDatabaseReadOnly: DEFAULT_SETTINGS.embeddedDatabaseReadOnly,
     lastChangelogVersion: DEFAULT_SETTINGS.lastChangelogVersion,
     language: DEFAULT_SETTINGS.language,
   };
@@ -134,6 +138,15 @@ export class SettingsTab extends PluginSettingTab {
             this.app.workspace.trigger("database-icon-visibility-change");
           })
       );
+    new Setting(general)
+      .setName(t("settings.embeddedDatabaseReadOnly.name"))
+      .setDesc(t("settings.embeddedDatabaseReadOnly.desc"))
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.embeddedDatabaseReadOnly !== false)
+        .onChange(async (value) => {
+          this.plugin.settings.embeddedDatabaseReadOnly = value;
+          await this.plugin.saveSettings();
+        }));
 
     // 分组 2：数据管理
     const dataMgmt = this.createSettingGroup(containerEl, "settings.groups.dataManagement");
@@ -216,17 +229,16 @@ export class SettingsTab extends PluginSettingTab {
         this.app,
         this.plugin.settings.statusPresets,
         this.plugin.settings.defaultStatusPresetId,
+        this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
       ).openAndWait();
       if (!result) return;
       const name = this.getUniqueDatabaseName(result.name || t("defaults.newDatabase"));
-      const db = await buildDatabaseWithInferredColumns(this.app, result, name);
-      if (!db) return;
-      if (!await this.plugin.confirmNewDatabasePropertyTypeConflicts(db)) return;
-      const file = await this.plugin.dataSource.createViewDefFile(
+      const file = await createDatabaseFromModalResult(
+        this.app, this.plugin.dataSource, result, name,
         this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
-        name,
-        db
+        (config) => this.plugin.prepareNewDatabasePropertyTypeConflicts(config),
       );
+      if (!file) return;
       new Notice(t("notice.createdDbFile", { path: file.path }));
       this.closeSettings();
       await this.plugin.openDashboardReference(file.path);

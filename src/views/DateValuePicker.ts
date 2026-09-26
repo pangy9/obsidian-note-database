@@ -19,6 +19,7 @@ import {
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { isHTMLElement } from "./DomGuards";
+import { createFormPopoverPortal } from "./FormPopoverPortal";
 
 export interface DateValuePickerOptions {
   parent: HTMLElement;
@@ -90,8 +91,9 @@ function openDateValuePicker(
   }
   active?.close(true);
 
+  const formPortal = trigger.closest(".db-form") ? createFormPopoverPortal(doc) : null;
   const rawContainer = trigger.closest(".note-database-container");
-  const host = isHTMLElement(rawContainer) ? rawContainer : doc.body;
+  const host = formPortal || (isHTMLElement(rawContainer) ? rawContainer : doc.body);
   const includeTime = Boolean(options.includeTime);
   const originalValue = normalizeDatePickerValue(options.value, includeTime);
   const originalDisplayText = options.displayText;
@@ -199,6 +201,7 @@ function openDateValuePicker(
     }
     cleanupAutoClose?.();
     popover.remove();
+    formPortal?.remove();
     trigger.setAttribute("aria-expanded", "false");
     if (activePickers.get(doc)?.anchor === trigger) activePickers.delete(doc);
   };

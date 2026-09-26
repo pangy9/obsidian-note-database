@@ -16861,6 +16861,9 @@ img.db-text-md-image {
 
 /* 快捷采集是单列工作面板：固定边界、一个滚动区、底部动作留在视野内。 */
 .modal.db-quick-form-modal {
+  --db-form-control-background: var(--background-primary);
+  --db-form-control-border: var(--background-modifier-border);
+  --db-form-control-focus-border: var(--background-modifier-border-hover);
   width: min(720px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: min(820px, calc(100vh - 32px));
@@ -16961,7 +16964,7 @@ img.db-text-md-image {
 .db-quick-form-modal .db-form-actions {
   border-top: 1px solid var(--background-modifier-border);
   padding: 14px 0 0;
-  background: var(--background-primary);
+  background: transparent;
 }
 
 .db-form-cover {
@@ -17138,9 +17141,9 @@ img.db-text-md-image {
   display: block;
   width: 100%;
   min-height: 34px;
-  border: 1px solid transparent;
+  border: 1px solid var(--db-form-control-border, transparent);
   border-radius: var(--db-radius-lg);
-  background: var(--background-secondary);
+  background: var(--db-form-control-background, var(--background-secondary));
   color: var(--text-normal);
   font: inherit;
   font-size: 14px;
@@ -17164,10 +17167,10 @@ img.db-text-md-image {
 .note-database-container .db-form-textarea:focus,
 .db-form-textarea:focus,
 .db-form-textarea:focus-visible {
-  border-color: transparent !important;
+  border-color: var(--db-form-control-focus-border, transparent) !important;
   box-shadow: none !important;
   outline: none !important;
-  background: var(--background-secondary) !important;
+  background: var(--db-form-control-background, var(--background-secondary)) !important;
 }
 
 .db-form-locked-value {
@@ -17646,8 +17649,9 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
   min-height: 34px;
   padding: 5px 10px;
   margin: 0;
+  border: 1px solid var(--db-form-control-border, transparent);
   border-radius: var(--db-radius-lg);
-  background: var(--background-secondary);
+  background: var(--db-form-control-background, var(--background-secondary));
   cursor: pointer;
   box-sizing: border-box;
 }
@@ -17764,8 +17768,9 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
   min-height: 36px;
   width: 100%;
   padding: 8px 10px;
+  border: 1px solid var(--db-form-control-border, transparent);
   border-radius: var(--db-radius-lg);
-  background: var(--background-secondary);
+  background: var(--db-form-control-background, var(--background-secondary));
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: 14px;

@@ -33,6 +33,8 @@ export interface ToolbarViewEntry {
 export interface ToolbarActions {
   selectDatabase(index: number): void;
   moveDatabase?(fromIndex: number, toIndex: number): void;
+  /** Read the current order when opening the selector, after in-place reordering. */
+  getDatabasePopoverState?(): { viewEntries: ToolbarViewEntry[]; currentDbIndex: number };
   selectViewInView(dbIndex: number, viewIndex: number): void;
   addView(viewType: DatabaseViewType): void;
   deleteView(viewIndex: number): void;
@@ -187,7 +189,8 @@ export class ToolbarRenderer {
           this.closeViewTabPopover();
           this.closeExportPopover();
           this.closeTitleActionsPopover();
-          this.renderDatabasePopover(heading, viewEntries, currentDbIndex, actions);
+          const latest = actions.getDatabasePopoverState?.() ?? { viewEntries, currentDbIndex };
+          this.renderDatabasePopover(heading, latest.viewEntries, latest.currentDbIndex, actions);
         };
       }
       if (actions.renameDatabase) {

@@ -1913,6 +1913,7 @@ export class DatabaseView extends FileView {
     this.toolbarRenderer.render(this.containerEl_, this.viewEntries, this.currentDbIndex, this.currentViewIndex, this.vs(), {
       selectDatabase: (index) => this.selectView(index),
       moveDatabase: (fromIndex, toIndex) => this.moveDatabase(fromIndex, toIndex),
+      getDatabasePopoverState: () => ({ viewEntries: this.viewEntries, currentDbIndex: this.currentDbIndex }),
       selectViewInView: (_dbIndex, viewIndex) => this.switchView(viewIndex),
       addView: (viewType) => this.addView(viewType),
       deleteView: (viewIndex) => this.deleteView(viewIndex),
@@ -3142,10 +3143,9 @@ export class DatabaseView extends FileView {
     }
     if (this.currentViewIndex < 0) this.currentViewIndex = 0;
     this.clearViewStateCache();
-    // Don't rerenderToolbar here: the database popover is updated in place by
-    // ToolbarRenderer.moveDatabasePopoverEntry (populate + updateState), and a
-    // full toolbar rerender would close it (Bug E). refresh() only redraws the
-    // active view, not the toolbar/popover.
+    // Keep the open popover intact. The heading callback reads this.viewEntries
+    // through getDatabasePopoverState next time it opens, so it cannot reuse
+    // the pre-move list captured by the last toolbar render.
     this.refresh({ viewport: "reset-top" });
   }
 

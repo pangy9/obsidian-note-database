@@ -12,8 +12,7 @@ export function traceDatabaseInteraction(doc: Document, source: string, details:
   log.push(line);
   if (log.length > 200) log.shift();
   // User-enabled, bounded diagnostics for an intermittent UI event bug.
-  // eslint-disable-next-line obsidianmd/rule-custom-message
-  console.log("[NoteDatabase events]", line);
+  console.debug("[NoteDatabase events]", line);
 }
 
 export function installInteractionDiagnostics(container: HTMLElement, id: string): () => void {

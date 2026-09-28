@@ -50,6 +50,7 @@ import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
 import { RowMenu } from "./RowMenu";
 import { openDropdownMenu } from "./DropdownField";
 import { openIconPickerPopover } from "./IconPickerPopover";
+import { SaveStarterTemplateModal } from "./modals/SaveStarterTemplateModal";
 import { ImageFileSuggestModal } from "./ImageFileSuggestModal";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { resolveRecordIconField } from "../data/RecordIcon";
@@ -605,6 +606,11 @@ export class DatabaseView extends FileView {
       getConfig: () => this.getConfig(),
       getVisibleRows: () => this.rows,
       getCreateDefaults: (row, context) => this.getCreateEntryDefaultsForRow(row, context),
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
+      moveRowWithGroupUpdatesAndPosition: (row, updates, beforePath, afterPath) => {
+        void this.moveRowWithGroupUpdatesAndPosition(row, updates, beforePath, afterPath);
+      },
+      getMenuRoot: () => this.containerEl_,
     });
     const shouldHideResultCreateEntryButtons = () => this.shouldHideResultCreateEntryButtons();
     this.columnHeaderController = new ColumnHeaderController({
@@ -1982,6 +1988,10 @@ export class DatabaseView extends FileView {
       addDatabase: () => { void this.addDatabase(); },
       deleteDatabase: () => { void this.deleteDatabase(); },
       copyCurrentDatabase: () => { void this.duplicateCurrentDatabase(); },
+      saveStarterTemplate: () => {
+        const db = this.getActiveDb();
+        if (db) new SaveStarterTemplateModal(this.app, structuredClone(db), [...this.rows], this.statusPresets).open();
+      },
       copyCurrentView: (viewIndex) => this.duplicateView(viewIndex),
       copyViewCode: (viewIndex) => { void this.copyCurrentViewCode(viewIndex); },
       openDatabaseFile: () => { void this.openDatabaseFile(); },

@@ -16282,7 +16282,8 @@ img.db-text-md-image {
 
 .db-icon-picker-popover {
   position: fixed;
-  z-index: var(--layer-popover);
+  /* Icon picker can be opened from a modal control; keep it above the modal sheet. */
+  z-index: 100000;
   width: min(318px, calc(100vw - 24px));
   height: min(416px, calc(100vh - 48px));
   display: flex;

@@ -29,6 +29,7 @@ import { markNoteHoverLink } from "./HoverLinkPreview";
 import { promptMoveToPosition } from "./modals/MoveToPositionModal";
 import { getMovePositionNeighbors, getMoveTargetNeighbors } from "../data/MovePosition";
 import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
+import { setRecordReorderContext } from "./RecordReorderContext";
 
 const TIME_SNAP_MINUTES = CALENDAR_TIME_SNAP_MINUTES;
 
@@ -468,6 +469,10 @@ export class CalendarTimelineRenderer {
         this.actions.openRow(event.row);
       }
     };
+    setRecordReorderContext(button, {
+      visibleRows: laneEvents.map((candidate) => candidate.row),
+      groups: config.timelineGroupField ? [{ field: config.timelineGroupField, key: groupKey }] : undefined,
+    });
     button.oncontextmenu = (mouseEvent) => this.actions.showRowMenu?.(mouseEvent, event.row);
     // 拖拽入口按列类型分流（全 scale 通用）：datetime 列在日视图走 timed move（改时间），
     // date 列（任意 scale）走 date move（按天整体平移）。date 列不再进 timed 路径，避免无 time

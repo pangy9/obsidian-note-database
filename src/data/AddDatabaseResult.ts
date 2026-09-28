@@ -1,5 +1,6 @@
 import { DatabaseConfig, SourceRule, SourceRuleNode, StatusPresetDef } from "./types";
 import type { StarterTemplateId } from "./DatabaseStarterTemplates";
+import type { VaultStarterTemplate } from "./VaultStarterTemplates";
 
 /** Globals collected by the new-database modal. The creation flow applies these to the
  *  freshly built DatabaseConfig via `applyAddDatabaseResult`. Source rules, new-record
@@ -18,6 +19,10 @@ export interface AddDatabaseModalResult {
   /** Default status preset id. `undefined` = inherit the global default. */
   defaultStatusPresetId?: string;
   starterTemplateId?: StarterTemplateId;
+  customStarter?: VaultStarterTemplate;
+  coverImage?: string;
+  coverImagePositionY?: number;
+  newRecordTemplate?: DatabaseConfig["newRecordTemplate"];
   includeStarterSamples?: boolean;
   /** The modal's generated folder should be recomputed from the final unique database name. */
   starterSourceFolderAuto?: boolean;
@@ -29,6 +34,9 @@ export interface AddDatabaseModalResult {
  *  set `name` — uniqueness is the caller's job (getUniqueDatabaseName), so the caller
  *  passes the unique name into `buildDatabaseWithInferredColumns`. */
 export function applyAddDatabaseResult(db: DatabaseConfig, result: AddDatabaseModalResult): void {
+  if (result.coverImage !== undefined) db.coverImage = result.coverImage || undefined;
+  if (result.coverImagePositionY !== undefined) db.coverImagePositionY = result.coverImagePositionY;
+  if ("newRecordTemplate" in result) db.newRecordTemplate = result.newRecordTemplate;
   db.description = result.description || undefined;
   db.sourceFolder = result.sourceFolder;
   db.sourceRules = result.sourceRules;

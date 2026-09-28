@@ -1,7 +1,7 @@
 {
   "id": "note-database",
   "name": "Note Database",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "minAppVersion": "1.7.2",
   "description": "Local note databases with eight views, quick forms, starter templates, charts, formulas, and inline editing.",
   "author": "pangy9",

@@ -13,6 +13,7 @@ import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { promptMoveToPosition } from "./modals/MoveToPositionModal";
 import { getMovePositionNeighbors, getMoveTargetNeighbors } from "../data/MovePosition";
 import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
+import { setRecordReorderContext } from "./RecordReorderContext";
 import { getRecordReorderLabel } from "./RecordReorderLabel";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -472,6 +473,10 @@ export class TableRenderer {
       tr.setAttr("data-note-database-group-field", groupField);
       tr.setAttr("data-note-database-group-key", groupKey);
     }
+    setRecordReorderContext(tr, {
+      visibleRows: rows,
+      groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,
+    });
     this.actions.setupRow(tr, row, {
       visibleRows: rows,
       groups: groupField && groupKey != null ? [{ field: groupField, key: groupKey }] : undefined,

@@ -1,4 +1,4 @@
-import { App, Modal, setIcon } from "obsidian";
+import { App, Modal, Notice, setIcon } from "obsidian";
 import { makeModalDraggable } from "./ModalDrag";
 import { t } from "../../i18n";
 import { ColumnDef, DatabaseConfig, StatusPresetDef, ViewConfig, generateId } from "../../data/types";
@@ -8,6 +8,9 @@ import { ViewConfigPanelActions, ViewConfigPanelRenderer } from "../ViewConfigPa
 import { StatusPresetManagerModal } from "./StatusPresetManagerModal";
 import { createDropdownField } from "../DropdownField";
 import { buildStarterDatabaseConfig, getStarterRecordFolder, getStarterTemplate, getStarterTemplates, type StarterTemplateId } from "../../data/DatabaseStarterTemplates";
+import { SavedVaultStarter, loadVaultStarters, instantiateVaultStarter, getMissingStarterAssets } from "../../data/VaultStarterTemplates";
+import { getDatabaseDropdownIcon, renderDatabaseDropdownIcon, renderRecordIcon } from "../RecordIconRenderer";
+import { confirmWithModal } from "./ConfirmModal";
 
 export class AddDatabaseModal extends Modal {
   private resolve?: (result: AddDatabaseModalResult | null) => void;
@@ -19,6 +22,12 @@ export class AddDatabaseModal extends Modal {
   private starterTemplateId?: StarterTemplateId;
   private includeStarterSamples = true;
   private initialStarterFolder = "";
+  private customStarters: SavedVaultStarter[] = [];
+  private customStarter?: SavedVaultStarter;
+  private pickerHost?: HTMLElement;
+  private pickerClose?: () => void;
+  private initialCover?: string;
+  private closed = false;
 
   constructor(
     app: App,
@@ -66,22 +75,15 @@ export class AddDatabaseModal extends Modal {
     contentEl.empty();
     const header = contentEl.createDiv({ cls: "db-add-database-header note-database-container note-database-modal" });
     header.createEl("h3", { text: t("addDatabase.title") });
-    const picker = header.createDiv({ cls: "db-starter-picker" });
-    createDropdownField({
-      parent: picker,
-      label: t("starter.select"),
-      value: "blank",
-      options: [
-        { value: "blank", text: t("starter.blank"), icon: "database", description: t("starter.blankDesc") },
-        ...getStarterTemplates().map((starter) => ({
-          value: starter.id, text: starter.name, icon: starter.icon,
-          description: starter.description,
-        })),
-      ],
-      hideLabel: true,
-      popoverClassName: "db-starter-dropdown",
-      onChange: (value) => this.selectStarter(value),
-    });
+    this.closed = false;
+    this.pickerHost = header.createDiv({ cls: "db-starter-picker" });
+    this.renderPicker();
+    void loadVaultStarters(this.app).then(({ templates, invalid }) => {
+      if (this.closed) return;
+      this.customStarters = templates;
+      this.renderPicker();
+      if (invalid.length) new Notice(t("starter.custom.invalid", { paths: invalid.join(", ") }), 10000);
+    }).catch((error: unknown) => { if (!this.closed) new Notice(t("starter.custom.failed", { error: String(error) })); });
     this.starterPreviewHost = contentEl.createDiv({ cls: "db-starter-preview" });
     this.renderStarterPreview();
 
@@ -108,15 +110,40 @@ export class AddDatabaseModal extends Modal {
     };
   }
 
+  private renderPicker(): void {
+    if (!this.pickerHost) return;
+    this.pickerClose?.();
+    this.pickerHost.empty();
+    const picker = createDropdownField({
+      parent: this.pickerHost, label: t("starter.select"),
+      value: this.customStarter ? `vault:${this.customStarter.path}` : this.starterTemplateId || "blank",
+      options: [
+        { value: "blank", text: t("starter.blank"), icon: "database", description: t("starter.blankDesc") },
+        ...getStarterTemplates().map((starter) => ({ value: starter.id, text: starter.name, icon: starter.icon,
+          description: starter.description, section: t("starter.custom.builtIn") })),
+        ...this.customStarters.map((starter) => ({ value: `vault:${starter.path}`, text: starter.name,
+          icon: getDatabaseDropdownIcon(starter.config), description: starter.description, section: t("starter.custom.mine") })),
+      ],
+      renderIcon: (parent, icon) => { if (!renderDatabaseDropdownIcon(parent, icon)) setIcon(parent, icon); },
+      hideLabel: true, popoverClassName: "db-starter-dropdown",
+      onChange: (value) => this.selectStarter(value),
+    });
+    this.pickerClose = () => picker.close();
+  }
+
   private selectStarter(value: string): void {
     const starter = getStarterTemplate(value);
+    this.customStarter = this.customStarters.find((item) => `vault:${item.path}` === value);
     this.tempDb = this.createTempDatabase();
     this.starterTemplateId = starter?.id;
     this.includeStarterSamples = true;
-    if (starter) {
-      this.initialStarterFolder = getStarterRecordFolder(this.databaseFolder, starter.name);
-      this.tempDb = buildStarterDatabaseConfig(starter, starter.name, this.initialStarterFolder, generateId);
-      this.tempDb.description = starter.description;
+    if (starter || this.customStarter) {
+      const selected = (starter || this.customStarter)!;
+      this.initialStarterFolder = getStarterRecordFolder(this.databaseFolder, selected.name);
+      this.tempDb = this.customStarter
+        ? instantiateVaultStarter(this.customStarter, selected.name, this.initialStarterFolder)
+        : buildStarterDatabaseConfig(starter!, selected.name, this.initialStarterFolder, generateId);
+      this.tempDb.description = selected.description;
       this.tempDb.statusPresets = normalizeStatusPresets([
         ...this.globalStatusPresets,
         ...(this.tempDb.statusPresets || []),
@@ -124,6 +151,7 @@ export class AddDatabaseModal extends Modal {
     } else {
       this.initialStarterFolder = "";
     }
+    this.initialCover = this.tempDb.coverImage;
     this.renderStarterPreview();
     this.renderGlobals();
   }
@@ -132,26 +160,30 @@ export class AddDatabaseModal extends Modal {
     const host = this.starterPreviewHost;
     if (!host) return;
     host.empty();
-    const starter = getStarterTemplate(this.starterTemplateId);
+    const starter = this.customStarter || getStarterTemplate(this.starterTemplateId);
     if (!starter) return;
     const heading = host.createDiv({ cls: "db-starter-preview-heading" });
     const icon = heading.createSpan({ cls: "db-starter-preview-icon" });
-    setIcon(icon, starter.icon);
+    if (this.customStarter) renderRecordIcon(icon, this.customStarter.config.icon, { compact: true, defaultIcon: "database" });
+    else if ("icon" in starter) setIcon(icon, starter.icon);
     heading.createSpan({ text: starter.name });
-    host.createDiv({ cls: "db-starter-description", text: starter.description });
+    host.createDiv({
+      cls: "db-starter-description",
+      text: starter.description || (this.customStarter ? t("starter.custom.noDescription") : ""),
+    });
     const views = host.createDiv({ cls: "db-starter-views" });
     const viewList = views.createSpan({ cls: "db-starter-views-list" });
     const viewIcons: Record<string, string> = {
       table: "table", board: "layout-grid", gallery: "image", list: "list",
       chart: "bar-chart", calendar: "calendar-days", timeline: "chart-gantt", form: "clipboard-list",
     };
-    for (const view of starter.views) {
+    for (const view of this.customStarter?.config.views || ("views" in starter ? starter.views : [])) {
       const item = viewList.createSpan({ cls: "db-starter-view-item" });
       setIcon(item.createSpan(), viewIcons[view.viewType || "table"] || "table");
       item.createSpan({ text: view.name });
     }
     host.createDiv({ cls: "db-starter-counts", text: t("starter.preview", {
-      fields: starter.columns.length,
+      fields: this.customStarter?.config.schema.columns.length ?? ("columns" in starter ? starter.columns.length : 0),
       records: starter.samples.length,
     }) });
     const sampleRow = host.createEl("label", { cls: "db-starter-samples" });
@@ -159,6 +191,24 @@ export class AddDatabaseModal extends Modal {
     checkbox.checked = this.includeStarterSamples;
     checkbox.onchange = () => { this.includeStarterSamples = checkbox.checked; };
     sampleRow.createSpan({ text: t("starter.addSamples") });
+    checkbox.disabled = starter.samples.length === 0;
+    if (this.customStarter) {
+      host.createEl("p", { cls: "db-modal-help", text: t("starter.custom.dependencies") });
+      const missing = getMissingStarterAssets(this.app, this.customStarter);
+      if (missing.length) host.createEl("p", { cls: "db-modal-help", text: t("starter.custom.missing", { paths: missing.join(", ") }) });
+      const selected = this.customStarter;
+      host.createEl("button", { text: t("starter.custom.delete") }).onclick = async () => {
+        if (!await confirmWithModal(this.app, { title: t("starter.custom.delete"), message: t("starter.custom.deleteConfirm", { name: selected.name }), danger: true })) return;
+        try {
+          const file = this.app.vault.getAbstractFileByPath(selected.path);
+          if (file) await this.app.fileManager.trashFile(file);
+          this.customStarters = this.customStarters.filter((item) => item.path !== selected.path);
+          if (this.closed) return;
+          this.selectStarter("blank");
+          this.renderPicker();
+        } catch (error) { new Notice(t("starter.custom.failed", { error: String(error) })); }
+      };
+    }
   }
 
   private renderGlobals(): void {
@@ -178,12 +228,12 @@ export class AddDatabaseModal extends Modal {
       // so the rebuild never runs inside a click/focus handler (which could detach the
       // clicked button mid-click — e.g. typing the name then clicking "Add rule").
       onDatabaseChange: () => {
-        if (this.starterTemplateId && this.tempDb.sourceFolder === this.initialStarterFolder &&
+        if ((this.starterTemplateId || this.customStarter) && this.tempDb.sourceFolder === this.initialStarterFolder &&
           this.tempDb.newRecordFolder === this.initialStarterFolder) {
           this.initialStarterFolder = getStarterRecordFolder(this.databaseFolder, this.tempDb.name);
           this.tempDb.sourceFolder = this.initialStarterFolder;
           this.tempDb.newRecordFolder = this.initialStarterFolder;
-        } else if (this.starterTemplateId && this.tempDb.newRecordFolder === this.initialStarterFolder &&
+        } else if ((this.starterTemplateId || this.customStarter) && this.tempDb.newRecordFolder === this.initialStarterFolder &&
           this.tempDb.sourceFolder !== this.initialStarterFolder) {
           // Keep the default creation destination with a manually changed source folder.
           this.tempDb.newRecordFolder = this.tempDb.sourceFolder;
@@ -254,14 +304,20 @@ export class AddDatabaseModal extends Modal {
       statusPresets: this.tempDb.statusPresets,
       defaultStatusPresetId: this.tempDb.defaultStatusPresetId,
       starterTemplateId: this.starterTemplateId,
-      includeStarterSamples: this.starterTemplateId ? this.includeStarterSamples : undefined,
-      starterSourceFolderAuto: !!this.starterTemplateId &&
+      customStarter: this.customStarter ? structuredClone(this.customStarter) : undefined,
+      coverImage: this.tempDb.coverImage !== this.initialCover ? this.tempDb.coverImage || "" : undefined,
+      coverImagePositionY: this.tempDb.coverImagePositionY,
+      newRecordTemplate: this.tempDb.newRecordTemplate,
+      includeStarterSamples: this.starterTemplateId || this.customStarter ? this.includeStarterSamples : undefined,
+      starterSourceFolderAuto: !!(this.starterTemplateId || this.customStarter) &&
         this.tempDb.sourceFolder === this.initialStarterFolder &&
         this.tempDb.newRecordFolder === this.initialStarterFolder,
     };
   }
 
   onClose(): void {
+    this.closed = true;
+    this.pickerClose?.();
     this.resolve?.(null);
     this.contentEl.empty();
   }

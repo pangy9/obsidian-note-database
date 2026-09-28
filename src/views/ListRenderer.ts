@@ -28,6 +28,7 @@ import { resolveTitleFieldDisplay } from "../data/TitleFieldDisplay";
 import { promptMoveToPosition } from "./modals/MoveToPositionModal";
 import { getMovePositionNeighbors, getMoveTargetNeighbors } from "../data/MovePosition";
 import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
+import { setRecordReorderContext } from "./RecordReorderContext";
 import { getRecordReorderLabel } from "./RecordReorderLabel";
 
 const ROW_MIME = "application/x-note-database-row";
@@ -257,6 +258,7 @@ export class ListRenderer {
   }
 
   private attachRowContextMenu(el: HTMLElement, row: RowData, context?: RowCreateContext): void {
+    if (context) setRecordReorderContext(el, context);
     el.addEventListener("contextmenu", (event) => {
       if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row, context);

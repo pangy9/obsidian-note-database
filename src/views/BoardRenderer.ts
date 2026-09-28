@@ -17,6 +17,7 @@ import { t } from "../i18n";
 import { promptMoveToPosition } from "./modals/MoveToPositionModal";
 import { getMovePositionNeighbors } from "../data/MovePosition";
 import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
+import { setRecordReorderContext } from "./RecordReorderContext";
 import { isHTMLElement } from "./DomGuards";
 import { setFieldTooltip } from "./FieldTooltip";
 import { getFileTitleDisplay, renderStackedFileTitle } from "./FileTitleDisplay";
@@ -699,6 +700,7 @@ export class BoardRenderer {
   }
 
   private attachRowContextMenu(el: HTMLElement, row: RowData, context?: RowCreateContext): void {
+    if (context) setRecordReorderContext(el, context);
     el.addEventListener("contextmenu", (event) => {
       if (isHTMLElement(event.target) && event.target.closest("input, select, textarea, button")) return;
       this.actions.showRowMenu?.(event, row, context);

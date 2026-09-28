@@ -1,5 +1,6 @@
 import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import { makeModalDraggable } from "./views/modals/ModalDrag";
+import { buildChangelogMarkdown } from "./data/ReleaseNotes";
 import { DataSource } from "./data/DataSource";
 import { appendUntrackedDatabasePaths, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
@@ -24,7 +25,7 @@ import {
   MutablePropertyTypeConflictEntry,
 } from "./views/PropertyTypeConflictWorkflow";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
-import { setLocale, t } from "./i18n";
+import { setLocale, t, getLocale } from "./i18n";
 import { absorbTypeFilterIntoRules, combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { refreshVaultPropertyCache } from "./data/VaultProperties";
 import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
@@ -404,6 +405,8 @@ export default class NoteDatabasePlugin extends Plugin {
 
   private async maybeShowChangelog(): Promise<void> {
     if (this.settings.lastChangelogVersion === this.manifest.version) return;
+    // 先捕获旧版本再落盘：弹窗按 (旧版本, 当前版本] 区间展示期间全部更新。
+    const previousVersion = this.settings.lastChangelogVersion || undefined;
     this.settings.lastChangelogVersion = this.manifest.version;
     await this.saveSettings();
     const modal = new Modal(this.app);
@@ -419,7 +422,8 @@ export default class NoteDatabasePlugin extends Plugin {
       attr: { href: "obsidian://show-plugin?id=note-database" },
     });
     modal.open();
-    void MarkdownRenderer.render(this.app, t("changelog.releaseNotes"), notesEl, "", component);
+    const changelogMarkdown = buildChangelogMarkdown(previousVersion, this.manifest.version, getLocale());
+    void MarkdownRenderer.render(this.app, changelogMarkdown, notesEl, "", component);
   }
 
   /**

@@ -41,6 +41,8 @@
 
 ## 同一批笔记，八种视图
 
+数据库不复制笔记——八个视图只是同一批 Markdown 的不同透镜，每个视图都会保存自己的筛选、排序、分组、显示属性、标题属性和布局。
+
 | 表格 | 看板 |
 | --- | --- |
 | ![表格视图](assets/screenshots/zh-1.2.7-overview.png) | ![看板视图](assets/screenshots/status-board.png) |
@@ -66,55 +68,31 @@
 | ![日历月视图](assets/screenshots/calendar-view-month.png) | ![日历周视图](assets/screenshots/calendar-view-week.png) |
 | 在月历中安排全天与跨日记录。 | 在细化的时间网格中处理全天和具体时段记录。 |
 
-每个视图都能保存自己的筛选、排序、分组、显示属性、标题属性和布局，但不会复制笔记。
+## 1.3.1 更新
 
-## 1.3.0 更新
+- **桌面端右键排序：** 在表格、看板、画廊、列表与时间线中右键任意记录即可上移、下移、移动到指定位置，或进入点选模式把它放到任意记录前后；跨分组移动同样支持。
+- **自定义数据库模板：** 把配置好的数据库保存为起步模板（可选包含当前视图至多 20 条示例记录），在同一 vault 新建数据库时直接复用；模板存放于 `Note Database Templates/`，可在预览中删除。
+- **升级更全面的更新日志：** 跨多个版本升级时，弹窗会列出期间所有版本的更新内容。
 
-- **表单视图与快速采集：** 可新建独立表单视图，也可从其他视图弹出采集窗口。控件按属性类型呈现；来源规则和表单设置共同决定必填项。本次会话中切换视图不会丢失草稿。
-- **六种数据库起步模板：** 项目追踪器、内容日历、阅读/媒体库、研究资料库、轻量 CRM、任务规划库。可选择是否加入示例笔记；属性、视图、图标和封面素材随模板提供。
-- **可选择编辑的内嵌数据库：** 默认仍只读；关闭只读设置后可在笔记中编辑记录，并可拖动底边调整代码块高度。
-- **新建记录套用模板：** 支持 Markdown、Obsidian Templates 和 Templater 文件，覆盖受支持的新建入口。
-- **更顺手的属性与移动端操作：** 在属性编辑窗口修改类型及文本/数字显示样式；手机端提供更易点按的排序入口和记录插入位置选择。
+## 从模板开始，或直接采集
 
-## 功能展示
+六种内置起步模板预置好属性、视图、图标与封面，可再选择是否加入示例笔记；也可以把配置好的数据库保存为自己的模板。需要零散记录时，从任意视图或命令面板打开快速采集窗口，不离开当前位置即可提交。
 
 | 快速采集窗口 | 数据库起步模板 |
 | --- | --- |
 | ![快速采集窗口](assets/screenshots/zh-1.3.0-quick-form.png) | ![内置数据库起步模板选择器](assets/screenshots/zh-1.3.0-starters.png) |
 | 不离开当前视图即可打开表单；提交失败时保留已填内容。 | 选好工作流、预置属性与视图，并按需加入示例笔记，之后仍可自行修改。 |
 
-| 可编辑的内嵌视图 | 调整内嵌高度 |
-| --- | --- |
-| ![在内嵌数据库中编辑选中单元格](assets/screenshots/zh-1.3.0-editable-embed.png) | ![内嵌数据库高度拖动手柄](assets/screenshots/zh-1.3.0-embed-height.png) |
-| 内嵌默认只读；在插件设置中启用编辑后，可直接在笔记中修改记录。 | 拖动内嵌数据库的底边，为视图留出更多或更少空间。 |
+## Obsidian 原生的链接预览
 
-| 更快的筛选与排序 |
+内部链接复用核心插件 Page preview，并遵循你设置的修饰键。
+
+| 从记录链接打开页面预览 |
 | --- |
-| ![筛选与排序快捷条件标签](assets/screenshots/zh-1.2.7-facet-controls.png) |
-| 顶栏直接显示当前规则；点开编辑一条，或直接移除。 |
-
-| 看板记录封面 |
-|  --- |
-|![带记录封面的看板与封面设置](assets/screenshots/zh-1.2.7-board-covers.png) |
-| 每个看板独立选择封面属性、裁切方式和宽高比。 |
-
-
-| 更清楚的公式编辑器 | 统一的新建属性窗口 |
-| --- | --- |
-| ![公式编辑器字段详情与取值预览](assets/screenshots/zh-1.2.7-formula-editor.png) | ![新建属性窗口](assets/screenshots/zh-1.2.7-new-property-dialog.png) |
-| 区分显示名称与 frontmatter 属性名，预览实际代入值，并用 `IFERROR` 处理空值或错误。 | 所有入口都确认显示名称、frontmatter 属性名与属性类型。 |
-
-| 关联 | 汇总 |
-| --- | --- |
-| ![关联选择](assets/screenshots/zh-1.2.7-relation-rollup_1.png) | ![Rollup 配置](assets/screenshots/zh-1.2.7-relation-rollup_2.png)|
-| 关联保存为双链；切库清理可一步撤销。 | 表格中双击即可配置 Rollup。 |
-
-| 原生笔记预览 |
-|  --- |
-|![从记录链接打开 Obsidian Page Preview](assets/screenshots/zh-1.2.7-page-preview.png) |
-| 内部链接复用 Obsidian Page Preview，并遵循用户设置的修饰键。 |
+| ![从记录链接打开 Obsidian Page Preview](assets/screenshots/zh-1.2.7-page-preview.png) |
 
 需要先启用 Obsidian 核心插件 **Page preview（页面预览）**。支持记录标题、Relation 属性、可点击的 `file.*` 文件属性、设为 Link 显示模式的文本属性，以及行内 Markdown 文本/计算文本中的内部链接和 `[[双链]]`；Table、Board、Gallery、List、Calendar、Timeline、详情面板、数据库文件视图与内嵌视图使用同一套预览行为。
+
 
 ## 不用逐篇打开，也能批量编辑
 
@@ -125,6 +103,11 @@
 | ![同时修改多条记录的一个属性](assets/screenshots/zh-bulk-edit.png) | ![行内 Markdown 文本属性](assets/screenshots/markdown-number.png) |
 | 先查看影响范围；风险写入需要确认，事务失败会回滚。 | 文本可显示为链接或行内 Markdown；数字可显示为评分、进度条或进度环。 |
 
+| 统一的新建属性窗口 |
+| --- |
+| ![新建属性窗口](assets/screenshots/zh-1.2.7-new-property-dialog.png) |
+| 所有入口都确认显示名称、frontmatter 属性名与属性类型。 |
+
 ## 筛选、着色与小计
 
 | 条件格式 | 分组小计 |
@@ -132,7 +115,12 @@
 | ![条件格式规则](assets/screenshots/zh-conditional-format.png) | ![带小计的分组](assets/screenshots/zh-board-groups-summaries.png) |
 | 按当前视图的规则，为命中的属性或整条记录着色。 | 在分组视图中添加并排序计数、求和、平均值、最大/最小值等小计。 |
 
-快捷筛选与排序标签和工具栏完整面板使用同一套规则。来源规则可用 `AND`、`OR`、`NOT` 组合文件夹、标签、属性、链接和表达式。
+| 快捷筛选与排序标签 |
+| --- |
+| ![筛选与排序快捷条件标签](assets/screenshots/zh-1.2.7-facet-controls.png) |
+| 顶栏直接显示当前规则；点开编辑一条，或直接移除。 |
+
+快捷筛选与排序标签和工具栏完整面板使用同一套规则；也可以直接拖动记录建立手动顺序。来源规则可用 `AND`、`OR`、`NOT` 组合文件夹、标签、属性、链接和表达式。
 
 ## 计算，也让笔记彼此关联
 
@@ -141,7 +129,7 @@
 | ![公式编辑器](assets/screenshots/zh-formula-editor.png) | ![关联笔记与 Rollup 结果](assets/screenshots/zh-relation-rollup.png) |
 | 使用属性引用、日期/文本/数字函数、实时预览，以及可选的 frontmatter 同步。 | 用普通 Obsidian 双链保存关联，再计算数量、总和、平均值或列表。 |
 
-插件不会使用 `eval`，也不会建立隐藏的关联数据库或云端副本。
+公式编辑器区分显示名称与 frontmatter 属性名，预览实际代入值，并可用 `IFERROR` 处理空值或错误；关联保存为普通双链，切库清理可一步撤销，表格中双击即可配置 Rollup。插件不会使用 `eval`，也不会建立隐藏的关联数据库或云端副本。
 
 ## 让记录更容易辨认
 
@@ -149,6 +137,11 @@
 | --- | --- |
 | ![数据库与记录图标](assets/screenshots/zh-database-icons.png) | ![数据库、看板与画廊封面](assets/screenshots/zh-dataset-covers-setting.png) ![](assets/screenshots/zh-board-covers-setting.png)|
 | 使用 Unicode Emoji 或 Lucide 图标，并允许每个视图选择不同的记录图标属性。 | 拖动数据库封面调整位置；看板与画廊分别保存自己的封面设置。 |
+
+| 看板记录封面 |
+| --- |
+| ![带记录封面的看板](assets/screenshots/zh-1.2.7-board-covers.png) |
+| 每个看板独立选择封面属性、裁切方式和宽高比。 |
 
 选项类分组标题在表格、看板、画廊和列表中保持相同颜色。搜索会高亮文件名、可见属性和本地化日期。
 
@@ -168,6 +161,11 @@
 | ![嵌入笔记中的数据库视图](assets/screenshots/zh-embed-view.png) | ![隐藏表头的紧凑内嵌视图](assets/screenshots/zh-embed-headerless.png) |
 | 把自动生成的 `note-database` 代码块粘贴到任意笔记。 | 当笔记正文已经提供上下文时，可以隐藏数据库表头。 |
 
+| 可编辑的内嵌视图 | 调整内嵌高度 |
+| --- | --- |
+| ![在内嵌数据库中编辑选中单元格](assets/screenshots/zh-1.3.0-editable-embed.png) | ![内嵌数据库高度拖动手柄](assets/screenshots/zh-1.3.0-embed-height.png) |
+| 内嵌默认只读；在插件设置中启用编辑后，可直接在笔记中编辑记录。 | 拖动内嵌数据库的底边，为视图留出更多或更少空间。 |
+
 内嵌数据库默认只读。在插件设置中关闭“内嵌数据库只读”后，可直接编辑笔记中的记录；表单内嵌也只有在可编辑模式下才能提交。拖动底边可调整高度。只读时仍可切换视图、筛选、排序、分组、查看计算值，以及使用复制和导出工具。
 
 ## Markdown 始终是数据源
@@ -185,11 +183,15 @@
 ## 三步开始
 
 1. 安装并启用 Note Database，从 ribbon 或命令面板打开数据库面板。
-2. 新建空白数据库或选择内置起步模板，再设置文件夹或来源规则。
+2. 新建空白数据库，或选择内置、已保存的起步模板，再设置文件夹或来源规则。
 3. 添加属性与视图；编辑会写回原始 Markdown 文件。
 
 ![](assets/screenshots/zh-create-dataset.png)
 ![命令面板中的 Note Database 命令](assets/screenshots/zh-command-list.png)
+
+在同一个 vault 内复用数据库配置时，打开数据库标题菜单，选择 **保存为起步模板…**。可填写名称、说明和图标，并选择是否包含当前视图的前 20 条记录。保存后，新建数据库的选择器中会出现 **我的模板**；模板文件存放于 `Note Database Templates/`，扩展名为 `.starter.json`。在预览中删除模板会将其移入回收站，不影响已创建的数据库。
+
+模板保留属性、公式、视图与显示设置。新数据库使用独立标识和记录目录，重设来源规则、手动记录顺序及关联目标。图片和新记录模板继续引用当前 vault 的文件，缺失文件会在预览中提示。示例笔记会复制为新文件，不包含关联值和计算结果。
 
 ## 安装
 

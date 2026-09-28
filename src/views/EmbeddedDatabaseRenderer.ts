@@ -339,9 +339,16 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     );
     this.rowMenu = new RowMenu({
       app: this.app,
+      getConfig: () => this.config,
+      getVisibleRows: () => this.rows,
+      moveRowWithGroupUpdatesAndPosition: (row, updates, before, after) => {
+        void this.moveEmbeddedRecord(row, updates, before, after);
+      },
       openRow: (row) => this.dataSource.openNote(row.file),
       deleteRow: (row) => this.deleteRow(row),
       get isReadOnly() { return readOnly(); },
+      moveRowToPosition: (movedPath, beforePath, afterPath) => this.moveRowToPosition(movedPath, beforePath, afterPath),
+      getMenuRoot: () => this.containerEl,
     });
     this.columnHeaderController = new ColumnHeaderController({
       getConfig: () => this.config,

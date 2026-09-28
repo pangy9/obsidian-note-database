@@ -18,7 +18,8 @@ export function startMobileRecordTargetMode(options: {
   movedPath: string;
   eligiblePaths: ReadonlySet<string>;
   labelForPath(path: string): string;
-  onPlace(targetPath: string, placement: Placement): void;
+  canSelectTarget?(element: HTMLElement): boolean;
+  onPlace(targetPath: string, placement: Placement, element: HTMLElement): void;
 }): () => void {
   const { root, bannerHost, movedPath, eligiblePaths } = options;
   const doc = root.ownerDocument;
@@ -45,11 +46,12 @@ export function startMobileRecordTargetMode(options: {
   let active = true;
   let selected: HTMLElement | undefined;
   const observer = new MutationObserver(() => {
-    if (!root.isConnected || !bannerHost.isConnected) cleanup();
+    if (!root.isConnected || !bannerHost.isConnected || !banner.isConnected) cleanup();
   });
   const cleanup = (): void => {
     if (!active) return;
     active = false;
+    root.removeEventListener("mousedown", onMouseDown, true);
     root.removeEventListener("click", onClick, true);
     doc.removeEventListener("keydown", onKeydown, true);
     scrollHost.removeEventListener("scroll", syncHorizontalPosition);
@@ -60,7 +62,7 @@ export function startMobileRecordTargetMode(options: {
   };
   const commit = (path: string, placement: Placement): void => {
     cleanup();
-    options.onPlace(path, placement);
+    if (selected) options.onPlace(path, placement, selected);
   };
   const addCancel = (): void => {
     const cancel = actions.createEl("button", { cls: "db-mobile-target-cancel", text: t("common.cancel"), attr: { type: "button" } });
@@ -78,20 +80,28 @@ export function startMobileRecordTargetMode(options: {
       .onclick = (event) => { event.preventDefault(); event.stopPropagation(); commit(path, "after"); };
     addCancel();
   };
-  const onClick = (event: MouseEvent): void => {
+  const selectFromEvent = (event: MouseEvent): void => {
     const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const item = target.closest<HTMLElement>(ROW_SELECTOR);
     if (!item || !root.contains(item)) return;
     const path = item.getAttribute("data-note-database-row-path") || "";
     if (!eligiblePaths.has(path)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (options.canSelectTarget && !options.canSelectTarget(item)) return;
     if (path !== movedPath) selectTarget(item, path);
   };
+  // Desktop table cells handle mousedown to start range selection. Intercept
+  // it before their handlers can replace/focus the cell and swallow its click.
+  const onMouseDown = (event: MouseEvent): void => {
+    if (event.button === 0) selectFromEvent(event);
+  };
+  const onClick = (event: MouseEvent): void => selectFromEvent(event);
   const onKeydown = (event: KeyboardEvent): void => { if (event.key === "Escape") cleanup(); };
 
   addCancel();
+  root.addEventListener("mousedown", onMouseDown, true);
   root.addEventListener("click", onClick, true);
   doc.addEventListener("keydown", onKeydown, true);
   observer.observe(doc.body, { childList: true, subtree: true });

@@ -16,6 +16,7 @@ import { getStarterArtworkFiles } from "../../data/DatabaseStarterArtwork";
 import type { DataSource } from "../../data/DataSource";
 import { DataHistoryFailure } from "../../data/EmbeddedDataHistory";
 import type { NewDatabaseConflictPreparation } from "../PropertyTypeConflictWorkflow";
+import { instantiateVaultStarter, cleanStarterSamples } from "../../data/VaultStarterTemplates";
 
 /**
  * Build a DatabaseConfig from a new-database modal result: scan the source folder for
@@ -36,13 +37,15 @@ export async function buildDatabaseWithInferredColumns(
   dbName: string,
   databaseFolder = "",
 ): Promise<DatabaseConfig | null> {
-  if (result.starterTemplateId) {
-    const starter = getStarterTemplate(result.starterTemplateId);
+  if (result.starterTemplateId || result.customStarter) {
+    const starter = result.customStarter || getStarterTemplate(result.starterTemplateId);
     if (!starter) return null;
     const sourceFolder = result.starterSourceFolderAuto || !result.sourceFolder
       ? getStarterRecordFolder(databaseFolder, dbName)
       : result.sourceFolder;
-    const db = buildStarterDatabaseConfig(starter, dbName, sourceFolder, generateId);
+    const db = result.customStarter
+      ? instantiateVaultStarter(result.customStarter, dbName, sourceFolder)
+      : buildStarterDatabaseConfig(getStarterTemplate(result.starterTemplateId)!, dbName, sourceFolder, generateId);
     applyAddDatabaseResult(db, {
       ...result,
       sourceFolder,
@@ -166,14 +169,15 @@ export async function createDatabaseFromModalResult(
   const db = await buildDatabaseWithInferredColumns(app, result, dbName, databaseFolder);
   if (!db) return null;
   const starter = getStarterTemplate(result.starterTemplateId);
-  if (starter && result.starterSourceFolderAuto) {
+  if ((starter || result.customStarter) && result.starterSourceFolderAuto) {
     const prefix = `${db.sourceFolder.replace(/\/+$/, "")}/`;
     if (app.vault.getFiles().some((file) => file.path.startsWith(prefix))) {
       new Notice(t("starter.folderOccupied"));
       return null;
     }
   }
-  const artwork = starter
+  // Custom templates reuse their vault references and do not have bundled artwork.
+  const artwork = starter && !result.customStarter
     ? getStarterArtworkFiles(starter.id, db.sourceFolder).slice(0, result.includeStarterSamples === false ? 1 : undefined)
     : [];
   if (artwork.some((asset) => app.vault.getAbstractFileByPath(asset.path))) {
@@ -210,11 +214,12 @@ export async function createDatabaseFromModalResult(
         await track(file);
       }
     }
-    if (starter && result.includeStarterSamples !== false) {
-      for (const sample of starter.samples) {
+    const samples = result.customStarter ? cleanStarterSamples(result.customStarter.samples, db) : starter?.samples;
+    if (samples && result.includeStarterSamples !== false) {
+      for (const sample of samples) {
         const frontmatter = { ...sample.frontmatter };
         if (sample.coverArtwork) frontmatter.cover = artwork[sample.coverArtwork]?.path;
-        const file = await dataSource.createNote(db.sourceFolder, sample.filename, frontmatter, undefined, sample.body);
+        const file = await dataSource.createNote(db.newRecordFolder || db.sourceFolder, sample.filename, frontmatter, undefined, sample.body);
         await track(file);
       }
     }
@@ -236,7 +241,7 @@ export async function createDatabaseFromModalResult(
         retained.push(item.file.path);
       }
     }
-    new Notice(t(starter ? "starter.createFailed" : "errors.createFailed", { error: String(error) }));
+    new Notice(t(starter || result.customStarter ? "starter.createFailed" : "errors.createFailed", { error: String(error) }));
     if (retained.length > 0) new Notice(t("starter.rollbackIncomplete", { paths: retained.join(", ") }), 10000);
     return null;
   }

@@ -41,6 +41,8 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 
 ## Eight views, one vault
 
+A database never duplicates your notes — the eight views are just different lenses over the same Markdown, and each view keeps its own filters, sorting, grouping, visible properties, title property, and layout.
+
 | Table | Board |
 | --- | --- |
 | ![Table view](assets/screenshots/en-1.2.7-overview.png) | ![Board view](assets/screenshots/status-board.png) |
@@ -66,54 +68,30 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 | ![Calendar month view](assets/screenshots/calendar-view-month.png) | ![Calendar week view](assets/screenshots/calendar-view-week.png) |
 | Arrange all-day and multi-day records in a monthly overview. | Work with all-day and timed records on a detailed weekly grid. |
 
-Each view keeps its own filters, sorting, grouping, visible properties, title property, and layout—without duplicating the notes.
+## New in 1.3.1
 
-## New in 1.3.0
+- **Reorder from the context menu on desktop:** right-click any record in table, board, gallery, list, or timeline views to move it up, down, to a specific position, or enter a pick-target mode that places it before or after any other record. Cross-group moves are supported.
+- **Custom database templates:** save a configured database as a starter template (optionally including up to 20 sample records from the current view) and reuse it when creating new databases in the same vault. Templates live under `Note Database Templates/` and can be deleted from their preview.
+- **Fuller update notes on upgrade:** when you upgrade across several versions, the changelog dialog now lists every version released in between.
+## Start from a template, or capture on the go
 
-- **Form view and quick capture:** make a dedicated form view or open a capture dialog from another view. Field controls follow property types; source rules and optional form settings determine required fields. Drafts survive view changes during the current session.
-- **Six database starters:** Project tracker, Content calendar, Reading and media library, Research library, Lightweight CRM, and Task planner. Choose whether to include sample notes; presets, views, icons, and cover artwork come with the starter.
-- **Editable embeds when enabled:** embedded databases remain read-only by default. Turn off the read-only setting to edit records in a note, and drag the lower edge to set the embed height.
-- **Record templates on creation:** apply a Markdown, Obsidian Templates, or Templater file when creating records through supported entry points.
-- **Faster property and mobile workflows:** edit a property's type and text/number display style in its dialog; use larger mobile sort controls and choose where to insert a record.
-
-## Feature tour
+Six built-in starters preset the properties, views, icons, and covers, with optional sample notes; save any configured database as your own template. For quick capture, open the dialog from any view or the command palette and submit without leaving where you are.
 
 | Quick-capture dialog | Database starters |
 | --- | --- |
 | ![Quick capture dialog](assets/screenshots/en-1.3.0-quick-form.png) | ![Built-in database starter picker](assets/screenshots/en-1.3.0-starters.png) |
 | Open a form without leaving the current view. A failed submission keeps the entered values. | Start with a workflow, its properties and views, and optional sample notes; then customize everything in your vault. |
 
-| Editable embed | Adjustable embed height |
-| --- | --- |
-| ![Editing a selected range in an embedded database](assets/screenshots/en-1.3.0-editable-embed.png) | ![Embedded database height grip](assets/screenshots/en-1.3.0-embed-height.png) |
-| Embeds stay read-only by default. Enable editing in plugin settings to change records directly inside a note. | Drag the lower edge of an embedded database to give the view more or less room. |
+## Native Obsidian link previews
 
-| Faster filter and sort controls |
-| --- |
-| ![Active filter and sort facet chips](assets/screenshots/en-1.2.7-facet-controls.png) |
-| See active rules as compact chips. Edit one rule in place or remove it directly. |
+Internal links reuse the core Page preview plugin and honor your modifier-key settings.
 
-| Record covers on boards |
-| --- |
-| ![Board cards with record covers and cover settings](assets/screenshots/en-1.2.7-board-covers.png) |
-| Choose a cover property, crop mode, and ratio independently for every board view. |
-
-| Clearer formulas | One new-property dialog |
-| --- | --- |
-| ![Formula editor with field details and value preview](assets/screenshots/en-1.2.7-formula-editor.png) | ![New property dialog](assets/screenshots/en-1.2.7-new-property-dialog.png) |
-| Distinguish display names from frontmatter keys, preview substituted values, use `file.name` / `file.tags`, and recover with `IFERROR`. | Confirm the display name, frontmatter key, and property type from every creation entry point. |
-
-| Relations | Rollups |
-| --- | --- |
-| ![Relation picker](assets/screenshots/en-1.2.7-relation-rollup_1.png) | ![Rollup configuration](assets/screenshots/en-1.2.7-relation-rollup_2.png) |
-| Store relations as wikilinks and clear old values as one undoable target change. | Double-click a table cell to configure its Rollup. |
-
-| Native note preview |
+| Page preview opened from a record link |
 | --- |
 | ![Obsidian Page Preview opened from a record link](assets/screenshots/en-1.2.7-page-preview.png) |
-| Preview internal links with Obsidian's Page Preview and the user's chosen modifier key. |
 
 Enable Obsidian's core **Page preview** plugin first. Preview works on record titles, Relation properties, clickable `file.*` metadata, text properties in Link display mode, and internal links or `[[wikilinks]]` in inline-Markdown text/computed-text properties. Table, Board, Gallery, List, Calendar, Timeline, the record detail panel, database-file views, and embedded views share the same behavior.
+
 
 ## Edit many notes without opening them
 
@@ -124,6 +102,11 @@ Field-aware editors cover text, numbers, currency, dates, checkboxes, selects, m
 | ![Editing one property across several records](assets/screenshots/en-bulk-edit.png) | ![Inline Markdown and number display styles](assets/screenshots/markdown-number.png) |
 | Preview the affected records, confirm risky writes, and roll back a failed transaction. | Render text as links or inline Markdown; show numbers as ratings, bars, or rings without changing stored values. |
 
+| One new-property dialog |
+| --- |
+| ![New property dialog](assets/screenshots/en-1.2.7-new-property-dialog.png) |
+| Confirm the display name, frontmatter key, and property type from every creation entry point. |
+
 ## Organize, highlight, and summarize
 
 | Conditional formatting | Group summaries |
@@ -131,7 +114,12 @@ Field-aware editors cover text, numbers, currency, dates, checkboxes, selects, m
 | ![Conditional formatting rules](assets/screenshots/en-conditional-format.png) | ![Board groups with summaries](assets/screenshots/en-board-groups-summaries.png) |
 | Highlight a matching property or the whole record with view-specific rules. | Add and reorder count, sum, average, min/max, and other summaries in grouped views. |
 
-Active filter and sort chips use the same rules as the full toolbar panels. Source rules can combine folders, tags, properties, links, and expressions with `AND`, `OR`, and `NOT`.
+| Quick filter and sort chips |
+| --- |
+| ![Active filter and sort facet chips](assets/screenshots/en-1.2.7-facet-controls.png) |
+| See active rules as compact chips. Edit one rule in place or remove it directly. |
+
+Active filter and sort chips use the same rules as the full toolbar panels, and records can also be dragged into a manual order. Source rules can combine folders, tags, properties, links, and expressions with `AND`, `OR`, and `NOT`.
 
 ## Calculate and connect
 
@@ -140,7 +128,7 @@ Active filter and sort chips use the same rules as the full toolbar panels. Sour
 | ![Formula editor](assets/screenshots/en-formula-editor.png) | ![Linked notes and their Rollup result](assets/screenshots/en-relation-rollup.png) |
 | Build computed properties with field references, date/text/number functions, live previews, and optional frontmatter sync. | Keep relationships as ordinary Obsidian wikilinks and calculate count, sum, average, or list values from linked notes. |
 
-No `eval`, hidden relation database, or cloud copy is used.
+The formula editor distinguishes display names from frontmatter keys, previews substituted values, and recovers with `IFERROR`; relations are stored as plain wikilinks, target changes are one undoable step, and a table cell configures its Rollup on double-click. No `eval`, hidden relation database, or cloud copy is used.
 
 ## Make records easier to scan
 
@@ -148,6 +136,11 @@ No `eval`, hidden relation database, or cloud copy is used.
 | --- | --- |
 | ![Database and record icons](assets/screenshots/en-database-icons.png) | ![Database, board, and gallery cover settings](assets/screenshots/en-dataset-covers-setting.png) ![](assets/screenshots/en-board-covers-setting.png) |
 | Use Unicode Emoji or Lucide icons, with database defaults and per-view record-icon fields. | Add a draggable database cover and choose independent cover settings for board and gallery views. |
+
+| Record covers on boards |
+| --- |
+| ![Board cards with record covers](assets/screenshots/en-1.2.7-board-covers.png) |
+| Choose a cover property, crop mode, and ratio independently for every board view. |
 
 Option-based group titles keep their colors across table, board, gallery, and list views. Search highlights file names and visible values, including localized dates.
 
@@ -167,6 +160,11 @@ Calendar supports month, week, and day. Timeline supports day, week, month, and 
 | ![A database view embedded in a note](assets/screenshots/en-embed-view.png) | ![A compact headerless embedded view](assets/screenshots/en-embed-headerless.png) |
 | Paste a generated `note-database` block into any note. | Hide the database header when the surrounding note already provides context. |
 
+| Editable embed | Adjustable embed height |
+| --- | --- |
+| ![Editing a selected range in an embedded database](assets/screenshots/en-1.3.0-editable-embed.png) | ![Embedded database height grip](assets/screenshots/en-1.3.0-embed-height.png) |
+| Embeds stay read-only by default. Enable editing in plugin settings to change records directly inside a note. | Drag the lower edge of an embedded database to give the view more or less room. |
+
 Embedded databases are read-only by default. Disable **Read-only embedded databases** in plugin settings to allow editing in notes; form embeds can submit records only in this mode. Drag the lower edge to resize an embed. View switching, filters, sorting, grouping, computed values, and copy/export tools remain available in read-only mode. If a database explicitly enables automatic formula-result storage, that database-level background task still runs while the database is shown in an embedded view.
 
 ## Markdown remains the source of truth
@@ -184,11 +182,15 @@ Create records from source rules, groups, subgroups, row insertion, or a form. A
 ## Start in three steps
 
 1. Install and enable Note Database, then open the dashboard from the ribbon or command palette.
-2. Create a blank database or choose a built-in starter, then set its folder or source rules.
+2. Create a blank database or choose a built-in or saved starter, then set its folder or source rules.
 3. Add properties and views. Edits write back to the original Markdown files.
 
 ![](assets/screenshots/en-create-dataset.png)
 ![Note Database commands in the command palette](assets/screenshots/en-command-list.png)
+
+To reuse a database setup in the same vault, open its title menu and choose **Save as starter template…**. Give it a name, description, and icon; optionally include up to 20 records from the current view. Saved templates appear under **My templates** when creating a database and are stored in `Note Database Templates/` as `.starter.json` files. Delete a template from its preview to move it to Trash without affecting existing databases.
+
+Templates keep properties, formulas, views, and display settings. New databases receive fresh IDs and record folders; source rules, manual record order, and relation targets are reset. Images and new-record templates keep their vault references, and missing files are shown in the preview. Sample notes are copied; relation and computed values are excluded.
 
 ## Installation
 

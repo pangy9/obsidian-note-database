@@ -48,6 +48,7 @@ export interface ToolbarActions {
   addDatabase(): void;
   deleteDatabase(): void;
   copyCurrentDatabase?(): void;
+  saveStarterTemplate?(): void;
   copyCurrentView?(viewIndex?: number): void;
   copyViewCode?(viewIndex?: number): void;
   openDatabaseFile?(): void;
@@ -577,6 +578,9 @@ export class ToolbarRenderer {
     }
     if (actions.copyCurrentDatabase) {
       this.renderTitleActionsPopoverRow(panel, t("toolbar.copyCurrentDatabase"), "copy", () => actions.copyCurrentDatabase?.());
+    }
+    if (actions.saveStarterTemplate) {
+      this.renderTitleActionsPopoverRow(panel, t("starter.custom.save"), "layout-template", () => actions.saveStarterTemplate?.());
     }
     this.renderTitleActionsPopoverRow(panel, t("toolbar.addDatabase"), "plus", () => actions.addDatabase());
     if (actions.toggleDatabaseIcon) {

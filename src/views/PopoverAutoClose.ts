@@ -73,7 +73,11 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
       cleanup();
       return;
     }
-    if (!pointerInsidePanel && !pointerInsideLinkedSurface && Date.now() - lastActivity >= delayMs) {
+    // :hover 实时命中兜底：range 拖拽的指针捕获会让 panel 的 pointerenter/leave
+    // 边界事件失真（pointerInsidePanel 不同步），导致「鼠标始终在面板内却被
+    // 空闲计时关闭」。浏览器的 :hover 状态不受捕获影响，指针真在面板内就不关。
+    const pointerOverPanel = pointerInsidePanel || pointerInsideLinkedSurface || options.panel.matches(":hover");
+    if (!pointerOverPanel && Date.now() - lastActivity >= delayMs) {
       close();
     }
   }, 500);

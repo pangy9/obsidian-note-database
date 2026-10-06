@@ -10,6 +10,7 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
 import { getCalendarColumnWidthRange, resolveCalendarCustomColumnWidth } from "../data/CalendarDateTime";
+import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 
 /** Actions exposed by the calendar toolbar settings panel. */
 export interface CalendarToolbarActions {
@@ -50,8 +51,24 @@ export class CalendarToolbarRenderer {
 
 	/** Close and clean up the calendar settings popover. */
 	closePopover(): void {
+		// opt-in 诊断：定位「滑杆拖拽中弹窗自动关闭」的触发源（__NOTE_DATABASE_DEBUG_EVENTS__）。
+		if (this.popover?.isConnected) {
+			traceDatabaseInteraction(this.popover.ownerDocument, "calendarPopoverClose", {
+				stack: new Error().stack,
+			});
+		}
 		this.cleanupPopover?.();
 		this.cleanupPopover = undefined;
+	}
+
+	/**
+	 * viewEntries 被整体替换后，已打开弹窗的闭包还握着旧的（已脱离的）配置
+	 * 对象——继续交互会写进游离对象。用新的活配置 + actions 重渲染弹窗内容，
+	 * 弹窗保持打开（避免「每调一次就得重开一次」）。
+	 */
+	rebind(config: ViewConfig, actions: CalendarToolbarActions): void {
+		if (!this.popover?.isConnected || !this.popoverContent) return;
+		this.renderSections(this.popoverContent, config, actions);
 	}
 
 	// ── Private helpers ──

@@ -354,6 +354,8 @@ export interface ViewConfig {
   columnOrder?: string[];
   /** Per-view property widths imported from Obsidian Bases columnSize. Falls back to shared column widths. */
   columnWidths?: Record<string, number>;
+  /** Number of left-most visible data columns kept in view while horizontally scrolling. */
+  frozenColumnCount?: number;
   /** Persisted hidden column keys. */
   hiddenColumns?: string[];
   /** Legacy ordering field kept for older saved configs. */

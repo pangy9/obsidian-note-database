@@ -92,6 +92,7 @@ import { positionToolbarPopover } from "./PopoverPosition";
 import { captureEmbeddedHostViewport, DatabaseViewportRequest, EmbeddedHostViewportSnapshot, restoreEmbeddedHostViewport } from "./DatabaseViewport";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
 import { ColumnMenu } from "./ColumnMenu";
+import { MAX_FROZEN_COLUMNS, normalizeFrozenColumnCount } from "./TableLayout";
 import { planCreateEntry } from "../data/CreateEntryPlan";
 import { getDefaultCellValue } from "../data/ColumnTypes";
 import { ParsedRecordTemplate, parseRecordTemplate, resolveCoreRecordTemplate } from "../data/RecordTemplate";
@@ -1262,7 +1263,11 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         },
       });
     } else if (config.viewType === "calendar") {
-      this.calendarRenderer.render(target, renderConfig, this.rows);
+      // CalendarRenderer 原地修改传入的 config（列宽拖拽、月份导航、今日跳转）。
+      // renderConfig 是每次渲染新建的 {...config} 克隆——修改会被下一次
+      // renderResults(this.config) 丢弃（拖完回弹、导航不生效），必须传工作副本。
+      // DatabaseView 同样直传 config；状态排序注入仅 board/gallery/list 需要。
+      this.calendarRenderer.render(target, config, this.rows);
     } else if (config.viewType === "timeline") {
       const state = this.vs(config);
       this.calendarTimelineRenderer.renderTimeline(target, {
@@ -2501,6 +2506,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       clearColumnSort: (column) => this.clearColumnSort(config, column),
       autoFitColumn: (column) => this.autoFitColumn(config, column),
       autoFitAllColumns: () => this.autoFitAllColumns(config),
+      getColumnFreezeState: (column) => this.isEmbedReadOnly() ? undefined : this.getColumnFreezeState(config, column),
+      freezeColumn: (column) => this.freezeColumn(config, column),
+      unfreezeColumns: () => this.unfreezeColumns(config),
     });
     menu.show(event, col, anchorEl, {
       displayOnly: true, includeLayoutActions: false, includeWidthActions,
@@ -2511,6 +2519,35 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private autoFitColumn(config: ViewConfig, col: ColumnDef): void {
     config.columnWidths = { ...(config.columnWidths || {}), [col.key]: this.calculateAutoColumnWidth(col, this.rows) };
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private getColumnFreezeState(config: ViewConfig, col: ColumnDef): "frozen" | "available" | "unavailable" | undefined {
+    if ((config.viewType || "table") !== "table") return undefined;
+    const columns = getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns);
+    const index = columns.findIndex((candidate) => candidate.key === col.key);
+    if (index < 0) return "unavailable";
+    const count = normalizeFrozenColumnCount(config.frozenColumnCount, columns.length);
+    if (index < count) return "frozen";
+    return index < MAX_FROZEN_COLUMNS ? "available" : "unavailable";
+  }
+
+  private freezeColumn(config: ViewConfig, col: ColumnDef): void {
+    if ((config.viewType || "table") !== "table" || this.isEmbedReadOnly()) return;
+    const columns = getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns);
+    const index = columns.findIndex((candidate) => candidate.key === col.key);
+    if (index < 0 || index >= MAX_FROZEN_COLUMNS) return;
+    config.frozenColumnCount = index + 1;
+    this.persistEmbeddedConfigLocally(config);
+    this.renderResults(config);
+    this.saveEmbeddedConfigInBackground();
+  }
+
+  private unfreezeColumns(config: ViewConfig): void {
+    if (this.isEmbedReadOnly() || !config.frozenColumnCount) return;
+    config.frozenColumnCount = undefined;
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
     this.saveEmbeddedConfigInBackground();

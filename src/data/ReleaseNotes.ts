@@ -10,6 +10,14 @@ export const RELEASE_NOTES: ReadonlyArray<{
   notes: Record<Exclude<ReleaseNotesLocale, "system">, string>;
 }> = [
   {
+    version: "1.3.2",
+    notes: {
+      en: "## What's new in 1.3.2\n\n- **Frozen columns:** freeze up to five left-most properties from the column menu and they stay in view while scrolling a wide table. Available in the main view and editable embeds; the checkbox column is always pinned.\n- **Pinned summaries while scrolling:** the summary bar above the view, and each group header's name, count, and summaries, stay visible during horizontal scrolling.\n- **Fixes:** right-click \"Insert above/below\" works again; calendar and timeline option popovers no longer stop responding after the first change; embedded calendars keep column-width drags and month navigation.\n\nEverything remains local Markdown in your vault.",
+      "zh-CN": "## 1.3.2 更新内容\n\n- **冻结列：** 在列菜单中选择「冻结至此列」，最多冻结左侧五列属性，横向滚动宽表格时始终可见；主视图与可编辑嵌入块均可用，勾选列常驻钉住。\n- **滚动时钉住汇总：** 视图上方的汇总栏与每个分组头的组名、计数、小计在横向滚动时保持可见。\n- **修复：** 右键「在上方/下方添加条目」恢复可用；日历与时间线的设置弹窗不再调整一次后失灵；嵌入日历的列宽拖拽与月份导航正常生效。\n\n所有记录仍保存在 vault 内的本地 Markdown 文件中。",
+      "zh-TW": "## 1.3.2 更新內容\n\n- **凍結欄：** 在欄選單中選擇「凍結至此欄」，最多凍結左側五欄屬性，橫向捲動寬表格時始終可見；主檢視與可編輯內嵌區塊皆可使用，勾選欄常駐釘選。\n- **捲動時釘選彙總：** 檢視上方的彙總列與每個分組標題的組名、計數、小計在橫向捲動時保持可見。\n- **修復：** 右鍵「在上方/下方新增條目」恢復可用；日曆與時間線的設定彈出視窗不再調整一次後失靈；內嵌日曆的欄寬拖曳與月份導覽正常生效。\n\n所有記錄仍儲存在 vault 內的本機 Markdown 檔案中。",
+    },
+  },
+  {
     version: "1.3.1",
     notes: {
       en: "## What's new in 1.3.1\n\n- **Reorder from the desktop context menu:** right-click any record in table, board, gallery, list, or timeline views to move it up, down, to a specific position, or pick a target record to place it before or after — including across groups.\n- **Custom database templates:** save a configured database as a starter template, optionally with sample records, and reuse it when creating new databases in the same vault.\n- **Fuller update notes on upgrade:** when you upgrade across several versions, the changelog dialog now shows every version released in between.\n\nEverything remains local Markdown in your vault.",

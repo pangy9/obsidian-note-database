@@ -9,6 +9,7 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIconField } from "../data/RecordIcon";
+import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 
 export interface CalendarTimelineToolbarActions {
   onChange(label?: string): void;
@@ -36,6 +37,12 @@ export class CalendarTimelineToolbarRenderer {
   }
 
   closePopover(): void {
+    // opt-in 诊断：定位「滑杆拖拽中弹窗自动关闭」的触发源（__NOTE_DATABASE_DEBUG_EVENTS__）。
+    if (this.popover?.isConnected) {
+      traceDatabaseInteraction(this.popover.ownerDocument, "timelinePopoverClose", {
+        stack: new Error().stack,
+      });
+    }
     this.cleanupPopover?.();
     this.cleanupPopover = undefined;
   }

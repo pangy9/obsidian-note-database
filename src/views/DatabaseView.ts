@@ -4,6 +4,7 @@ import { RefreshCoordinator } from "../data/RefreshCoordinator";
 import { isRefreshBlockedByDrag } from "../data/RefreshBlockers";
 import { evaluateBaseFilterExpression } from "../data/BaseExpression";
 import { moveDatabaseFilePath, sortDatabaseFileEntries } from "../data/DatabaseFileOrder";
+import { configsSemanticEqual } from "../data/FrontmatterPatch";
 import { QueryEngine } from "../data/QueryEngine";
 import { PropertyService } from "../data/PropertyService";
 import { evaluateComputedFields } from "../data/ComputedEvaluator";
@@ -95,7 +96,7 @@ import {
 } from "../data/CalendarTimelineSearchResults";
 import { CalendarTimelineCreateOptions, CalendarTimelineDateChange, CalendarTimelineRenderer } from "./CalendarTimelineRenderer";
 import { CalendarRenderer } from "./CalendarRenderer";
-import { CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
+import { CalendarToolbarActions, CalendarToolbarRenderer } from "./CalendarToolbarRenderer";
 import { ColumnRenameModal, ColumnRenameResult } from "./modals/ColumnRenameModal";
 import { RelationRollupConfigModal, RelationRollupConfigResult, RelationTargetChangeImpact } from "./modals/RelationRollupConfigModal";
 import { CreatePropertyModal } from "./modals/CreatePropertyModal";
@@ -158,6 +159,7 @@ import { openBulkEditFieldMenu } from "./BulkEditFieldMenu";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { closeRecordDetailPanel, getOpenRecordDetailPath, openRecordDetailPanel, refreshRecordDetailPanel } from "./RecordDetailPanel";
 import { syncTableColumnLayouts } from "./TableColumnLayoutSync";
+import { MAX_FROZEN_COLUMNS, normalizeFrozenColumnCount } from "./TableLayout";
 import { hasRelationValue, planRelationTargetChange } from "../data/RelationTargetChange";
 import { highlightSearchMatches, renderSearchHighlightedText } from "./SearchHighlight";
 import { isImeComposing } from "../data/KeyboardUtils";
@@ -602,7 +604,7 @@ export class DatabaseView extends FileView {
       isRecordIconShown: () => this.getConfig()?.showRecordIcon === true,
       canToggleRecordIcon: () => ["table", "board", "gallery", "list", "calendar", "timeline"].includes(this.getConfig()?.viewType || "table"),
       toggleRecordIcon: (anchor, row) => this.toggleCurrentViewRecordIcon(anchor, row),
-      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
+      createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position, { fromMenuCommand: true }),
       getConfig: () => this.getConfig(),
       getVisibleRows: () => this.rows,
       getCreateDefaults: (row, context) => this.getCreateEntryDefaultsForRow(row, context),
@@ -755,6 +757,9 @@ export class DatabaseView extends FileView {
       openColumnWidthPanel: (col) => this.showMobileColumnWidthPanel(col),
       autoFitColumn: (col) => this.autoFitColumn(col),
       autoFitAllColumns: () => this.autoFitAllColumns(),
+      getColumnFreezeState: (col) => this.getColumnFreezeState(col),
+      freezeColumn: (col) => this.freezeColumn(col),
+      unfreezeColumns: () => this.unfreezeColumns(),
       deleteColumn: (col) => { void this.columnOperations.deleteColumn(col); },
     });
     this.onConfigChanged = onConfigChanged;
@@ -904,8 +909,18 @@ export class DatabaseView extends FileView {
     ));
   }
 
-  private guardedCreateEntry(defaults?: Record<string, unknown>, position?: { beforePath?: string; afterPath?: string }): void {
-    const suppressed = this.suppressNextCreate || this.hasActiveOverlay();
+  /**
+   * 浮层抑制只服务于「直接点击视图内的新建按钮」：按钮点击时若浮层开着，
+   * 首击应先关浮层而非创建。菜单命令（右键「在上方/下方添加条目」）是显式指令，
+   * 且菜单项回调执行时 .menu 必然仍在 DOM（Obsidian 先回调后隐藏菜单），
+   * 走抑制判定会被静默吞掉——fromMenuCommand 跳过抑制但仍消费 suppressNextCreate。
+   */
+  private guardedCreateEntry(
+    defaults?: Record<string, unknown>,
+    position?: { beforePath?: string; afterPath?: string },
+    options?: { fromMenuCommand?: boolean },
+  ): void {
+    const suppressed = !options?.fromMenuCommand && (this.suppressNextCreate || this.hasActiveOverlay());
     this.suppressNextCreate = false;
     if (suppressed) { this.closeActiveOverlays(); return; }
     void this.createBlankEntry(defaults ?? {}, position);
@@ -998,6 +1013,9 @@ export class DatabaseView extends FileView {
     this.showViewConfigPanel = false;
     this.clearHeaderPopover();
     this.closeGroupOrderPopover();
+    // databaseOverride 的二次替换发生在 rebuildViewEntries 的弹层处理之后，
+    // 此处需再同步一次，否则日历弹窗 rebind 到的仍是第一次替换的（现游离）对象。
+    if (databaseOverride) this.syncConfigBoundPopovers();
     this.rerenderToolbar();
     this.refresh();
   }
@@ -1130,18 +1148,34 @@ export class DatabaseView extends FileView {
     entries.push({ path: `${baseName}/${baseName}_schema.csv`, content: schemaRows.join("\n") });
   }
 
-  /** Rebuild the database list from vault files */
-  private rebuildViewEntries(): void {
+  /**
+   * Rebuild the database list from vault files.
+   * 身份保持：新解析的某库配置与旧对象语义相等（典型：自身保存的回声——保存
+   * 触发的文件事件被当成外部定义变更再次 rebuild）时沿用旧对象。常驻弹层与
+   * 各类闭包握着的配置引用保持有效，调用方也可据返回值跳过无谓的重渲染。
+   * 返回是否发生材料变更（结构变化或任一库配置内容变化）。
+   */
+  private rebuildViewEntries(): boolean {
     const currentEntry = this.viewEntries[this.currentDbIndex];
     const currentSourcePath = currentEntry?.sourcePath;
     const currentViewId = currentEntry?.config.views[this.currentViewIndex]?.id
       || currentEntry?.config.views[0]?.id;
+    const previousByPath = new Map(this.viewEntries.map((entry) => [entry.sourcePath, entry.config]));
     const entries: ViewEntry[] = [];
     const defFiles = sortDatabaseFileEntries(this.dataSource.getViewDefFiles(), this.databaseFileOrder);
     for (const df of defFiles) {
-      entries.push({ config: df.config, sourcePath: df.file.path });
+      const previous = previousByPath.get(df.file.path);
+      // 语义相等 → 沿用旧对象（身份保持）；undefined 键视同缺省见 configsSemanticEqual。
+      entries.push({
+        config: previous && configsSemanticEqual(previous, df.config) ? previous : df.config,
+        sourcePath: df.file.path,
+      });
     }
     const structureChanged = !this.hasSameViewEntryStructure(entries);
+    const configReplaced = entries.some((entry, index) => {
+      const previous = this.viewEntries[index];
+      return previous?.sourcePath !== entry.sourcePath || previous.config !== entry.config;
+    });
     this.viewEntries = entries;
     if (currentSourcePath && entries.some((entry) => entry.sourcePath === currentSourcePath)) {
       this.restoreViewSelection(currentSourcePath, currentViewId);
@@ -1153,6 +1187,35 @@ export class DatabaseView extends FileView {
     }
     this.captureConfigSnapshots();
     if (structureChanged) this.clearViewStateCache();
+    // 仅在当前库的配置对象真的被替换（外部实际修改）时同步常驻弹层。
+    if (configReplaced) this.syncConfigBoundPopovers();
+    // opt-in 诊断：定位「日历列宽只能调一次」的重建触发源（__NOTE_DATABASE_DEBUG_EVENTS__）。
+    if (this.containerEl_) {
+      traceDatabaseInteraction(this.containerEl_.ownerDocument, "rebuildViewEntries", {
+        dbCount: entries.length,
+        configReplaced,
+        structureChanged,
+        stack: new Error().stack,
+      });
+    }
+    return structureChanged || configReplaced;
+  }
+
+  /**
+   * 当前库的配置对象被整体替换后同步常驻弹层：日历选项弹窗 rebind 换新闭包
+   * 并保持打开（避免「每调一次就得重开」）；图表/时间线选项弹窗较少连续
+   * 调整，直接关闭。数据库选择弹窗不捕获配置对象且 moveDatabase 拖拽排序
+   * 依赖它跨 rebuild 保持打开（见其注释），不在此处理。
+   */
+  private syncConfigBoundPopovers(): void {
+    this.chartToolbarRenderer.closePopover();
+    this.toolbarRenderer.closeConfigEditingPopovers();
+    const calendarConfig = this.getConfig();
+    if (calendarConfig && calendarConfig.viewType === "calendar") {
+      this.calendarToolbarRenderer.rebind(calendarConfig, this.buildCalendarPopoverActions(calendarConfig));
+    } else {
+      this.calendarToolbarRenderer.closePopover();
+    }
   }
 
   private hasSameViewEntryStructure(entries: ViewEntry[]): boolean {
@@ -1909,6 +1972,30 @@ export class DatabaseView extends FileView {
     window.requestAnimationFrame(restore);
   }
 
+  /** 日历选项弹窗的 actions：弹窗打开与 viewEntries 重建后的 rebind 共用。 */
+  private buildCalendarPopoverActions(config: ViewConfig): CalendarToolbarActions {
+    return {
+      database: this.getActiveDb(),
+      createRecordIconField: () => { void this.openCreateRecordIconFieldModal("view"); },
+      onChange: (label) => {
+        // opt-in 诊断：弹窗闭包捕获的 config 若已脱离 viewEntries（重建换新且
+        // rebind 未跟上），修改会写进游离对象（__NOTE_DATABASE_DEBUG_EVENTS__）。
+        if (this.containerEl_) {
+          traceDatabaseInteraction(this.containerEl_.ownerDocument, "calendarOptionsChange", {
+            stillLiveConfig: this.getConfig() === config,
+            width: config.calendarCustomColumnWidth,
+            mode: config.calendarColumnSizeMode,
+          });
+        }
+        this.pendingUndoLabel = label || t("undo.viewTypeConfig");
+        this.scheduleConfigSave();
+        this.refresh();
+      },
+      getInvalidEventCount: () => this.getTimelineInvalidEventCount(),
+      openInvalidEvents: () => { void this.openInvalidEvents(); },
+    };
+  }
+
   protected renderToolbar(): void {
     if (!this.containerEl_) return;
     this.applyDisplayWidth();
@@ -1955,17 +2042,7 @@ export class DatabaseView extends FileView {
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover("sort", anchorEl),
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(anchorEl),
       toggleCalendarOptions: (containerEl, anchor, config) => {
-        this.calendarToolbarRenderer.togglePopover(containerEl, anchor, config, {
-          database: this.getActiveDb(),
-          createRecordIconField: () => { void this.openCreateRecordIconFieldModal("view"); },
-          onChange: (label) => {
-            this.pendingUndoLabel = label || t("undo.viewTypeConfig");
-            this.scheduleConfigSave();
-            this.refresh();
-          },
-          getInvalidEventCount: () => this.getTimelineInvalidEventCount(),
-          openInvalidEvents: () => { void this.openInvalidEvents(); },
-        });
+        this.calendarToolbarRenderer.togglePopover(containerEl, anchor, config, this.buildCalendarPopoverActions(config));
       },
       getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
       openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
@@ -2236,9 +2313,24 @@ export class DatabaseView extends FileView {
       // Discover database definition files created or moved into the vault, and
       // remove deleted definitions. Preserve the selected database/view when the
       // sorted list changes around the current entry.
-      this.rebuildViewEntries();
-      this.rerenderToolbar();
-      this.refresh();
+      // 纯回声（重解析后语义全等，典型为自身保存的文件事件丢了 instance 标记）
+      // 时 rebuildViewEntries 已沿用旧对象，此处跳过重渲染避免打扰常驻 UI。
+      const material = this.rebuildViewEntries();
+      // opt-in 诊断：记录触发定义变更分支的事件特征（不含路径）。
+      if (this.containerEl_) {
+        const triggering = observable.find((change) => this.isDatabaseDefinitionChange(change))!;
+        traceDatabaseInteraction(this.containerEl_.ownerDocument, "definitionChange", {
+          origin: triggering.origin,
+          hasInstanceId: Boolean(triggering.sourceInstanceId),
+          isSelfInstanceId: triggering.sourceInstanceId === this.instanceId,
+          kind: triggering.kind,
+          material,
+        });
+      }
+      if (material) {
+        this.rerenderToolbar();
+        this.refresh();
+      }
       return;
     }
     const rowPaths = new Set(this.rows.map((row) => row.file.path));
@@ -10692,6 +10784,38 @@ export class DatabaseView extends FileView {
     }
     config.columnWidths = nextWidths;
     this.pendingUndoLabel = t("undo.columnWidthConfig");
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private getColumnFreezeState(col: ColumnDef): "frozen" | "available" | "unavailable" | undefined {
+    const config = this.getConfig();
+    if (!config || (config.viewType || "table") !== "table") return undefined;
+    const columns = getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns);
+    const index = columns.findIndex((candidate) => candidate.key === col.key);
+    if (index < 0) return "unavailable";
+    const count = normalizeFrozenColumnCount(config.frozenColumnCount, columns.length);
+    if (index < count) return "frozen";
+    return index < MAX_FROZEN_COLUMNS ? "available" : "unavailable";
+  }
+
+  private freezeColumn(col: ColumnDef): void {
+    const config = this.getConfig();
+    if (!config || (config.viewType || "table") !== "table") return;
+    const columns = getVisibleColumns(config, this.rows, this.vs(), this.pendingShowColumns);
+    const index = columns.findIndex((candidate) => candidate.key === col.key);
+    if (index < 0 || index >= MAX_FROZEN_COLUMNS) return;
+    config.frozenColumnCount = index + 1;
+    this.pendingUndoLabel = t("undo.freezeColumnsConfig");
+    this.scheduleConfigSave();
+    this.refresh();
+  }
+
+  private unfreezeColumns(): void {
+    const config = this.getConfig();
+    if (!config || !config.frozenColumnCount) return;
+    config.frozenColumnCount = undefined;
+    this.pendingUndoLabel = t("undo.freezeColumnsConfig");
     this.scheduleConfigSave();
     this.refresh();
   }

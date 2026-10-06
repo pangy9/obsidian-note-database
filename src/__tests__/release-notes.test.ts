@@ -38,16 +38,16 @@ describe("collectChangelogNotes", () => {
   });
 
   it("from 为空（首次安装无记录）：只弹当前版本；from 极旧：收录全部（需求场景）", () => {
-    expect(collectChangelogNotes(undefined, "1.3.1", "en")).toHaveLength(1);
-    expect(collectChangelogNotes("", "1.3.1", "en")).toHaveLength(1);
+    expect(collectChangelogNotes(undefined, "1.3.2", "en")).toHaveLength(1);
+    expect(collectChangelogNotes("", "1.3.2", "en")).toHaveLength(1);
     // 从 1.0.0 一路升上来：期间所有已收录版本全部展示。
-    expect(collectChangelogNotes("1.0.0", "1.3.1", "en")).toHaveLength(RELEASE_NOTES.length);
+    expect(collectChangelogNotes("1.0.0", "1.3.2", "en")).toHaveLength(RELEASE_NOTES.length);
   });
 
   it("to 尚无文案（开发版）：回落 <= to 的最近一条，保持弹窗总有内容", () => {
-    const notes = collectChangelogNotes("1.3.1", "1.3.2", "en");
+    const notes = collectChangelogNotes("1.3.2", "1.3.3", "en");
     expect(notes).toHaveLength(1);
-    expect(notes[0]).toContain("1.3.1");
+    expect(notes[0]).toContain("1.3.2");
   });
 
   it("system locale 回落 en；三语言文案齐备且数据按版本倒序", () => {

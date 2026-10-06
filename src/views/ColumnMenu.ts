@@ -29,6 +29,9 @@ export interface ColumnMenuActions {
   openColumnWidthPanel?(col: ColumnDef): void;
   autoFitColumn?(col: ColumnDef): void;
   autoFitAllColumns?(): void;
+  getColumnFreezeState?(col: ColumnDef): "frozen" | "available" | "unavailable" | undefined;
+  freezeColumn?(col: ColumnDef): void;
+  unfreezeColumns?(): void;
   deleteColumn(col: ColumnDef): void;
 }
 
@@ -210,6 +213,30 @@ export class ColumnMenu {
         .setIcon("arrow-down")
         .onClick(() => this.actions.moveColumn(col.key, 1))
       );
+    }
+
+    const freezeState = this.actions.getColumnFreezeState?.(col);
+    if (freezeState && this.actions.freezeColumn && this.actions.unfreezeColumns) {
+      // 冻结是展示级 view config（与换行/隐藏/数字样式同类）：嵌入菜单的
+      // displayOnly 只代表「schema 级操作回主视图改」，不应禁用冻结——禁用
+      // 条件用显式 readonly（当前仅真正只读场景传入），而非派生 readonly。
+      const freezeReadonly = options.readonly === true;
+      menu.addSeparator();
+      if (freezeState === "frozen") {
+        menu.addItem((item) => item
+          .setTitle(t("menu.unfreezeColumns"))
+          .setIcon("pin-off")
+          .setDisabled(freezeReadonly)
+          .onClick(() => this.actions.unfreezeColumns?.())
+        );
+      } else {
+        menu.addItem((item) => item
+          .setTitle(t(freezeState === "unavailable" ? "menu.freezeColumnLimit" : "menu.freezeUpToColumn"))
+          .setIcon("pin")
+          .setDisabled(freezeReadonly || freezeState === "unavailable")
+          .onClick(() => this.actions.freezeColumn?.(col))
+        );
+      }
     }
 
     menu.addSeparator();

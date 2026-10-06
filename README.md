@@ -68,11 +68,11 @@ A database never duplicates your notes — the eight views are just different le
 | ![Calendar month view](assets/screenshots/calendar-view-month.png) | ![Calendar week view](assets/screenshots/calendar-view-week.png) |
 | Arrange all-day and multi-day records in a monthly overview. | Work with all-day and timed records on a detailed weekly grid. |
 
-## New in 1.3.1
+## New in 1.3.2
 
-- **Reorder from the context menu on desktop:** right-click any record in table, board, gallery, list, or timeline views to move it up, down, to a specific position, or enter a pick-target mode that places it before or after any other record. Cross-group moves are supported.
-- **Custom database templates:** save a configured database as a starter template (optionally including up to 20 sample records from the current view) and reuse it when creating new databases in the same vault. Templates live under `Note Database Templates/` and can be deleted from their preview.
-- **Fuller update notes on upgrade:** when you upgrade across several versions, the changelog dialog now lists every version released in between.
+- **Frozen columns:** freeze up to five left-most properties from the column menu. While scrolling a wide table, the frozen columns, the checkbox column, the summary bar, and each group header's name, count, and summaries all stay in view. Available in the main view and editable embeds.
+- **Fixes:** right-click "Insert above/below" works again; calendar and timeline option popovers no longer stop responding after the first change; embedded calendars keep column-width drags and month navigation.
+
 ## Start from a template, or capture on the go
 
 Six built-in starters preset the properties, views, icons, and covers, with optional sample notes; save any configured database as your own template. For quick capture, open the dialog from any view or the command palette and submit without leaving where you are.
@@ -120,6 +120,15 @@ Field-aware editors cover text, numbers, currency, dates, checkboxes, selects, m
 | See active rules as compact chips. Edit one rule in place or remove it directly. |
 
 Active filter and sort chips use the same rules as the full toolbar panels, and records can also be dragged into a manual order. Source rules can combine folders, tags, properties, links, and expressions with `AND`, `OR`, and `NOT`.
+
+## Wide tables keep their key columns in place
+
+| Freeze up to this column | Still visible after scrolling |
+| --- | --- |
+| !["Freeze up to this column" in the column menu](assets/screenshots/en-1.3.2-freeze-menu.png) | ![Frozen columns and summaries pinned during horizontal scrolling](assets/screenshots/en-1.3.2-frozen-scrolled.png) |
+| Pick "Freeze up to this column" from a header's context menu; up to five left-most properties. | Frozen columns, the checkbox column, the summary bar, and group headers stay visible while scrolling. |
+
+Even at the far-right property, the names and totals you need stay on the left. Works in the main view and editable embeds; the checkbox column is always pinned, and freezing can be undone at any time.
 
 ## Calculate and connect
 

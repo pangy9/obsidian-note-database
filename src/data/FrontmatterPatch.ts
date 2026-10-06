@@ -88,6 +88,31 @@ export function configsDeepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * 语义相等：在 configsDeepEqual 基础上把「值为 undefined 的键」视同「键不存在」。
+ * 内存里的配置对象常给可选字段显式赋 undefined（如关闭自定义列宽时
+ * calendarCustomColumnWidth = undefined），而磁盘解析产物直接省略该键——
+ * 两者必须判等，否则「自身保存的回声」会被误判为外部变更（rebuildViewEntries
+ * 身份保持依赖此判定）。
+ */
+export function configsSemanticEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null) return a === b;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => configsSemanticEqual(v, b[i]));
+  }
+  if (typeof a === "object" && typeof b === "object") {
+    const aObj = a as Record<string, unknown>;
+    const bObj = b as Record<string, unknown>;
+    const aKeys = Object.keys(aObj).filter((k) => aObj[k] !== undefined);
+    const bKeys = Object.keys(bObj).filter((k) => bObj[k] !== undefined);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((k) => Object.prototype.hasOwnProperty.call(bObj, k) && bObj[k] !== undefined && configsSemanticEqual(aObj[k], bObj[k]));
+  }
+  return a === b;
+}
+
+/**
  * 把 view-def 的 database payload 写入 frontmatter（保留其他无关顶层 key）。
  * 用于 patchViewDefConfig 的 processFrontMatter 回调：只动 db_view/name/database/legacy，
  * 不触碰其他顶层字段（tags/author 等），保证 rename 不误删笔记里其他 frontmatter。

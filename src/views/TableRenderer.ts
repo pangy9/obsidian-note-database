@@ -7,7 +7,13 @@ import { t } from "../i18n";
 import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback";
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
-import { getTableColumnStyle, getTableLayout, getTableMinWidth as calculateTableMinWidth } from "./TableLayout";
+import {
+  getFrozenColumnOffsets,
+  getTableColumnStyle,
+  getTableLayout,
+  getTableMinWidth as calculateTableMinWidth,
+  normalizeFrozenColumnCount,
+} from "./TableLayout";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
 import { promptMoveToPosition } from "./modals/MoveToPositionModal";
@@ -23,6 +29,14 @@ export interface TableGroup {
   key: string;
   rows: RowData[];
   count: number;
+}
+
+interface FrozenTableLayout {
+  leadingWidths: number[];
+  dataWidths: number[];
+  leadingOffsets: number[];
+  dataOffsets: number[];
+  frozenCount: number;
 }
 
 export interface TableRendererActions {
@@ -77,9 +91,10 @@ export class TableRenderer {
     const availableWidth = this.getAvailableTableWidth(tableWrap);
     this.applyTableWidth(table, config, visibleColumns, availableWidth);
     this.renderColgroup(table, config, visibleColumns, availableWidth);
-    this.renderHeader(table, config, visibleColumns, rows);
+    const frozenLayout = this.getFrozenTableLayout(config, visibleColumns, availableWidth);
+    this.renderHeader(table, config, visibleColumns, rows, frozenLayout);
     const tbody = table.createEl("tbody");
-    this.renderRows(tbody, config, rows, visibleColumns);
+    this.renderRows(tbody, config, rows, visibleColumns, undefined, undefined, undefined, frozenLayout);
     if (!this.actions.hideCreateEntry) {
       this.renderNewRow(tbody, visibleColumns.length + this.getUtilityColumnCount(config), undefined, rows);
     }
@@ -118,7 +133,10 @@ export class TableRenderer {
       groupHeader.style.minWidth = `${tableMinWidth}px`;
       const collapsed = Boolean(groupField && this.actions.isGroupCollapsed?.(groupField, group.key));
       groupHeader.toggleClass("is-collapsed", collapsed);
-      const label = groupHeader.createSpan({ cls: "db-group-header-label" });
+      // label + 计数 + 汇总 items 同层横向 sticky（header 自身被 flex 拉伸满宽，
+      // sticky 位移余量为 0 钉不住）：横向滚动时整组信息与冻结列一起留在视口。
+      const stickyInfo = groupHeader.createSpan({ cls: "db-group-header-sticky" });
+      const label = stickyInfo.createSpan({ cls: "db-group-header-label" });
       if (groupField) {
         const toggle = label.createEl("button", {
           cls: `db-group-collapse-toggle${collapsed ? " is-collapsed" : ""}`,
@@ -133,7 +151,7 @@ export class TableRenderer {
       }
       renderGroupLabel(label, config, groupField, group.key, "db-group-title-text");
       label.createSpan({ cls: "db-group-count", text: String(group.count) });
-      this.actions.renderGroupSummaries?.(groupHeader, group.rows, config);
+      this.actions.renderGroupSummaries?.(stickyInfo, group.rows, config);
 
       if (collapsed) continue;
 
@@ -146,11 +164,12 @@ export class TableRenderer {
       this.applyTableWidth(table, config, visibleColumns, availableWidth);
       tableWrap.style.minWidth = `${this.getTableWidth(config, visibleColumns, availableWidth)}px`;
       this.renderColgroup(table, config, visibleColumns, availableWidth);
-      this.renderHeader(table, config, visibleColumns, group.rows);
+      const frozenLayout = this.getFrozenTableLayout(config, visibleColumns, availableWidth);
+      this.renderHeader(table, config, visibleColumns, group.rows, frozenLayout);
       const tbody = table.createEl("tbody");
       if (groupField) this.setupGroupDropTarget(tbody, groupField, group.key);
       const visibleCount = groupField ? getGroupVisibleCount(config, groupField, group.key, group.rows.length) : group.rows.length;
-      this.renderRows(tbody, config, group.rows.slice(0, visibleCount), visibleColumns, groupField, group.key, groups);
+      this.renderRows(tbody, config, group.rows.slice(0, visibleCount), visibleColumns, groupField, group.key, groups, frozenLayout);
       if (!this.actions.hideCreateEntry) {
         const computedGroup = Boolean(groupField) && isComputedGroupField(config, groupField);
         const defaults = (!computedGroup && groupField) ? this.getGroupDefaults(config, groupField, group.key) : undefined;
@@ -195,13 +214,14 @@ export class TableRenderer {
     }
 
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
+    const frozenLayout = this.getFrozenTableLayout(config, visibleColumns, this.getAvailableTableWidth(table.closest<HTMLElement>(".db-table-wrap")!));
     const rowByPath = this.rowByPath;
     for (const oldRow of renderedRows) {
       const path = oldRow.getAttribute("data-note-database-row-path") || "";
       if (!changedPaths.has(path)) continue;
       const row = rowByPath.get(path);
       if (!row) return false;
-      const replacement = this.renderRow(tbody, config, row, rows, visibleColumns);
+      const replacement = this.renderRow(tbody, config, row, rows, visibleColumns, undefined, undefined, undefined, frozenLayout);
       oldRow.replaceWith(replacement);
     }
     return true;
@@ -237,6 +257,7 @@ export class TableRenderer {
       renderedRows: HTMLElement[];
       group: TableGroup;
       visibleRows: RowData[];
+      frozenLayout: FrozenTableLayout;
     }> = [];
 
     for (let index = 0; index < groups.length; index += 1) {
@@ -279,11 +300,17 @@ export class TableRenderer {
           renderedPaths.some((path, rowIndex) => path !== nextPaths[rowIndex])) {
         return false;
       }
-      renderedRowsByGroup.push({ tbody, renderedRows, group, visibleRows });
+      renderedRowsByGroup.push({
+        tbody,
+        renderedRows,
+        group,
+        visibleRows,
+        frozenLayout: this.getFrozenTableLayout(config, visibleColumns, this.getAvailableTableWidth(tableWrap)),
+      });
     }
 
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
-    for (const { tbody, renderedRows, group, visibleRows } of renderedRowsByGroup) {
+    for (const { tbody, renderedRows, group, visibleRows, frozenLayout } of renderedRowsByGroup) {
       for (const oldRow of renderedRows) {
         const path = oldRow.getAttribute("data-note-database-row-path") || "";
         if (!changedPaths.has(path)) continue;
@@ -297,7 +324,8 @@ export class TableRenderer {
           visibleColumns,
           groupField,
           group.key,
-          groups
+          groups,
+          frozenLayout,
         );
         oldRow.replaceWith(replacement);
       }
@@ -336,6 +364,28 @@ export class TableRenderer {
       if (style.width) colEl.style.width = style.width;
       if (style.minWidth) colEl.style.minWidth = style.minWidth;
     });
+  }
+
+  private getFrozenTableLayout(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): FrozenTableLayout {
+    const dataWidths = this.getRenderedColumnWidths(config, columns, availableWidth);
+    const leadingWidths: number[] = [];
+    if (!this.actions.isReadOnly) leadingWidths.push(this.getSelectionColumnWidth());
+    if (this.shouldRenderRecordIcon(config)) leadingWidths.push(this.getRecordIconColumnWidth());
+    const frozenCount = normalizeFrozenColumnCount(config.frozenColumnCount, columns.length);
+    const offsets = getFrozenColumnOffsets(leadingWidths, dataWidths, frozenCount);
+    return {
+      leadingWidths,
+      dataWidths,
+      leadingOffsets: offsets.leading,
+      dataOffsets: offsets.data,
+      frozenCount,
+    };
+  }
+
+  private applyFrozenCellStyle(cell: HTMLElement, left: number, boundary: boolean): void {
+    cell.addClass("db-frozen-cell");
+    cell.style.left = `${left}px`;
+    cell.toggleClass("db-frozen-boundary", boundary);
   }
 
   private getTableMinWidth(config: ViewConfig, columns: ColumnDef[]): number {
@@ -390,11 +440,20 @@ export class TableRenderer {
     return Math.max(0, Math.floor(parent.getBoundingClientRect().width - paddingLeft - paddingRight));
   }
 
-  private renderHeader(table: HTMLElement, config: ViewConfig, columns: ColumnDef[], rows: RowData[]): void {
+  private renderHeader(
+    table: HTMLElement,
+    config: ViewConfig,
+    columns: ColumnDef[],
+    rows: RowData[],
+    frozenLayout: FrozenTableLayout,
+  ): void {
     const thead = table.createEl("thead");
     const headerRow = thead.createEl("tr");
     if (!this.actions.isReadOnly) {
       const selectTh = headerRow.createEl("th", { cls: "db-select-col" });
+      // 工具列常驻钉住但不画冻结边界：未冻结数据列时 checkbox 列右侧的加粗
+      // 分隔线是噪音；边界只画在「最后一个被冻结的数据列」上。
+      this.applyFrozenCellStyle(selectTh, frozenLayout.leadingOffsets[0] || 0, false);
       const selectInner = selectTh.createDiv({ cls: "db-select-inner" });
       const selectAll = selectInner.createEl("input", { attr: { type: "checkbox" } });
       selectAll.checked = this.actions.areAllRowsSelected(rows);
@@ -403,12 +462,14 @@ export class TableRenderer {
       };
     }
     if (this.shouldRenderRecordIcon(config)) {
-      headerRow.createEl("th", {
+      const iconTh = headerRow.createEl("th", {
         cls: "db-record-icon-col",
         attr: { "aria-label": t("recordIcon.icons"), title: t("recordIcon.icons") },
       });
+      const iconIndex = this.actions.isReadOnly ? 0 : 1;
+      this.applyFrozenCellStyle(iconTh, frozenLayout.leadingOffsets[iconIndex] || 0, false);
     }
-    for (const col of columns) {
+    for (const [index, col] of columns.entries()) {
       const th = headerRow.createEl("th");
       th.setAttr("data-note-database-column-key", col.key);
       th.toggleClass("is-narrow", this.isHeaderNarrow(config, col));
@@ -420,6 +481,9 @@ export class TableRenderer {
         const arrow = sort.direction === "asc" ? "▲" : "▼";
         const suffix = sort.total > 1 ? String(sort.index + 1) : "";
         content.createSpan({ text: `${arrow}${suffix}`, cls: "sort-indicator" });
+      }
+      if (index < frozenLayout.frozenCount) {
+        this.applyFrozenCellStyle(th, frozenLayout.dataOffsets[index], index === frozenLayout.frozenCount - 1);
       }
       this.actions.setupColumnHeader(th, col);
     }
@@ -448,10 +512,11 @@ export class TableRenderer {
     columns: ColumnDef[],
     groupField?: string,
     groupKey?: string,
-    groups?: TableGroup[]
+    groups?: TableGroup[],
+    frozenLayout?: FrozenTableLayout,
   ): void {
     for (const row of rows) {
-      this.renderRow(tbody, config, row, rows, columns, groupField, groupKey, groups);
+      this.renderRow(tbody, config, row, rows, columns, groupField, groupKey, groups, frozenLayout);
     }
   }
 
@@ -463,7 +528,8 @@ export class TableRenderer {
     columns: ColumnDef[],
     groupField?: string,
     groupKey?: string,
-    groups?: TableGroup[]
+    groups?: TableGroup[],
+    frozenLayout?: FrozenTableLayout,
   ): HTMLElement {
     const tr = tbody.createEl("tr", {
       attr: { "data-note-database-row-path": row.file.path },
@@ -483,6 +549,8 @@ export class TableRenderer {
     });
     if (!this.actions.isReadOnly) {
       const selectTd = tr.createEl("td", { cls: "db-select-col" });
+      // 工具列常驻钉住但不画冻结边界（同 renderHeader：边界只属于最后一个冻结数据列）。
+      if (frozenLayout) this.applyFrozenCellStyle(selectTd, frozenLayout.leadingOffsets[0] || 0, false);
       const selectInner = selectTd.createDiv({ cls: "db-select-inner" });
       // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
       // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
@@ -499,18 +567,25 @@ export class TableRenderer {
     }
     if (this.shouldRenderRecordIcon(config)) {
       const iconTd = tr.createEl("td", { cls: "db-record-icon-col" });
+      if (frozenLayout) {
+        const iconIndex = this.actions.isReadOnly ? 0 : 1;
+        this.applyFrozenCellStyle(iconTd, frozenLayout.leadingOffsets[iconIndex] || 0, false);
+      }
       const icon = this.actions.renderRecordIcon?.(iconTd, row, config, true);
       // Keep spreadsheet roving-tabindex authoritative: the gutter is clickable,
       // but must not become an extra Tab stop between real data cells.
       icon?.setAttr("tabindex", "-1");
     }
-    for (const col of columns) {
+    for (const [index, col] of columns.entries()) {
       const td = tr.createEl("td", {
         attr: {
           "data-note-database-row-path": row.file.path,
           "data-note-database-column-key": col.key,
         },
       });
+      if (frozenLayout && index < frozenLayout.frozenCount) {
+        this.applyFrozenCellStyle(td, frozenLayout.dataOffsets[index], index === frozenLayout.frozenCount - 1);
+      }
       this.actions.renderCell(td, row, col);
       this.actions.applyConditionalFormat?.(td, row, config, col.key);
       if (!this.actions.isReadOnly) this.actions.setupFillHandle?.(td, row, col);

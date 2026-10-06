@@ -3618,6 +3618,11 @@
  *  4. 汇总统计栏（总数）
  * ============================================================================ */
 
+/* 顶部汇总栏：横向 sticky 钉住（全局信息与所看列无关，滚动时不该丢失；
+ * 工具栏→汇总栏→分组头标签构成完整的「chrome 不动、内容动」层级）。
+ * width:fit-content 是关键——块级默认宽度=包含块（可视区）宽，sticky 位移
+ * 余量为 0 钉不住；条本身透明，收窄后视觉零变化。规则极多超宽时自动退化
+ * 为可滚动。只做横向；垂直方向保持随页滚动。 */
 .note-database-container .db-summary {
   display: flex;
   flex-wrap: wrap;
@@ -3626,10 +3631,17 @@
   margin: 5px 0 7px;
   color: var(--text-muted);
   min-height: 18px;
+  position: sticky;
+  left: 0;
+  width: fit-content;
 }
 
 .note-database-container:not(.note-database-embed) > .db-summary {
-  margin-left: 6px;
+  /* 6px 缩进用 padding 而非 margin：margin 在 border box 外，sticky 横向
+   * 钉住时被丢弃——起滚瞬间汇总栏会左跳 6px（绝对位置偏移）。padding
+   * 随元素钉住，静止视觉不变（首 item 文字位置相同）。 */
+  margin-left: 0;
+  padding-left: 6px;
 }
 
 
@@ -4922,6 +4934,32 @@
 
 .note-database-container .db-table td.db-record-icon-col > .db-record-icon {
   margin: 0 auto;
+}
+
+/* 左侧冻结区域：冻结的是连续的前 N 个数据列，工具列始终保持在最左侧。
+   选择器特异性必须严格最高（0,3,3，带 table + tbody/thead + td/th）：
+   - 可填充单元格 td.db-fillable-cell { position: relative } 是 0,3,1；
+   - 嵌入态表头 .note-database-embed... table.db-table th { position: relative }
+     是 0,3,2 且位于文件更后方（平手时后者胜，嵌入表头曾因此钉不住）。
+   任一被压过都会让 sticky 失效，冻结偏移的 left 沦为 relative 位移。 */
+.note-database-container table.db-table tbody td.db-frozen-cell,
+.note-database-container table.db-table thead th.db-frozen-cell {
+  position: sticky;
+  background: var(--background-primary);
+  background-clip: padding-box;
+}
+
+.note-database-container table.db-table tbody td.db-frozen-cell {
+  z-index: 2;
+}
+
+.note-database-container table.db-table thead th.db-frozen-cell {
+  z-index: 28;
+  background: var(--db-table-header-background);
+}
+
+.note-database-container .db-table .db-frozen-boundary {
+  box-shadow: inset -2px 0 0 color-mix(in srgb, var(--background-modifier-border) 85%, transparent);
 }
 
 /* 选择列内部容器：手柄（左）走文档流垂直居中；checkbox 用绝对定位钉在距右
@@ -6339,7 +6377,7 @@
 }
 
 /* 分组标题行（如 "使用中（3）"）
-   z-index:26 高于 thead 的 25，确保跨组滚动时分组标题不被属性行覆盖 */
+   z-index:26 高于 thead 的 25，确保跨组滚动时分组标题不被属性行覆盖。 */
 .note-database-container .db-group-header {
   display: flex;
   align-items: center;
@@ -6354,6 +6392,19 @@
   font-size: 13px;
   font-weight: 600;
   padding: 0;
+}
+
+/* 分组头横向钉住层：header 自身被 flex 拉伸到与容器同宽（sticky 位移余量
+   为 0，left 钉不住），label 与汇总 items 包进本层一起 sticky——横向滚动时
+   分组名、计数、汇总栏与冻结列共同留在视口内。 */
+.note-database-container .db-group-header .db-group-header-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 27;
+  display: inline-flex;
+  align-items: center;
+  min-height: inherit;
+  background: var(--background-primary);
 }
 
 .note-database-container .db-group-header-label {
@@ -15551,7 +15602,10 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 }
 
 .note-database-embed.note-database-container > .db-summary {
-  position: relative;
+  /* sticky 同样构成定位上下文（原 relative 的用途，供拖拽指示等绝对定位
+   * 子元素锚定）；嵌入态与主视图一致横向钉住。 */
+  position: sticky;
+  left: 0;
 }
 
 .note-database-embed.note-database-container.db-view-table > .db-summary {

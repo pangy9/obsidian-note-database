@@ -3,12 +3,21 @@
 // 能看到期间全部更新。新增版本时把三语文案加到 RELEASE_NOTES 头部即可。
 // obsidian-free 纯数据 + 纯函数，vitest 可直测。
 
-export type ReleaseNotesLocale = "en" | "zh-CN" | "zh-TW" | "system";
+// Callers must resolve the plugin's "system" preference through getEffectiveLocale.
+export type ReleaseNotesLocale = "en" | "zh-CN" | "zh-TW";
 
 export const RELEASE_NOTES: ReadonlyArray<{
   version: string;
   notes: Record<Exclude<ReleaseNotesLocale, "system">, string>;
 }> = [
+  {
+    version: "1.3.3",
+    notes: {
+      "en": "## What's new in 1.3.3\n\n- **Button workflows:** add a Button property to edit records, create or duplicate notes, update filtered records in another database, show confirmation, and open the result. Configure actions visually and combine dynamic values with text without writing code; built-in starters include example buttons. All changes made by a single button execution can be undone together.\n- **Collapsible descriptions:** collapse a database description to a one-line preview and expand it when needed.\n- **Fixes:** fix calendar events not using the selected status property’s colors (GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)); align date-valued computed fields across summaries, filters, sorting, and charts; show update notes in the plugin interface language.\n\nEverything remains local Markdown in your vault.",
+      "zh-CN": "## 1.3.3 更新内容\n\n- **按钮工作流：** 新增「按钮」属性，可修改记录、新建或复制笔记、按筛选跨库更新、显示确认并打开结果。通过可视化界面配置动作，用动态值与文字组合，无需编写代码；内置模板附带示例按钮。每次点击按钮造成的所有修改，可一次性撤销。\n- **描述折叠：** 数据库描述可收起为单行预览，需要时再展开。\n- **修复：** 修复日历按状态显示事件颜色不生效的问题（GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)）；统一日期计算字段在汇总、筛选、排序和图表中的语义；更新日志跟随插件界面语言。\n\n所有记录仍保存在 vault 内的本地 Markdown 文件中。",
+      "zh-TW": "## 1.3.3 更新內容\n\n- **按鈕工作流程：** 新增「按鈕」屬性，可修改記錄、新增或複製筆記、依篩選跨資料庫更新、顯示確認並開啟結果。透過視覺化介面設定動作，以動態值與文字組合，無需撰寫程式碼；內建範本附有示範按鈕。每次點擊按鈕造成的所有修改，可一次復原。\n- **描述摺疊：** 資料庫描述可收合為單行預覽，需要時再展開。\n- **修復：** 修復日曆依狀態顯示事件顏色未生效的問題（GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)）；統一日期計算欄位在彙總、篩選、排序和圖表中的語義；更新日誌跟隨外掛介面語言。\n\n所有記錄仍儲存在 vault 內的本機 Markdown 檔案中。",
+    },
+  },
   {
     version: "1.3.2",
     notes: {
@@ -80,10 +89,6 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-function resolveNotesLocale(locale: ReleaseNotesLocale): "en" | "zh-CN" | "zh-TW" {
-  return locale === "zh-CN" || locale === "zh-TW" ? locale : "en";
-}
-
 /**
  * 收集 (fromVersion, toVersion] 区间内的版本文案（新 → 旧排列，最新变化最醒目）。
  * - fromVersion 为空/无法识别（首次安装或极旧）：只返回 toVersion 单条；
@@ -95,8 +100,7 @@ export function collectChangelogNotes(
   toVersion: string,
   locale: ReleaseNotesLocale,
 ): string[] {
-  const notesLocale = resolveNotesLocale(locale);
-  const pick = (entry: { notes: Partial<Record<"en" | "zh-CN" | "zh-TW", string>> }): string => entry.notes[notesLocale] || entry.notes.en || "";
+  const pick = (entry: { notes: Partial<Record<ReleaseNotesLocale, string>> }): string => entry.notes[locale] || entry.notes.en || "";
   const collected: string[] = [];
   if (fromVersion && compareVersions(fromVersion, toVersion) < 0) {
     for (const entry of RELEASE_NOTES) {

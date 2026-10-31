@@ -9,6 +9,15 @@ export interface ConditionalFormatMatch {
 
 const queryEngine = new QueryEngine();
 
+const sharedColorProperties = [
+  "--card-bg", "--card-accent", "--db-calendar-event-bg", "--db-calendar-event-accent",
+] as const;
+
+// Conditional formatting temporarily overrides colors owned by the renderer.
+// Keep their original values so unmatched/removed rules restore the event color,
+// including when the same element is formatted repeatedly.
+const baseColors = new WeakMap<HTMLElement, Array<{ property: string; value: string; priority: string }>>();
+
 function resolveRule(rule: ConditionalFormatRule): ConditionalFormatRule {
   if (rule.valueSource !== "today") return rule;
   return {
@@ -48,16 +57,25 @@ export function applyConditionalFormat(
   database: DatabaseConfig | undefined,
   targetField?: string,
 ): void {
+  const previousColors = baseColors.get(element);
+  if (previousColors) {
+    for (const { property, value, priority } of previousColors) {
+      if (value) element.style.setProperty(property, value, priority);
+      else element.style.removeProperty(property);
+    }
+    baseColors.delete(element);
+  }
   element.removeClass("db-conditional-format");
   element.style.removeProperty("--db-conditional-format-bg");
   element.style.removeProperty("--db-conditional-format-fg");
-  element.style.removeProperty("--card-bg");
-  element.style.removeProperty("--card-accent");
-  element.style.removeProperty("--db-calendar-event-bg");
-  element.style.removeProperty("--db-calendar-event-accent");
   element.removeAttribute("data-note-database-conditional-rule");
   const match = getConditionalFormatMatch(row, config, database, targetField);
   if (!match) return;
+  baseColors.set(element, sharedColorProperties.map((property) => ({
+    property,
+    value: element.style.getPropertyValue(property),
+    priority: element.style.getPropertyPriority(property),
+  })));
   element.addClass("db-conditional-format");
   element.style.setProperty("--db-conditional-format-bg", `var(--status-color-bg-${match.color})`);
   element.style.setProperty("--db-conditional-format-fg", `var(--status-color-fg-${match.color})`);

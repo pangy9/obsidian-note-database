@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { ColumnDef, DatabaseConfig, StatusPresetDef, ViewConfig } from "./types";
+import type { ColumnDef, DatabaseConfig, StatusPresetDef, ViewConfig, RecordButtonAction } from "./types";
 import { getStarterArtworkFiles } from "./DatabaseStarterArtwork";
 import { serializeLucideIconToken } from "./RecordIcon";
 
@@ -26,6 +26,10 @@ function dateAfter(days: number, today: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function starterButton(key: string, label: string, icon: string, actions: RecordButtonAction[], primary = false): ColumnDef {
+  return { key, label, type: "button", buttonConfig: { label, icon, style: primary ? "primary" : "default", actions: [], steps: [{ kind: "edit", target: "trigger", actions }] } };
+}
+
 /** Built-in starters are bundled with the plugin; no network or executable template code. */
 export function getStarterTemplates(today: Date = new Date()): StarterTemplate[] {
   const name: ColumnDef = { key: "file.name", label: t("defaults.nameColumn"), type: "text" };
@@ -43,6 +47,7 @@ export function getStarterTemplates(today: Date = new Date()): StarterTemplate[]
       name: t("starter.project.name"), description: t("starter.project.desc"), icon: "folder-kanban",
       columns: [name,
         { key: "status", label: t("starter.field.status"), type: "status", statusOptions: options(projectStatus) },
+        starterButton("complete_project", t("starter.button.completeProject"), "check", [{ field: "status", fieldType: "status", operation: "set", value: projectStatus[2] }], true),
         { key: "priority", label: t("starter.field.priority"), type: "select", statusOptions: options([t("starter.priority.high"), t("starter.priority.medium"), t("starter.priority.low")]) },
         { key: "due", label: t("starter.field.due"), type: "date" },
         { key: "effort", label: t("starter.field.effort"), type: "number" },
@@ -88,6 +93,7 @@ export function getStarterTemplates(today: Date = new Date()): StarterTemplate[]
       name: t("starter.reading.name"), description: t("starter.reading.desc"), icon: "library-big",
       columns: [name,
         { key: "status", label: t("starter.field.status"), type: "status", statusOptions: options(readingStatus) },
+        starterButton("finish_reading", t("starter.button.finishReading"), "book-check", [{ field: "status", fieldType: "status", operation: "set", value: readingStatus[2] }], true),
         { key: "mediaType", label: t("starter.field.mediaType"), type: "select", statusOptions: options([t("starter.media.book"), t("starter.media.article"), t("starter.media.video")]) },
         { key: "author", label: t("starter.field.author"), type: "text" },
         { key: "rating", label: t("starter.field.rating"), type: "number", numberDisplayStyle: "rating" },
@@ -132,6 +138,10 @@ export function getStarterTemplates(today: Date = new Date()): StarterTemplate[]
       name: t("starter.crm.name"), description: t("starter.crm.desc"), icon: "contact-round",
       columns: [name,
         { key: "stage", label: t("starter.field.stage"), type: "status", statusOptions: options([t("starter.stage.new"), t("starter.stage.contacted"), t("starter.stage.followUp"), t("starter.stage.closed")]) },
+        starterButton("follow_up", t("starter.button.followUp"), "calendar-plus", [
+          { field: "stage", fieldType: "status", operation: "set", value: t("starter.stage.followUp") },
+          { field: "nextContact", fieldType: "date", operation: "set", dynamic: { source: "date", value: "today", offsetDays: 7 } },
+        ]),
         { key: "organization", label: t("starter.field.organization"), type: "text" },
         { key: "email", label: t("starter.field.email"), type: "text" },
         { key: "nextContact", label: t("starter.field.nextContact"), type: "date" },
@@ -154,6 +164,8 @@ export function getStarterTemplates(today: Date = new Date()): StarterTemplate[]
       name: t("starter.tasks.name"), description: t("starter.tasks.desc"), icon: "list-todo",
       columns: [name,
         { key: "status", label: t("starter.field.status"), type: "status", statusOptions: options(projectStatus) },
+        starterButton("complete_task", t("starter.button.completeTask"), "check", [{ field: "status", fieldType: "status", operation: "set", value: projectStatus[2] }], true),
+        starterButton("schedule_tomorrow", t("starter.button.tomorrow"), "calendar-clock", [{ field: "due", fieldType: "date", operation: "set", dynamic: { source: "date", value: "today", offsetDays: 1 } }]),
         { key: "priority", label: t("starter.field.priority"), type: "select", statusOptions: options([t("starter.priority.high"), t("starter.priority.medium"), t("starter.priority.low")]) },
         { key: "due", label: t("starter.field.due"), type: "date" },
         { key: "effort", label: t("starter.field.effort"), type: "number" },

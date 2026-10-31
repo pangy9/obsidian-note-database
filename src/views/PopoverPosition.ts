@@ -4,9 +4,12 @@ export interface ToolbarPopoverPositionOptions {
   minWidth?: number;
   preferredWidth?: number;
   maxWidth?: number;
+  maxHeight?: number;
+  getAnchorRect?: () => DOMRect;
   margin?: number;
   gap?: number;
   align?: "left" | "center" | "right";
+  placement?: "vertical" | "submenu";
 }
 
 export function positionToolbarPopover(
@@ -44,7 +47,7 @@ export function positionToolbarPopover(
     const containerRect = container?.getBoundingClientRect();
     const scrollLeft = container?.scrollLeft || 0;
     const scrollTop = container?.scrollTop || 0;
-    const anchorRect = anchorEl.getBoundingClientRect();
+    const anchorRect = options.getAnchorRect?.() ?? anchorEl.getBoundingClientRect();
     const maxWidth = Math.max(minWidth, Math.min(maxPreferredWidth, bounds.width - margin * 2));
     const width = Math.min(preferredWidth, maxWidth);
 
@@ -63,14 +66,28 @@ export function positionToolbarPopover(
       : alignEdge === "center"
         ? anchorRect.left + anchorRect.width / 2 - measuredWidth / 2
         : anchorRect.right - measuredWidth;
-    const naturalHeight = Math.max(panel.scrollHeight, panelRect.height || 0);
+    const heightLimit = options.maxHeight ?? Infinity;
+    const naturalHeight = Math.min(Math.max(panel.scrollHeight, panelRect.height || 0), heightLimit);
+    if (options.placement === "submenu") {
+      const availableHeight = Math.min(Math.max(0, bounds.height - margin * 2), heightLimit);
+      const renderedHeight = Math.min(naturalHeight, availableHeight);
+      const right = anchorRect.right + gap;
+      const left = right + measuredWidth <= bounds.right - margin ? right : anchorRect.left - gap - measuredWidth;
+      setPosition(panel,
+        clamp(left, bounds.left + margin, bounds.right - measuredWidth - margin),
+        clamp(anchorRect.top, bounds.top + margin, bounds.bottom - renderedHeight - margin),
+        containerRect, scrollLeft, scrollTop);
+      panel.style.maxHeight = `${availableHeight}px`;
+      panel.scrollTop = savedPanelScroll;
+      return;
+    }
     const belowSpace = Math.max(0, bounds.bottom - anchorRect.bottom - gap - margin);
     const aboveSpace = Math.max(0, anchorRect.top - bounds.top - gap - margin);
     const useAbove = aboveSpace > belowSpace && belowSpace < Math.min(naturalHeight, 240);
-    const availableHeight = useAbove ? aboveSpace : belowSpace;
+    const availableHeight = Math.min(useAbove ? aboveSpace : belowSpace, heightLimit);
 
     if (availableHeight <= 0) {
-      const fallbackHeight = Math.max(0, bounds.height - margin * 2);
+      const fallbackHeight = Math.min(Math.max(0, bounds.height - margin * 2), heightLimit);
       setPosition(
         panel,
         clamp(anchorLeft, bounds.left + margin, bounds.right - measuredWidth - margin),

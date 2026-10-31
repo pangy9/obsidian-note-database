@@ -488,6 +488,23 @@ export class DataSource {
     return result;
   }
 
+  /** Compare and replace exact content for multi-file button transactions, preserving undo bytes. */
+  async patchNoteContent(path: string, before: string, after: string, file: TFile, context?: DataWriteContext): Promise<void> {
+    const parsed = parseDiskFrontmatter(after, parseYaml);
+    if (!parsed.ok) throw parsed.error;
+    await this.enqueueWrite(path, async () => {
+      context?.assertWritable?.();
+      if (this.vault.getAbstractFileByPath(path) !== file) throw new Error(`File identity changed: ${path}`);
+      await this.vault.process(file, current => {
+        context?.assertWritable?.();
+        if (current !== before || this.vault.getAbstractFileByPath(path) !== file) throw new Error(`File changed: ${path}`);
+        return after;
+      });
+      try { this.publishCommittedSnapshot(path, parsed.frontmatter); }
+      catch (error) { console.error("Note Database: button cache needs reconciliation", error); }
+    }, context);
+  }
+
   async renameNoteGuarded(file: TFile, newPath: string, context?: DataWriteContext): Promise<void> {
     const oldPath = file.path;
     if (oldPath === newPath) return;

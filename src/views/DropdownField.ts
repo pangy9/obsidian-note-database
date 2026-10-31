@@ -2,6 +2,8 @@ import { setIcon } from "obsidian";
 import { suppressClickWhileTextSelected } from "./modals/ModalDrag";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
+import { getTextInputCaretRect } from "./TextInputCaret";
+import { isImeComposing } from "../data/KeyboardUtils";
 
 export interface DropdownOption {
   value: string;
@@ -33,6 +35,8 @@ export interface DropdownFieldOptions {
   searchable?: boolean;
   searchPlaceholder?: string;
   closeOnSelect?: boolean;
+  followCaret?: boolean;
+  caretLineAnchor?: HTMLElement;
   renderIcon?(parent: HTMLElement, icon: string): void;
 }
 
@@ -52,6 +56,8 @@ export interface DropdownMenuOptions {
   searchable?: boolean;
   searchPlaceholder?: string;
   closeOnSelect?: boolean;
+  followCaret?: boolean;
+  caretLineAnchor?: HTMLElement;
   renderIcon?(parent: HTMLElement, icon: string): void;
   onClose?: () => void;
 }
@@ -136,9 +142,26 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
     searchable: options.searchable,
     searchPlaceholder: options.searchPlaceholder,
     closeOnSelect: options.closeOnSelect,
+    followCaret: options.followCaret,
+    caretLineAnchor: options.caretLineAnchor,
     renderIcon: options.renderIcon ? (parent, icon) => options.renderIcon?.(parent, icon) : undefined,
   }, valueEl, close);
   return close;
+}
+
+const openDropdowns = new WeakMap<HTMLElement, { anchor: HTMLElement; close: () => void }>();
+
+/** Let a modal consume Escape for its own body-hosted dropdown before closing itself. */
+export function closeDropdownForRoot(root: HTMLElement, restoreFocus = true): boolean {
+  const panels = Array.from(root.ownerDocument.querySelectorAll<HTMLElement>(".db-dropdown-popover")).reverse();
+  for (const panel of panels) {
+    const entry = openDropdowns.get(panel);
+    if (!entry || !root.contains(entry.anchor)) continue;
+    entry.close();
+    if (restoreFocus && entry.anchor.isConnected) entry.anchor.focus({ preventScroll: true });
+    return true;
+  }
+  return false;
 }
 
 function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions, valueEl: HTMLElement, close: () => void): () => void {
@@ -146,6 +169,7 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
   const host = getDropdownPopoverHost(anchor);
   const searchable = options.searchable === true && options.options.length > 8;
   const panel = host.createDiv({ cls: `db-dropdown-popover ${contextClass}${searchable ? " is-searchable" : ""}${options.popoverClassName ? ` ${options.popoverClassName}` : ""}` });
+  openDropdowns.set(panel, { anchor, close });
   // 拖选选项文字可复制；拖选后的 click 不触发选择项。
   suppressClickWhileTextSelected(panel);
   panel.setAttr("role", "listbox");
@@ -177,8 +201,8 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     if (option.disabledReason) {
       row.setAttr("title", option.disabledReason);
       row.setAttr("aria-label", `${option.text}: ${option.disabledReason}`);
-    } else if (option.description) {
-      row.setAttr("title", option.description);
+    } else {
+      row.setAttr("title", option.description || option.text);
     }
     const check = row.createSpan({ cls: "db-dropdown-option-check" });
     if (option.value === options.value) setIcon(check, "check");
@@ -211,7 +235,40 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     searchInput.oninput = () => filterDropdownOptions(sectionRows, searchInput?.value || "");
     window.setTimeout(() => searchInput?.focus(), 0);
   }
-  positionToolbarPopover(panel, anchor, { preferredWidth: 280, maxWidth: 360, minWidth: 180, gap: 6 });
+  const place = () => positionToolbarPopover(panel, anchor, {
+    preferredWidth: 280, maxWidth: 360, minWidth: 180, maxHeight: options.followCaret ? 240 : 360, gap: 6,
+    ...(options.followCaret ? { align: "left" as const, getAnchorRect: () => {
+      const caret = getTextInputCaretRect(anchor as HTMLInputElement | HTMLTextAreaElement);
+      return options.caretLineAnchor ? new DOMRect(options.caretLineAnchor.getBoundingClientRect().left, caret.y, 1, caret.height) : caret;
+    } } : {}),
+  });
+  place();
+  const preventFocusLoss = (event: MouseEvent) => event.preventDefault();
+  let activeIndex = -1;
+  const onAnchorKeydown = (event: KeyboardEvent) => {
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
+    const rows = sectionRows.filter(item => !item.row.disabled && !item.row.hasClass("is-hidden"));
+    if (event.key === "Enter" && activeIndex >= 0) {
+      event.preventDefault(); event.stopPropagation(); rows[activeIndex]?.row.click(); return;
+    }
+    if (!["ArrowDown", "ArrowUp"].includes(event.key) || !rows.length) return;
+    event.preventDefault(); event.stopPropagation();
+    activeIndex = Math.max(0, Math.min(rows.length - 1, activeIndex + (event.key === "ArrowDown" ? 1 : -1)));
+    rows.forEach((item, index) => item.row.toggleClass("is-selected", index === activeIndex));
+    rows[activeIndex].row.scrollIntoView({ block: "nearest" });
+  };
+  const onScroll = (event: Event) => { if (!panel.contains(event.target as Node)) place(); };
+  if (options.followCaret) {
+    panel.addEventListener("mousedown", preventFocusLoss);
+    anchor.addEventListener("keydown", onAnchorKeydown);
+    for (const type of ["input", "keyup", "click", "select"]) anchor.addEventListener(type, place);
+    anchor.ownerDocument.addEventListener("scroll", onScroll, true);
+    anchor.ownerDocument.defaultView?.addEventListener("resize", place);
+  }
+
+  // The search box stays fixed; only the options list scrolls.
+  if (searchable) panel.setCssProps({ overflowY: "hidden" });
 
   const onOutside = (event: MouseEvent) => {
     const target = event.target as Node | null;
@@ -231,6 +288,14 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
   return () => {
     window.clearTimeout(outsideTimer);
     window.activeDocument.removeEventListener("mousedown", onOutside, true);
+    if (options.followCaret) {
+      panel.removeEventListener("mousedown", preventFocusLoss);
+      anchor.removeEventListener("keydown", onAnchorKeydown);
+      for (const type of ["input", "keyup", "click", "select"]) anchor.removeEventListener(type, place);
+      anchor.ownerDocument.removeEventListener("scroll", onScroll, true);
+      anchor.ownerDocument.defaultView?.removeEventListener("resize", place);
+    }
+    openDropdowns.delete(panel);
     panel.removeEventListener("keydown", onKeydown);
     removeAutoClose();
     panel.remove();

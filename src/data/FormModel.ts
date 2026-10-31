@@ -54,7 +54,7 @@ export interface FormPlanInput {
 
 /** 列在表单里是否可由用户填写（锁定/只读/派生列除外）。视图配置面板的必填勾选也用它排除不可填字段。 */
 export function isFormWritableColumn(col: ColumnDef): boolean {
-  if (col.type === "computed" || col.type === "rollup") return false;
+  if (col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
   if (isFileFieldKey(col.key)) return col.key === "file.name" || col.key === "file.tags";
   return true;
 }
@@ -157,7 +157,7 @@ export function planFormFields(input: FormPlanInput): FormPlan {
   for (const col of columns) {
     const locked = lockedValues.has(col.key);
     let availability: FormFieldAvailability;
-    if (col.type === "computed") {
+    if (col.type === "computed" || col.type === "button") {
       continue; // 公式列不开放：提交后自动计算，不出现在表单。
     } else if (col.type === "rollup") {
       availability = "readonly";

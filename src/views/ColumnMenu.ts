@@ -1,16 +1,21 @@
 import { Menu, setIcon } from "obsidian";
 import { COLUMN_TYPE_LABELS, isOptionColumnType, OPTION_COLORS } from "../data/ColumnTypes";
 import { isFileFieldKey } from "../data/FileFields";
-import { ColumnDef, ComputedFieldDef, NumberDisplayStyle, NumberDisplayConfig, StatusColor } from "../data/types";
+import { ColumnDef, ComputedFieldDef, NumberDisplayStyle, NumberDisplayConfig, StatusColor, RecordButtonConfig } from "../data/types";
 import { isNumberDisplayColumn } from "../data/ColumnDisplay";
 import { t } from "../i18n";
-import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
+import { getPropertyTypeMenuIcon, renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import { createDropdownField, DropdownOption } from "./DropdownField";
+import { buttonPickerToken, buttonIconRecommendations, renderRecordButtonIcon, renderButtonStyleSample } from "./RecordButtonAppearance";
+import { openIconPickerPopover } from "./IconPickerPopover";
 import { renderNumberDisplayStyleIcon } from "./NumberDisplayStyleIcon";
 
 export interface ColumnMenuActions {
   editColumn(col: ColumnDef): void;
   editFormula(col: ColumnDef): void;
+  editButton?(col: ColumnDef): void;
+  setButtonIcon?(col: ColumnDef, icon: string | null): void;
+  setButtonStyle?(col: ColumnDef, style: NonNullable<RecordButtonConfig["style"]>): void;
   editRelationRollup?(col: ColumnDef): void;
   editStatusOptions(col: ColumnDef): void;
   showOptionsEditor(col: ColumnDef): void;
@@ -69,8 +74,62 @@ export class ColumnMenu {
     const includeLayoutActions = options.includeLayoutActions !== false;
     const includeWidthActions = options.includeWidthActions !== false;
     const menu = new Menu().setUseNativeMenu(false);
-    if (options.onClose) menu.onHide(options.onClose);
+    let closeIconPicker: (() => void) | undefined;
+    menu.onHide(() => { closeIconPicker?.(); options.onClose?.(); });
 
+    if (col.type === "button" && (!readonly || options.allowAdvancedConfig)) {
+      menu.addItem((item) => item.setTitle(t("button.configure")).setIcon(getPropertyTypeMenuIcon(col)).onClick(() => this.actions.editButton?.(col)));
+    }
+    if (col.type === "button" && this.actions.setButtonIcon && (!readonly || options.displayOnly || options.allowAdvancedConfig)) {
+      menu.addItem(item => {
+        item.setTitle(t("menu.buttonIcon")).setIcon("smile");
+        const dom = (item as unknown as MenuItemWithDom).dom;
+        if (col.buttonConfig?.icon && dom) {
+          renderRecordButtonIcon(dom.createSpan({ cls: "db-menu-item-current db-menu-button-icon", attr: { "aria-hidden": "true" } }), col.buttonConfig.icon);
+        }
+        const open = () => {
+          if (closeIconPicker) return;
+          this.closeActiveColumnSubmenu();
+          const anchor = dom || anchorEl || (event.target instanceof HTMLElement ? event.target : window.activeDocument.body);
+          closeIconPicker = openIconPickerPopover({
+            anchor, container: dom?.closest<HTMLElement>(".menu") || undefined, placement: "submenu",
+            current: buttonPickerToken(col.buttonConfig?.icon), recommended: buttonIconRecommendations(),
+            onSelect: icon => {
+              this.actions.setButtonIcon?.(col, icon);
+              dom?.querySelector(".db-menu-button-icon")?.remove();
+              if (icon && dom) renderRecordButtonIcon(dom.createSpan({ cls: "db-menu-item-current db-menu-button-icon", attr: { "aria-hidden": "true" } }), icon);
+            },
+            onClose: () => { if (this.activeSubmenuCleanup === closeIconPicker) this.activeSubmenuCleanup = undefined; closeIconPicker = undefined; },
+          });
+          this.activeSubmenuCleanup = closeIconPicker;
+        };
+        // A normal Menu.onClick dismisses its menu. Handle submenu activation first.
+        const activate = (evt: Event) => { evt.preventDefault(); evt.stopImmediatePropagation(); open(); };
+        dom?.addEventListener("mousedown", activate, true);
+        dom?.addEventListener("click", activate, true);
+        dom?.addEventListener("keydown", evt => {
+          if (["Enter", " ", "ArrowRight"].includes(evt.key)) activate(evt);
+        }, true);
+        item.onClick(open);
+        return item;
+      });
+    }
+    if (col.type === "button" && this.actions.setButtonStyle && (!readonly || options.displayOnly || options.allowAdvancedConfig)) {
+      menu.addItem(item => {
+        item.setTitle(t("menu.buttonStyle")).setIcon("paintbrush");
+        const menuItem = item as unknown as MenuItemWithDom;
+        const open = (evt: MouseEvent) => {
+          evt.preventDefault(); evt.stopPropagation();
+          this.showButtonStylePopover(evt, col, menuItem.dom);
+        };
+        menuItem.dom?.addEventListener("mouseenter", open);
+        menuItem.dom?.addEventListener("mousedown", open, true);
+        menuItem.dom?.addEventListener("click", open, true);
+        item.onClick(() => this.showButtonStylePopover(event, col, menuItem.dom));
+        this.appendItemHint(menuItem.dom, t(`button.style.${col.buttonConfig?.style || "default"}`));
+        return item;
+      });
+    }
     if (!readonly) {
       menu.addItem((item) => item
         .setTitle(t("menu.editProperty", { name: col.label }))
@@ -104,8 +163,8 @@ export class ColumnMenu {
       menu.addItem((item) => {
         const isFileField = isFileFieldKey(col.key);
         item.setTitle(t("menu.changeType")).setIcon("layers");
-        item.setDisabled(isFileField);
-        if (isFileField) return item;
+        item.setDisabled(isFileField || col.type === "button");
+        if (isFileField || col.type === "button") return item;
         const menuItem = item as unknown as MenuItemWithDom;
         const open = (evt: MouseEvent) => {
           evt.preventDefault();
@@ -272,7 +331,7 @@ export class ColumnMenu {
         .onClick(() => this.actions.autoFitAllColumns?.())
       );
     }
-    menu.addItem((item) => item
+    if (col.type !== "button") menu.addItem((item) => item
       .setTitle(t("menu.sortBy", { name: col.label }))
       .setIcon("arrow-up-down")
       .onClick(() => this.actions.sortByColumn(col))
@@ -335,6 +394,27 @@ export class ColumnMenu {
         };
       }
     });
+  }
+
+  private showButtonStylePopover(evt: MouseEvent | KeyboardEvent, col: ColumnDef, anchorEl?: HTMLElement): void {
+    const { panel } = this.createColumnMenuSubpopover(evt, "db-column-display-style-popover db-button-style-popover", anchorEl);
+    const render = (): void => {
+      panel.empty(); panel.setAttr("role", "listbox");
+      const section = this.createDisplayOptionSection(panel, t("menu.buttonStyle"));
+      const current = col.buttonConfig?.style || "default";
+      for (const value of ["default", "primary", "plain"] as const) {
+        const row = section.createEl("button", {
+          cls: `db-dropdown-option has-icon${value === current ? " is-selected" : ""}`,
+          attr: { type: "button", role: "option", "aria-selected": String(value === current) },
+        });
+        const check = row.createSpan({ cls: "db-dropdown-option-check" });
+        if (value === current) setIcon(check, "check");
+        renderButtonStyleSample(row.createSpan({ cls: "db-dropdown-option-icon" }), value);
+        row.createSpan({ cls: "db-dropdown-option-label", text: t(`button.style.${value}`) });
+        row.onclick = () => { this.actions.setButtonStyle?.(col, value); render(); };
+      }
+    };
+    render();
   }
 
   private showNumberDisplayStylePopover(evt: MouseEvent | KeyboardEvent, col: ColumnDef, _menu: Menu, anchorEl?: HTMLElement): void {

@@ -108,6 +108,7 @@ export function decideFrontmatterMigrationMode(
   facts: RenameFacts,
   request: RenameRequest
 ): FrontmatterMigrationMode {
+  if (facts.columnType === "button") return "none";
   const isComputed = facts.columnType === "computed";
   const isRollup = facts.columnType === "rollup";
   const convertingToFileField = !facts.oldIsFileField && facts.newIsFileField;

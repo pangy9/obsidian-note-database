@@ -47,7 +47,8 @@ export interface RollupConfig {
 export interface ColumnDef {
   key: string;
   label: string;
-  type: "text" | "number" | "date" | "datetime" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed" | "relation" | "rollup";
+  type: "text" | "number" | "date" | "datetime" | "currency" | "select" | "multi-select" | "status" | "checkbox" | "computed" | "relation" | "rollup" | "button";
+  buttonConfig?: RecordButtonConfig;
   width?: number;
   urgency?: { enabled: boolean; thresholdDays: number };
   dateFormat?: string;
@@ -68,6 +69,42 @@ export interface ColumnDef {
   relationConfig?: RelationConfig;
   /** Rollups are display-only derived values and are never written to frontmatter. */
   rollupConfig?: RollupConfig;
+}
+
+export type RecordButtonOperation = "set" | "clear" | "now" | "increment" | "toggle" | "add" | "remove";
+export interface RecordButtonAction {
+  field: string;
+  /** The type selected by the author; changes require reconfiguration. */
+  fieldType: ColumnDef["type"];
+  operation: RecordButtonOperation;
+  value?: string | number | boolean | string[];
+  dynamic?: RecordButtonValue;
+}
+/** Typed values preserve arrays/numbers; templates interpolate explicit tokens only. */
+export interface RecordButtonValue {
+  source: "literal" | "trigger" | "target" | "created" | "variable" | "template" | "date";
+  value: string | number | boolean | string[];
+  offsetDays?: number;
+}
+export interface RecordButtonFilter {
+  field: string;
+  op: FilterRule["op"];
+  value: RecordButtonValue;
+}
+export type RecordButtonStep =
+  | { kind: "edit"; target: "trigger" | "created" | "database"; databaseId?: string; filters?: RecordButtonFilter[]; allRecords?: boolean; actions: RecordButtonAction[] }
+  | { kind: "create" | "duplicate"; databaseId: string; title: string; body?: string; actions: RecordButtonAction[] }
+  | { kind: "variable"; name: string; value: RecordButtonValue }
+  | { kind: "open"; target: "trigger" | "created" | "link"; link?: string; newTab?: boolean }
+  | { kind: "confirm"; message: string };
+export interface RecordButtonConfig {
+  label: string;
+  icon?: string;
+  style?: "default" | "primary" | "plain";
+  confirm?: boolean;
+  actions: RecordButtonAction[];
+  /** Absent on legacy single-record buttons. */
+  steps?: RecordButtonStep[];
 }
 
 export type StatusColor =

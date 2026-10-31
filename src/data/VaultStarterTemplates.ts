@@ -30,6 +30,10 @@ export function sanitizeStarterConfig(source: DatabaseConfig): DatabaseConfig {
   db.computedSyncMode = "display-only";
   for (const column of db.schema.columns) {
     if (column.type === "relation") delete column.relationConfig;
+    // Portable templates must not silently keep mutating databases in the source vault.
+    for (const step of column.buttonConfig?.steps || []) {
+      if (step.kind === "create" || step.kind === "duplicate" || (step.kind === "edit" && step.target === "database")) step.databaseId = "";
+    }
   }
   for (const view of db.views) {
     delete view.id;
@@ -65,7 +69,7 @@ export function cleanStarterSamples(samples: StarterSampleRecord[], db: Database
     delete frontmatter.db_view;
     delete frontmatter.database;
     for (const column of db.schema.columns) {
-      if (["relation", "rollup", "computed"].includes(column.type)) delete frontmatter[column.key];
+      if (["relation", "rollup", "computed", "button"].includes(column.type)) delete frontmatter[column.key];
     }
     for (const field of db.schema.computedFields || []) delete frontmatter[field.key];
     return { filename: sample.filename, body: sample.body, frontmatter };
@@ -110,7 +114,7 @@ export function parseVaultStarter(text: string): VaultStarterTemplate {
     !Array.isArray(value.config.schema.columns) || !Array.isArray(value.config.schema.computedFields) ||
     !Array.isArray(value.config.views) || !value.config.views.length || value.config.views.length > 15 ||
     !Array.isArray(value.samples) || value.samples.length > MAX_STARTER_SAMPLES) throw new Error("Invalid starter template");
-  const types = ["text", "number", "currency", "date", "datetime", "status", "select", "multi-select", "checkbox", "computed", "rollup", "relation"];
+  const types = ["text", "number", "currency", "date", "datetime", "status", "select", "multi-select", "checkbox", "computed", "rollup", "relation", "button"];
   for (const column of value.config.schema.columns) {
     if (!object(column) || typeof column.key !== "string" || typeof column.label !== "string" || typeof column.type !== "string" || !types.includes(column.type)) throw new Error("Invalid property");
   }

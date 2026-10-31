@@ -20,7 +20,7 @@ export interface ColumnRenameResult {
 
 const PROPERTY_TYPES: ColumnDef["type"][] = [
   "text", "number", "date", "datetime", "currency", "checkbox",
-  "select", "multi-select", "status", "computed", "relation", "rollup",
+  "select", "multi-select", "status", "computed", "relation", "rollup", "button",
 ];
 
 export class ColumnRenameModal extends Modal {
@@ -101,7 +101,7 @@ export class ColumnRenameModal extends Modal {
     createDropdownField({
       parent: typeRow,
       label: t("modal.propertyType"),
-      options: PROPERTY_TYPES.map((type) => ({
+      options: PROPERTY_TYPES.filter((type) => this.col.type === "button" ? type === "button" : type !== "button").map((type) => ({
         value: type,
         text: COLUMN_TYPE_LABELS()[type],
         icon: getPropertyDropdownIcon(type),
@@ -130,7 +130,7 @@ export class ColumnRenameModal extends Modal {
     wrapCheckbox.checked = !!this.col.wrap;
     wrapRow.createSpan({ text: t("modal.wrapContent") });
 
-    const canMigrate = !fileField && this.col.type !== "computed" && this.col.type !== "rollup";
+    const canMigrate = !fileField && this.col.type !== "computed" && this.col.type !== "rollup" && this.col.type !== "button";
     let migrateCheckbox: HTMLInputElement | undefined;
     if (!fileField) {
       const migrateRow = contentEl.createDiv({
@@ -170,6 +170,10 @@ export class ColumnRenameModal extends Modal {
       const label = labelInput.value.trim() || key;
       if (!key) {
         new Notice(t("modal.propertyKeyRequired"));
+        return;
+      }
+      if (this.col.type === "button" && isFileFieldKey(key)) {
+        new Notice(t("fileField.fixedType"));
         return;
       }
       const duplicate = this.allColumns.some((c) => c !== this.col && c.key === key);

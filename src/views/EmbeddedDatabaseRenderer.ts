@@ -1,3 +1,6 @@
+import { RecordButtonModal } from "./modals/RecordButtonModal";
+import { withRecordButtonLock } from "./RecordButtonRenderer";
+import { validateRecordButton, updateRecordButtonStyle, updateRecordButtonIcon } from "../data/RecordButton";
 import { App, HoverPopover, MarkdownRenderChild, MarkdownSectionInformation, normalizePath, Notice, setIcon, setTooltip, TFile } from "obsidian";
 import { t } from "../i18n";
 import { confirmWithModal } from "./modals/ConfirmModal";
@@ -207,13 +210,14 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       config,
       app: this.app,
       actions: {
+        runRecordButton: (row, col) => this.executeRecordButton(row, col),
         getRelationScopePaths: (col) => this.getRelationScopePaths(col),
         editCell: (target, record, column, event) => {
           if (!this.isEmbedReadOnly()) this.cellRenderer.startEdit(target, record, column, event);
         },
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
-        applyConditionalFormat: (element, r, view, targetField) =>
+          applyConditionalFormat: (element, r, view, targetField) =>
           applyConditionalFormat(element, r, view, this.currentDbConfig, targetField),
         isReadOnly: this.isEmbedReadOnly(),
       },
@@ -263,6 +267,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   private unsubscribeViewConfig?: () => void;
   private configHistoryStack: DatabaseConfig[] = [];
   private dataOperations: EmbeddedDataOperations;
+  private embeddedHistoryNoticeVisible = false;
+  private embeddedHistoryNoticeTimer: number | null = null;
   private unloaded = false;
   private closeBulkFieldMenu?: () => void;
   private pendingConfigSave: Promise<void> = Promise.resolve();
@@ -285,6 +291,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     private persistMode: "codeblock" | "frontmatter" = "codeblock",
     private defaultRecordFolder = "",
     private embeddedReadOnly = true,
+    private getShowDatabaseIcons: () => boolean = () => true,
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
@@ -299,6 +306,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       (busy) => {
         this.containerEl.setAttribute("aria-busy", String(busy));
         this.containerEl.querySelectorAll<HTMLButtonElement>(".db-selection-status-bar button").forEach((button) => { button.disabled = busy; });
+        this.resetEmbeddedHistoryNoticeTimer();
       });
     const shouldHideResultCreateEntryButtons = () =>
       this.isEmbedReadOnly() || (this.config ? this.vs(this.config).searchText.trim().length > 0 : false);
@@ -337,6 +345,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       (col, row) => this.showEmbeddedRelationRollupModal(col, row),
       (col) => this.getRelationScopePaths(col),
       (col) => this.persistMode !== "codeblock" || (!this.isEmbedReadOnly() && canEditEmbeddedColumn(col)),
+      (row, col) => this.executeRecordButton(row, col),
     );
     this.rowMenu = new RowMenu({
       app: this.app,
@@ -412,6 +421,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       get isReadOnly() { return readOnly(); },
       canReorderGroups: true,
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
@@ -438,6 +448,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       get isReadOnly() { return readOnly(); },
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
@@ -462,6 +473,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       renderRecordIcon: (parent, row, config, compact) => this.renderEmbeddedRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.currentDbConfig),
       applyConditionalFormat: (element, row, config, targetField) => applyConditionalFormat(element, row, config, this.currentDbConfig, targetField),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       get isReadOnly() { return readOnly(); },
       get hideCreateEntry() { return shouldHideResultCreateEntryButtons(); },
     });
@@ -511,7 +523,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private syncEmbeddedSelectionBarHorizontalPosition(): void {
     const viewportWidth = Math.max(0, this.containerEl.clientWidth - 16);
-    this.containerEl.querySelectorAll<HTMLElement>(":scope > .db-selection-status-bar:not(.db-embed-history-only)")
+    this.containerEl.querySelectorAll<HTMLElement>(":scope > .db-selection-status-bar")
       .forEach((bar) => {
         // The bar is a direct sticky child of the scroll container; letting
         // sticky own both axes avoids the old summary-relative transform drift.
@@ -529,6 +541,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   onload(): void {
     this.register(installInteractionDiagnostics(this.containerEl, this.instanceId));
+    for (const type of ["pointermove", "pointerdown", "keydown", "wheel", "scroll", "focusout"] as const) {
+      this.registerDomEvent(this.containerEl, type, () => this.resetEmbeddedHistoryNoticeTimer(), { passive: true });
+    }
     // A configuration save started from the same embed must not race a data transaction.
     for (const type of ["pointerdown", "mousedown", "click", "dblclick", "keydown"] as const) {
       this.registerDomEvent(this.containerEl, type, (event) => {
@@ -583,6 +598,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   onunload(): void {
     this.unloaded = true;
+    this.clearEmbeddedHistoryNoticeTimer();
     this.formRenderer.destroy();
     this.closeBulkFieldMenu?.();
     this.cellRenderer.cancelActiveInlineEditor();
@@ -2410,6 +2426,37 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     });
   }
 
+  private showRecordButtonModal(col: ColumnDef): void {
+    if (this.isEmbedReadOnly() || !this.currentDbConfig) return;
+    const previous = JSON.stringify(col.buttonConfig);
+    const db = this.currentDbConfig;
+    new RecordButtonModal(this.app, col, () => this.currentDbConfig?.schema.columns || [], async (button) => {
+      if (this.currentDbConfig?.id !== db.id || this.isEmbedReadOnly()) throw new Error(t("button.configurationChanged"));
+      const ok = await this.dataOperations.changeDatabase(t("button.configure"), (database) => {
+        const live = database.schema.columns.find((candidate) => candidate.key === col.key);
+        if (live?.type !== "button" || JSON.stringify(live.buttonConfig) !== previous) throw new Error(t("button.configurationChanged"));
+        validateRecordButton(button, database.schema.columns);
+        live.buttonConfig = button;
+      });
+      if (!ok) throw new Error(t("button.configurationChanged"));
+    }, () => this.dataSource.getViewDefFiles().map(entry => entry.config), db.id, this.getShowDatabaseIcons()).open();
+  }
+
+  private async executeRecordButton(row: RowData, col: ColumnDef): Promise<void> {
+    if (this.isEmbedReadOnly() || !this.currentDbConfig) return;
+    await withRecordButtonLock(this.dataSource, row.file.path, async () => {
+      const db = this.currentDbConfig;
+      const button = structuredClone(col.buttonConfig);
+      validateRecordButton(button, db?.schema.columns || []);
+      if (!button!.steps && button!.confirm && !await confirmWithModal(this.app, {
+        title: button!.label, message: t("button.confirmMessage", { label: button!.label, name: row.file.basename }), confirmText: t("button.run"),
+      })) return;
+      if (this.isEmbedReadOnly() || this.currentDbConfig !== db) return;
+      const ok = await this.dataOperations.runButton(row.file.path, col.key, button!, async plan => await confirmWithModal(this.app, { title: button!.label, message: plan.summary, confirmText: t("button.run") }) === true);
+      if (ok) new Notice(t(this.rows.some((candidate) => candidate.file.path === row.file.path) ? "button.completed" : "button.leftView", { label: button!.label }));
+    });
+  }
+
   private showEmbeddedRelationRollupModal(col: ColumnDef, _restoreFocusRow?: RowData): void {
     if (this.isEmbedReadOnly() || !this.currentDbConfig || (col.type !== "relation" && col.type !== "rollup")) return;
     const databases = this.dataSource.getViewDefFiles().map((entry) => entry.config);
@@ -2492,6 +2539,19 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       editColumn: unsupported,
       editFormula: (column) => this.showEmbeddedFormulaModal(column),
       editRelationRollup: (column) => this.showEmbeddedRelationRollupModal(column),
+      editButton: (column) => this.showRecordButtonModal(column),
+      setButtonIcon: (column, icon) => {
+        if (!updateRecordButtonIcon(column, icon)) return;
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config);
+        this.saveEmbeddedConfigInBackground(this.getCurrentDatabaseMutationTarget());
+      },
+      setButtonStyle: (column, style) => {
+        if (!updateRecordButtonStyle(column, style)) return;
+        this.persistEmbeddedConfigLocally(config);
+        this.renderResults(config);
+        this.saveEmbeddedConfigInBackground(this.getCurrentDatabaseMutationTarget());
+      },
       editStatusOptions: unsupported,
       showOptionsEditor: unsupported, changeColumnType: unsupported,
       insertColumn: unsupported, duplicateColumn: unsupported, moveColumn: unsupported,
@@ -2594,6 +2654,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
   }
 
   private sortByColumn(col: ColumnDef): void {
+    if (col.type === "button") return;
     const config = this.config;
     if (!config) return;
     const state = this.vs(config);
@@ -3189,6 +3250,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private refreshAfterDataOperation(): void {
     if (this.unloaded || !this.containerEl.isConnected) return;
+    this.embeddedHistoryNoticeVisible = this.dataOperations.canUndo || this.dataOperations.canRedo;
+    this.resetEmbeddedHistoryNoticeTimer();
     try {
       const entry = this.dataSource.getViewDefFiles().find(({ file }) => file.path === this.currentSourcePath);
       const view = entry?.config.views.find((candidate) => candidate.id === this.config?.id);
@@ -3577,7 +3640,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       new Notice(t("errors.noDataExport"));
       return;
     }
-    const visibleColumns = getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns);
+    const visibleColumns = getVisibleColumns(config, this.rows, this.vs(config), this.pendingShowColumns).filter((col) => col.type !== "button");
     if (visibleColumns.length === 0) {
       new Notice(t("errors.noVisibleColumns"));
       return;
@@ -3934,6 +3997,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       sourceCol.numberDisplayStyle = col.numberDisplayStyle;
       sourceCol.numberDisplayConfig = col.numberDisplayConfig;
       sourceCol.textRenderMode = col.textRenderMode;
+      if (col.type === "button" && col.buttonConfig) updateRecordButtonIcon(sourceCol, col.buttonConfig.icon);
+      if (col.type === "button" && col.buttonConfig?.style) updateRecordButtonStyle(sourceCol, col.buttonConfig.style);
     }
     this.stateStore.persist(origView, this.vs(this.config));
   }
@@ -4231,7 +4296,31 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     });
   }
 
-  /** History remains accessible after an edit filters the selected records out of the view. */
+  private clearEmbeddedHistoryNoticeTimer(): void {
+    if (this.embeddedHistoryNoticeTimer !== null) {
+      this.getRefreshWindow().clearTimeout(this.embeddedHistoryNoticeTimer);
+      this.embeddedHistoryNoticeTimer = null;
+    }
+  }
+
+  private resetEmbeddedHistoryNoticeTimer(): void {
+    this.clearEmbeddedHistoryNoticeTimer();
+    if (this.unloaded || !this.embeddedHistoryNoticeVisible || this.dataOperations.busy) return;
+    this.embeddedHistoryNoticeTimer = this.getRefreshWindow().setTimeout(() => {
+      this.embeddedHistoryNoticeTimer = null;
+      // Do not remove an undo/redo control while a keyboard user is using it.
+      const bar = this.containerEl.querySelector<HTMLElement>(":scope > .db-embed-history-only");
+      if (bar?.contains(this.containerEl.ownerDocument.activeElement)) {
+        this.resetEmbeddedHistoryNoticeTimer();
+        return;
+      }
+      this.embeddedHistoryNoticeVisible = false;
+      // The selection toolbar and any editor anchored to it are not transient.
+      if (!this.cellSelection && this.selectedRows.size === 0) this.renderEmbedSelectionStatusBar();
+    }, 5_000);
+  }
+
+  /** History stays in the session after the transient notice disappears. */
   private renderEmbeddedHistoryActions(bar: HTMLElement): void {
     if (this.isEmbedReadOnly()) return;
     if (this.dataOperations.canUndo) {
@@ -4295,8 +4384,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       this.cellSelection = null;
       this.isSelectingCells = false;
     }
-    const hasHistory = !this.isEmbedReadOnly() && (this.dataOperations.canUndo || this.dataOperations.canRedo);
-    this.containerEl.toggleClass("has-selection-status", !!this.cellSelection || this.selectedRows.size > 0);
+    const hasHistory = !this.isEmbedReadOnly() && this.embeddedHistoryNoticeVisible &&
+      (this.dataOperations.canUndo || this.dataOperations.canRedo);
+    this.containerEl.toggleClass("has-selection-status", !!this.cellSelection || this.selectedRows.size > 0 || hasHistory);
     if (!this.cellSelection && (this.selectedRows.size > 0 || hasHistory)) {
       const bar = this.containerEl.createDiv({ cls: "db-selection-status-bar" });
       bar.toggleClass("db-embed-history-only", this.selectedRows.size === 0);

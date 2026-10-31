@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getEffectiveLocale, setLocale, t, type LocaleCode } from "../i18n";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -38,20 +39,19 @@ describe("collectChangelogNotes", () => {
   });
 
   it("from 为空（首次安装无记录）：只弹当前版本；from 极旧：收录全部（需求场景）", () => {
-    expect(collectChangelogNotes(undefined, "1.3.2", "en")).toHaveLength(1);
-    expect(collectChangelogNotes("", "1.3.2", "en")).toHaveLength(1);
+    expect(collectChangelogNotes(undefined, "1.3.3", "en")).toHaveLength(1);
+    expect(collectChangelogNotes("", "1.3.3", "en")).toHaveLength(1);
     // 从 1.0.0 一路升上来：期间所有已收录版本全部展示。
-    expect(collectChangelogNotes("1.0.0", "1.3.2", "en")).toHaveLength(RELEASE_NOTES.length);
+    expect(collectChangelogNotes("1.0.0", "1.3.3", "en")).toHaveLength(RELEASE_NOTES.length);
   });
 
   it("to 尚无文案（开发版）：回落 <= to 的最近一条，保持弹窗总有内容", () => {
-    const notes = collectChangelogNotes("1.3.2", "1.3.3", "en");
+    const notes = collectChangelogNotes("1.3.3", "1.3.4", "en");
     expect(notes).toHaveLength(1);
-    expect(notes[0]).toContain("1.3.2");
+    expect(notes[0]).toContain("1.3.3");
   });
 
-  it("system locale 回落 en；三语言文案齐备且数据按版本倒序", () => {
-    expect(collectChangelogNotes("1.2.9", "1.3.0", "system")[0]).toContain("What");
+  it("三语言文案齐备且数据按版本倒序", () => {
     for (let index = 0; index < RELEASE_NOTES.length; index += 1) {
       const entry = RELEASE_NOTES[index];
       expect(entry.notes.en).toContain("##");
@@ -61,6 +61,7 @@ describe("collectChangelogNotes", () => {
         expect(compareVersions(entry.version, RELEASE_NOTES[index - 1].version)).toBe(-1);
       }
     }
+    expect(RELEASE_NOTES[0].version).toBe("1.3.3");
     expect(RELEASE_NOTES.some((entry) => entry.version === "1.3.0")).toBe(true);
   });
 
@@ -77,6 +78,35 @@ describe("collectChangelogNotes", () => {
 });
 
 describe("buildChangelogMarkdown", () => {
+  afterEach(() => {
+    setLocale("system");
+    vi.unstubAllGlobals();
+  });
+
+  it.each<[LocaleCode, string, string, string]>([
+    ["system", "zh-CN", "en-US", "更新内容"],
+    ["system", "zh-TW", "en-US", "更新內容"],
+    ["system", "zh-HK", "en-US", "更新內容"],
+    ["system", "zh-Hant", "en-US", "更新內容"],
+    ["system", "", "zh-CN", "更新内容"],
+    ["system", "en", "zh-CN", "What's new"],
+    ["system", "fr", "fr-FR", "What's new"],
+    ["zh-CN", "en", "en-US", "更新内容"],
+    ["zh-TW", "en", "en-US", "更新內容"],
+    ["en", "zh-CN", "zh-CN", "What's new"],
+  ])("插件语言 %s、文档语言 %s、浏览器语言 %s 的更新日志与界面一致", (preference, documentLanguage, browserLanguage, heading) => {
+    vi.stubGlobal("window", { activeDocument: { documentElement: { lang: documentLanguage } } });
+    vi.stubGlobal("navigator", { language: browserLanguage });
+    setLocale(preference);
+    const locale = getEffectiveLocale();
+    const markdown = buildChangelogMarkdown("1.3.0", "1.3.2", locale);
+    expect(markdown).toContain(`## ${heading === "What's new" ? "What's new in 1.3.2" : `1.3.2 ${heading}`}`);
+    expect(markdown).toContain(`## ${heading === "What's new" ? "What's new in 1.3.1" : `1.3.1 ${heading}`}`);
+    expect(t("changelog.viewPluginPage")).toBe(locale === "zh-CN"
+      ? "前往社区插件页查看完整功能介绍 →"
+      : locale === "zh-TW" ? "前往社群外掛頁查看完整功能介紹 →" : "View the full feature overview in Community plugins →");
+  });
+
   it("多版本用分隔线拼接；单版本即原文", () => {
     const markdown = buildChangelogMarkdown("1.2.5", "1.3.0", "en");
     expect(markdown).toContain("\n\n---\n\n");
@@ -89,7 +119,7 @@ describe("main.ts 接线（源码断言）", () => {
   it("捕获旧版本在落盘之前；渲染区间文案；i18n 单版本键已迁移删除", () => {
     const main = readFileSync(join(__dirname, "..", "main.ts"), "utf8");
     expect(main).toContain("const previousVersion = this.settings.lastChangelogVersion || undefined;");
-    expect(main).toContain("buildChangelogMarkdown(previousVersion, this.manifest.version, getLocale())");
+    expect(main).toContain("buildChangelogMarkdown(previousVersion, this.manifest.version, getEffectiveLocale())");
     const capture = main.indexOf("const previousVersion =");
     const write = main.indexOf("this.settings.lastChangelogVersion = this.manifest.version;");
     expect(capture).toBeLessThan(write);

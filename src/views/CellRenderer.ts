@@ -1,3 +1,4 @@
+import { renderRecordButton, type RunRecordButton } from "./RecordButtonRenderer";
 import { App, Notice, Platform, setIcon, setTooltip } from "obsidian";
 import {
   getColumnOptions,
@@ -102,6 +103,7 @@ export class CellRenderer {
     private editRelationRollup?: (col: ColumnDef, row: RowData) => void,
     private getRelationScopePaths?: (col: ColumnDef) => ReadonlySet<string> | undefined,
     private canEditColumn?: (col: ColumnDef) => boolean,
+    private runRecordButton?: RunRecordButton,
   ) {}
 
   setReadOnly(value: boolean): void {
@@ -122,6 +124,10 @@ export class CellRenderer {
 
   renderCell(td: HTMLElement, row: RowData, col: ColumnDef): void {
     td.addClass("db-cell");
+    if (col.type === "button") {
+      renderRecordButton(td, row, col, this.runRecordButton, this.isReadOnly);
+      return;
+    }
     if (col.wrap) td.addClass("db-cell-wrap");
     let value: unknown;
 
@@ -312,7 +318,7 @@ export class CellRenderer {
 
   private isEditableCellColumn(col: ColumnDef): boolean {
     if (!this.isColumnAllowed(col)) return false;
-    if (col.type === "computed" || col.type === "rollup") return false;
+    if (col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
     if (!isFileFieldKey(col.key)) return true;
     return col.key === "file.tags" || col.key === "file.name";
   }
@@ -466,6 +472,7 @@ export class CellRenderer {
     session?: CellEditSession,
     checkboxFinishIntent: TableCellNavigationIntent = "down",
   ): void {
+    if (col.type === "button") return;
     if (this.isReadOnly || (this.canEditColumn && !this.canEditColumn(col))) return;
     if (isReadonlyFileField(col.key)) {
       new Notice(t("fileField.readonly", { label: col.label || col.key }));

@@ -1,3 +1,6 @@
+import { prepareButtonWorkflow, type ButtonWorkflowPlan } from "../data/RecordButtonWorkflow";
+import { prepareRecordButton } from "../data/RecordButtonExecution";
+import type { RecordButtonConfig } from "../data/types";
 import { App, Notice, TFile } from "obsidian";
 import { t } from "../i18n";
 import { DataSource } from "../data/DataSource";
@@ -64,19 +67,23 @@ export class EmbeddedDataOperations {
       if (path && ref) this.assertRef(path, ref);
     };
   }
-  private async run(label: string, prepare: (ctx: EmbeddedOperationContext) => Promise<ReversibleDataStep[]>): Promise<boolean> {
+  private async run(label: string, prepare: (ctx: EmbeddedOperationContext) => Promise<ReversibleDataStep[]>, afterCommit?: () => Promise<void>): Promise<boolean> {
     const ctx = this.context();
     if (!ctx || !this.writable()) return false;
     this.active++;
     this.busyChanged(true);
     try {
-      return await this.history(ctx.path).perform(label, async () => {
+      const changed = await this.history(ctx.path).perform(label, async () => {
         await this.beforePrepare();
         this.assertContext(ctx);
         const steps = await prepare(ctx);
         this.assertContext(ctx);
         return steps;
       });
+      if (afterCommit) {
+        try { await afterCommit(); } catch (error) { new Notice(t("button.workflow.openFailed", { error: String(error) })); }
+      }
+      return changed || !!afterCommit;
     } catch (error) {
       console.error("Note Database: embedded data operation failed", error);
       new Notice(t("errors.updateFailed", { error: String(error) }));
@@ -149,6 +156,27 @@ export class EmbeddedDataOperations {
       ref.file = file;
       if (file) this.refs.set(file, ref);
     } };
+  }
+
+  async runButton(path: string, key: string, expected: RecordButtonConfig, confirm?: (plan: ButtonWorkflowPlan) => Promise<boolean>): Promise<boolean> {
+    let workflow: ButtonWorkflowPlan | undefined;
+    const ok = await this.run(expected.label, async (ctx) => {
+      const snapshot = await this.data.readViewDefSnapshot(ctx.path);
+      const db = snapshot.typedConfig;
+      const column = db.schema.columns.find((candidate) => candidate.key === key);
+      if (db.id !== ctx.dbId || column?.type !== "button" || !configsDeepEqual(column.buttonConfig, expected)) throw new Error(t("button.configurationChanged"));
+      if (expected.steps) {
+        workflow = await prepareButtonWorkflow(this.app, this.data, db, path, expected, this.sourceInstanceId, () => this.assertContext(ctx));
+        if (workflow.requiresConfirmation && (!confirm || !await confirm(workflow))) { workflow = undefined; return []; }
+        await workflow.verify(); return workflow.steps;
+      }
+      const ref = this.getRef(path);
+      const prepared = await prepareRecordButton(this.data, path, expected, db.schema.columns);
+      this.assertRef(path, ref);
+      if (!Object.keys(prepared.writes).length) { new Notice(t("button.noChanges")); return []; }
+      return [this.snapshotsStep(ctx, path, ref, prepared.before, prepared.after)];
+    }, expected.steps ? async () => { if (workflow) await workflow.open(); } : undefined);
+    return ok && (!expected.steps || !!workflow);
   }
 
   edit(path: string, updates: Record<string, unknown>, label = t("undo.editCell")): Promise<boolean> {

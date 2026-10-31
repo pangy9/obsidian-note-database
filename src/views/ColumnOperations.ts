@@ -149,7 +149,7 @@ export class ColumnOperations {
     if (!oldIsFileField && newIsFileField && result.migrateValues) {
       new Notice(t("fileField.migrationIgnored", { key: newKey }));
     }
-    const useFrontmatterMigration = !oldIsFileField && !newIsFileField && !isRollup;
+    const useFrontmatterMigration = !oldIsFileField && !newIsFileField && !isRollup && targetCol.type !== "button";
     const displayOnly = this.isDisplayOnlyComputedSync();
     const renameSavedComputedProperty = useFrontmatterMigration && isComputed && !displayOnly && oldComputedKey !== newComputedKey
       ? !!await confirmWithModal(this.deps.app, {
@@ -346,7 +346,7 @@ export class ColumnOperations {
     const isComputed = targetCol.type === "computed";
     const isRollup = targetCol.type === "rollup";
     const isFileField = isFileFieldKey(targetCol.key);
-    const isVirtualField = isFileField || targetCol.key === "aliases";
+    const isVirtualField = isFileField || targetCol.key === "aliases" || targetCol.type === "button";
     const propertyKey = getComputedStorageKey(targetCol);
     const displayOnly = this.isDisplayOnlyComputedSync();
     if (isComputed) {
@@ -729,12 +729,12 @@ export class ColumnOperations {
       // computed/rollup are virtual (no frontmatter key) — getEnsureKeyChanges
       // already returns [] for them, so skip propertySync.ensure too, otherwise it
       // writes a default value to every file unconditionally.
-      if (type !== "computed" && type !== "rollup") {
+      if (type !== "computed" && type !== "rollup" && type !== "button") {
         await this.propertySync.ensure(config, newCol);
       }
       await this.deps.refreshAfterSave();
       this.deps.refreshSchemaChanged({ preserveViewport: true });
-      new Notice(t("column.addedProperty", { prefix: t("column.addedColumn"), key, count: changes.length }));
+      new Notice(type === "button" ? t("button.added", { label: newCol.label }) : t("column.addedProperty", { prefix: t("column.addedColumn"), key, count: changes.length }));
       return newCol;
     } catch (err) {
       for (const change of changes) {
@@ -762,6 +762,7 @@ export class ColumnOperations {
       col.statusOptions = type === "status" ? this.deps.getDefaultStatusOptions() : [];
       col.statusPresetId = type === "status" ? this.deps.getDefaultStatusPresetId() : undefined;
     }
+    if (type === "button") col.buttonConfig = { label, icon: "mouse-pointer-2", style: "default", actions: [] };
     if (type === "computed") col.computedKey = key;
     if (type === "relation") col.relationConfig = { targetDatabaseId: this.deps.getActiveDb().id };
     if (type === "rollup") {
@@ -788,6 +789,7 @@ export class ColumnOperations {
       computedKey: col.type === "computed" ? copyKey : col.computedKey,
       relationConfig: col.relationConfig ? { ...col.relationConfig } : undefined,
       rollupConfig: col.rollupConfig ? { ...col.rollupConfig } : undefined,
+      buttonConfig: col.buttonConfig ? structuredClone(col.buttonConfig) : undefined,
     };
     const schemaIndex = config.schema.columns.findIndex((candidate) => candidate.key === col.key);
     config.schema.columns.splice(schemaIndex < 0 ? config.schema.columns.length : schemaIndex + 1, 0, copy);
@@ -804,7 +806,7 @@ export class ColumnOperations {
       });
     }
     this.deps.markPendingColumn(copyKey);
-    const frontmatterChanges = col.type === "computed" || col.type === "rollup"
+    const frontmatterChanges = col.type === "computed" || col.type === "rollup" || col.type === "button"
       ? []
       : this.getCopyKeyChanges(config, col.key, copyKey);
 
@@ -814,7 +816,7 @@ export class ColumnOperations {
       await this.deps.saveConfigImmediately();
       this.deps.refreshSchemaChanged();
       let changed = 0;
-      if (col.type !== "computed" && col.type !== "rollup") {
+      if (col.type !== "computed" && col.type !== "rollup" && col.type !== "button") {
         changed = (await this.propertySync.copy(config, col.key, copyKey)).changed;
       }
       await this.deps.refreshAfterSave();
@@ -1100,7 +1102,7 @@ export class ColumnOperations {
   }
 
   private getEnsureKeyChanges(config: ViewConfig, col: ColumnDef): FrontmatterValueChange[] {
-    if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup") return [];
+    if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup" || col.type === "button") return [];
     const defaultValue = this.deps.propertyService.getDefaultValue(col);
     return this.getRecords(config)
       .filter((record) => !Object.prototype.hasOwnProperty.call(record.frontmatter, col.key))

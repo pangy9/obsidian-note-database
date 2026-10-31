@@ -25,7 +25,7 @@ import {
   MutablePropertyTypeConflictEntry,
 } from "./views/PropertyTypeConflictWorkflow";
 import { collectComputedFieldSamples, collectFileFrontmatterKeys, inferColumnType, getVaultTags, collectUniqueListValues, collectUniqueStringValues } from "./data/FrontmatterScanner";
-import { setLocale, t, getLocale } from "./i18n";
+import { setLocale, t, getEffectiveLocale } from "./i18n";
 import { absorbTypeFilterIntoRules, combineSourceRuleTrees, getPositiveSourceRules, getRequiredSourceRules, isSourceRuleGroup } from "./data/SourceRules";
 import { refreshVaultPropertyCache } from "./data/VaultProperties";
 import { BASE_FILE_FIELD_KEYS, getFileFieldFixedType, isBaseFileField, isFileFieldKey, isReadonlyFileField } from "./data/FileFields";
@@ -382,7 +382,8 @@ export default class NoteDatabasePlugin extends Plugin {
         () => this.saveSettings(),
         "codeblock",
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
-        this.settings.embeddedDatabaseReadOnly !== false
+        this.settings.embeddedDatabaseReadOnly !== false,
+        () => this.settings.showDatabaseIcon !== false
       ));
     });
     this.registerMarkdownCodeBlockProcessor("database-view", (source, el, ctx) => {
@@ -397,7 +398,8 @@ export default class NoteDatabasePlugin extends Plugin {
         () => this.saveSettings(),
         "codeblock",
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
-        this.settings.embeddedDatabaseReadOnly !== false
+        this.settings.embeddedDatabaseReadOnly !== false,
+        () => this.settings.showDatabaseIcon !== false
       ));
     });
     window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
@@ -422,7 +424,7 @@ export default class NoteDatabasePlugin extends Plugin {
       attr: { href: "obsidian://show-plugin?id=note-database" },
     });
     modal.open();
-    const changelogMarkdown = buildChangelogMarkdown(previousVersion, this.manifest.version, getLocale());
+    const changelogMarkdown = buildChangelogMarkdown(previousVersion, this.manifest.version, getEffectiveLocale());
     void MarkdownRenderer.render(this.app, changelogMarkdown, notesEl, "", component);
   }
 

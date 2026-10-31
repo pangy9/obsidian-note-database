@@ -1,3 +1,9 @@
+import { prepareButtonWorkflow } from "../data/RecordButtonWorkflow";
+import { DataHistoryFailure, executeDataSteps, type ReversibleDataStep } from "../data/EmbeddedDataHistory";
+import { prepareRecordButton } from "../data/RecordButtonExecution";
+import { RecordButtonModal } from "./modals/RecordButtonModal";
+import { isRecordButtonRunning, withRecordButtonLock } from "./RecordButtonRenderer";
+import { validateRecordButton, updateRecordButtonStyle, updateRecordButtonIcon } from "../data/RecordButton";
 import { App, FileView, Menu, Scope, WorkspaceLeaf, Notice, Platform, TFile, normalizePath, stringifyYaml, setIcon } from "obsidian";
 import { DataChangeBatch, DataSource, NoteRecord, ViewConfigMutation } from "../data/DataSource";
 import { RefreshCoordinator } from "../data/RefreshCoordinator";
@@ -12,6 +18,7 @@ import { applyRangeSelection } from "../data/RangeSelection";
 import { installNoteHoverPreview } from "./HoverLinkPreview";
 import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 import { resolveViewSelection } from "../data/ViewSelection";
+import { headerCollapseStorageKey, loadHeaderCollapseState } from "./HeaderCollapseControls";
 import {
   ensureColumnOrder,
   getColumnsInOrder,
@@ -80,7 +87,7 @@ import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { ColumnOperations, FrontmatterValueChange } from "./ColumnOperations";
 import { DataSourceTransactionWriter } from "../data/DataSourceTransactionWriter";
 import { executeRenameTransaction, rebaseRenameHistoryForUndo } from "../data/RenameTransaction";
-import type { RenameHistoryEntry, RenamePlan } from "../data/RenameTransaction";
+import type { FrontmatterKeySnapshot, FrontmatterWrite, RenameHistoryEntry, RenamePlan } from "../data/RenameTransaction";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
@@ -276,6 +283,15 @@ interface PreparedBulkEdit {
   changes: CellEditChange[];
 }
 
+interface ButtonHistoryEntry {
+  type: "button";
+  label: string;
+  file: TFile;
+  path: string;
+  before: Record<string, FrontmatterKeySnapshot>;
+  after: Record<string, FrontmatterKeySnapshot>;
+}
+
 interface CellHistoryEntry {
   type: "cells";
   label: string;
@@ -313,7 +329,8 @@ interface PendingCellCut {
   clipboardText: string;
 }
 
-type HistoryEntry = CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry | RenameHistoryEntry;
+interface WorkflowHistoryEntry { type: "workflow"; label: string; steps: ReversibleDataStep[] }
+type HistoryEntry = WorkflowHistoryEntry | ButtonHistoryEntry | CellHistoryEntry | ConfigHistoryEntry | CreatedHistoryEntry | RenameHistoryEntry;
 
 interface ViewEntry {
   config: DatabaseConfig;
@@ -449,6 +466,7 @@ export class DatabaseView extends FileView {
   private pendingConfigCellChanges: CellEditChange[] | null = null;
   private optionTransactionQueue = Promise.resolve();
   private applyingHistory = false;
+  private buttonHistoryDamaged = false;
   private pendingUndoLabel: string | null = null;
   private undoActionEl?: HTMLElement;
   private viewStateStore = new ViewStateStore();
@@ -542,6 +560,8 @@ export class DatabaseView extends FileView {
       this.instanceId,
       (col, row) => this.showRelationRollupConfigModal(col, row),
       (col) => this.getRelationScopePaths(col),
+      undefined,
+      (row, col) => this.executeRecordButton(row, col),
     );
     this.columnOperations = new ColumnOperations({
       app: this.app,
@@ -673,6 +693,7 @@ export class DatabaseView extends FileView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
@@ -702,6 +723,7 @@ export class DatabaseView extends FileView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
@@ -730,6 +752,7 @@ export class DatabaseView extends FileView {
       showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, {
         includeWidthActions: false,
       }),
+      runRecordButton: (row, col) => this.executeRecordButton(row, col),
       editFormula: (col) => this.showFormulaModal(col),
       renderRecordIcon: (parent, row, config, compact) => this.renderRowRecordIcon(parent, row, config, compact),
       renderGroupSummaries: (parent, rows, config) => this.summaryRenderer.renderGroupItems(parent, rows, config, this.getActiveDb()),
@@ -740,6 +763,17 @@ export class DatabaseView extends FileView {
       editColumn: (col) => this.showColumnRenameModal(col),
       editFormula: (col) => this.showFormulaModal(col),
       editRelationRollup: (col) => this.showRelationRollupConfigModal(col),
+      editButton: (col) => this.showRecordButtonModal(col),
+      setButtonIcon: (col, icon) => {
+        if (!updateRecordButtonIcon(col, icon)) return;
+        this.pendingUndoLabel = t("menu.buttonIcon");
+        this.scheduleConfigSave(undefined, this.getCurrentDatabaseMutationTarget()); this.renderColumnManager(); this.refresh();
+      },
+      setButtonStyle: (col, style) => {
+        if (!updateRecordButtonStyle(col, style)) return;
+        this.pendingUndoLabel = t("menu.buttonStyle");
+        this.scheduleConfigSave(undefined, this.getCurrentDatabaseMutationTarget()); this.renderColumnManager(); this.refresh();
+      },
       editStatusOptions: (col) => this.showStatusOptionsModal(col),
       showOptionsEditor: (col) => this.showStatusOptionsModal(col),
       changeColumnType: (col, type) => { void this.changeColumnType(col, type); },
@@ -1104,7 +1138,7 @@ export class DatabaseView extends FileView {
       const viewState = this.viewStateStore.get(this.currentDbIndex, entry.index, view);
       const viewRows = this.getRowsForView(entry.index);
       const visibleColumns = getVisibleColumns(view, viewRows, viewState, this.pendingShowColumns)
-        .filter((col) => col.key !== "file.name");
+        .filter((col) => col.key !== "file.name" && col.type !== "button");
       for (const col of visibleColumns) {
         if (seenColumnKeys.has(col.key)) continue;
         seenColumnKeys.add(col.key);
@@ -1142,7 +1176,7 @@ export class DatabaseView extends FileView {
     // Schema CSV: property name, key, type
     const schemaHeaders = ["Property", "Key", "Type"];
     const schemaRows = [schemaHeaders.join(",")];
-    for (const col of db.schema.columns) {
+    for (const col of db.schema.columns.filter((col) => col.type !== "button")) {
       schemaRows.push([col.label || col.key, col.key, col.type].map((v) => this.csvEscape(v)).join(","));
     }
     entries.push({ path: `${baseName}/${baseName}_schema.csv`, content: schemaRows.join("\n") });
@@ -2003,7 +2037,18 @@ export class DatabaseView extends FileView {
     const currentConfig = this.getConfig();
     this.activeRulePopoverRenderer.close();
     const needsSetup = !currentConfig?.schema?.columns || currentConfig.schema.columns.length < 2;
+    const database = this.getActiveDb();
+    const collapseKey = headerCollapseStorageKey(this.app.vault.adapter.getResourcePath(""), database?.id || this.viewEntries[this.currentDbIndex].sourcePath);
+    const collapseStorage = this.containerEl_.ownerDocument.defaultView?.localStorage;
     this.toolbarRenderer.render(this.containerEl_, this.viewEntries, this.currentDbIndex, this.currentViewIndex, this.vs(), {
+      headerCollapse: {
+        state: collapseStorage ? loadHeaderCollapseState(collapseStorage, collapseKey) : { description: false },
+        onChange: (state) => {
+          collapseStorage?.setItem(collapseKey, JSON.stringify(state));
+          this.closeHeaderPopovers();
+          this.updateStickyOffsets();
+        },
+      },
       selectDatabase: (index) => this.selectView(index),
       moveDatabase: (fromIndex, toIndex) => this.moveDatabase(fromIndex, toIndex),
       getDatabasePopoverState: () => ({ viewEntries: this.viewEntries, currentDbIndex: this.currentDbIndex }),
@@ -3624,7 +3669,7 @@ export class DatabaseView extends FileView {
       new Notice(t("errors.noDataExport"));
       return;
     }
-    const visibleColumns = getVisibleColumns(config, rows, state, active ? this.pendingShowColumns : new Set());
+    const visibleColumns = getVisibleColumns(config, rows, state, active ? this.pendingShowColumns : new Set()).filter((col) => col.type !== "button");
     if (visibleColumns.length === 0) {
       new Notice(t("errors.noVisibleColumns"));
       return;
@@ -4177,7 +4222,7 @@ export class DatabaseView extends FileView {
     const intentionalContextKeys = new Set(Object.keys(explicitDefaults));
     const contextFrontmatter: Record<string, unknown> = {};
     for (const col of config.schema.columns) {
-      if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup") continue;
+      if (isFileFieldKey(col.key) || col.type === "computed" || col.type === "rollup" || col.type === "button") continue;
       contextFrontmatter[col.key] = col.type === "status" && !col.statusOptions?.length
         ? this.getDefaultStatusOptions(database, config)[0]?.value || ""
         : getColumnDefaultCellValue(col);
@@ -5490,15 +5535,87 @@ export class DatabaseView extends FileView {
         rollbackReference: options.rollbackReference,
       },
     );
-    if (col && (col.type === "computed" || col.type === "relation" || col.type === "rollup")) {
+    if (col && (col.type === "computed" || col.type === "relation" || col.type === "rollup" || col.type === "button")) {
       this.openAdvancedColumnConfig(col);
     }
     return col;
   }
 
   private openAdvancedColumnConfig(col: ColumnDef): void {
-    if (col.type === "computed") this.showFormulaModal(col);
+    if (col.type === "button") this.showRecordButtonModal(col);
+    else if (col.type === "computed") this.showFormulaModal(col);
     else if (col.type === "relation" || col.type === "rollup") this.showRelationRollupConfigModal(col);
+  }
+
+  private showRecordButtonModal(col: ColumnDef): void {
+    const db = this.getActiveDb();
+    const previous = JSON.stringify(col.buttonConfig);
+    new RecordButtonModal(this.app, col, () => db.schema.columns, async (button) => {
+      const live = this.getActiveDb()?.schema.columns.find((candidate) => candidate.key === col.key);
+      if (this.getActiveDb() !== db || live?.type !== "button" || JSON.stringify(live.buttonConfig) !== previous) throw new Error(t("button.configurationChanged"));
+      validateRecordButton(button, db.schema.columns);
+      const before = live.buttonConfig;
+      live.buttonConfig = button;
+      this.pendingUndoLabel = t("button.configure");
+      try { await this.saveConfigImmediately(); }
+      catch (error) { live.buttonConfig = before; throw error; }
+      await this.refreshAfterSave();
+    }, () => this.dataSource.getViewDefFiles().map(entry => entry.config), db.id, getNoteDatabasePlugin(this.app)?.settings.showDatabaseIcon !== false).open();
+  }
+
+  private async executeWorkflowSteps(steps: ReversibleDataStep[], direction: "forward" | "reverse"): Promise<void> {
+    if (this.buttonHistoryDamaged) throw new Error(t("button.workflow.historyBlocked"));
+    try { await executeDataSteps(steps, direction); }
+    catch (error) {
+      if (error instanceof DataHistoryFailure && error.compensationErrors.length) this.buttonHistoryDamaged = true;
+      throw error;
+    }
+  }
+
+  private async executeRecordButton(row: RowData, col: ColumnDef): Promise<void> {
+    if (this.buttonHistoryDamaged) throw new Error(t("button.workflow.historyBlocked"));
+    await withRecordButtonLock(this.dataSource, row.file.path, async () => {
+      const db = this.getActiveDb();
+      const live = db.schema.columns.find((candidate) => candidate.key === col.key);
+      if (live?.type !== "button") throw new Error(t("button.configurationChanged"));
+      validateRecordButton(live.buttonConfig, db.schema.columns);
+      const button = structuredClone(live.buttonConfig!);
+      const schema = JSON.stringify(db.schema.columns);
+      const path = row.file.path;
+      const assertCurrent = (): void => {
+        if (this.getActiveDb() !== db || JSON.stringify(db.schema.columns) !== schema ||
+            this.app.vault.getAbstractFileByPath(path) !== row.file || this.applyingHistory) throw new Error(t("button.configurationChanged"));
+      };
+      if (button.steps) {
+        await this.saveConfigImmediately();
+        assertCurrent();
+        const plan = await prepareButtonWorkflow(this.app, this.dataSource, db, path, button, this.instanceId, () => {
+          if (this.getActiveDb()?.id !== db.id) throw new Error(t("button.configurationChanged"));
+        });
+        if (plan.requiresConfirmation && await confirmWithModal(this.app, { title: button.label, message: plan.summary, confirmText: t("button.run") }) !== true) return;
+        assertCurrent(); await plan.verify();
+        this.suppressDataReload(1200);
+        await this.executeWorkflowSteps(plan.steps, "forward");
+        if (plan.steps.length) this.pushHistory({ type: "workflow", label: button.label, steps: plan.steps });
+        await this.refreshAfterSave(); this.rerenderToolbar();
+        new Notice(t("button.completed", { label: button.label }));
+        try { await plan.open(); } catch (error) { new Notice(t("button.workflow.openFailed", { error: String(error) })); }
+        return;
+      }
+      if (button.confirm && !await confirmWithModal(this.app, {
+        title: button.label, message: t("button.confirmMessage", { label: button.label, name: row.file.basename }), confirmText: t("button.run"),
+      })) return;
+      assertCurrent();
+      const prepared = await prepareRecordButton(this.dataSource, path, button, db.schema.columns);
+      assertCurrent();
+      if (!Object.keys(prepared.writes).length) { new Notice(t("button.noChanges")); return; }
+      this.suppressDataReload(1200);
+      await this.dataSource.patchFrontmatter(path, prepared.before, prepared.writes, assertCurrent);
+      this.pushHistory({ type: "button", label: button.label, file: row.file, path, before: prepared.before, after: prepared.after });
+      await this.refreshAfterSave();
+      this.rerenderToolbar();
+      new Notice(t(this.rows.some((candidate) => candidate.file.path === path) ? "button.completed" : "button.leftView", { label: button.label }));
+    });
   }
 
   private showRelationRollupConfigModal(col: ColumnDef, restoreFocusRow?: RowData): void {
@@ -6270,6 +6387,7 @@ export class DatabaseView extends FileView {
   }
 
   private async changeColumnType(col: ColumnDef, type: ColumnDef["type"]): Promise<void> {
+    if (col.type === "button" || type === "button") { new Notice(t("button.createSeparate")); return; }
     if (type === "relation" || type === "rollup") {
       if (
         type === "rollup" &&
@@ -6598,12 +6716,12 @@ export class DatabaseView extends FileView {
       return true;
     }
     const col = config.schema.columns.find((candidate) => candidate.key === change.key);
-    if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed" || col.type === "rollup") return false;
+    if (!col || !isColumnType(change.type) || col.type === change.type || col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
     return this.applyColumnTypeToColumn(col, change.type);
   }
 
   private applyColumnTypeToColumn(col: ColumnDef, type: ColumnDef["type"]): boolean {
-    if (col.type === type || col.type === "computed" || col.type === "rollup") return false;
+    if (col.type === type || col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
     col.type = type;
     if (isOptionColumnType(type)) {
       if (!col.statusOptions?.length) {
@@ -8380,7 +8498,7 @@ export class DatabaseView extends FileView {
   }
 
   private canFillColumn(col: ColumnDef): boolean {
-    if (col.type === "computed" || col.type === "rollup") return false;
+    if (col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
     if (!isFileFieldKey(col.key)) return true;
     return col.key === "file.tags";
   }
@@ -9787,6 +9905,8 @@ export class DatabaseView extends FileView {
   }
 
   private async replayHistory(direction: "undo" | "redo"): Promise<void> {
+    if (this.buttonHistoryDamaged) { new Notice(t("button.workflow.historyBlocked")); return; }
+    if (this.applyingHistory || isRecordButtonRunning(this.dataSource)) return;
     const source = direction === "undo" ? this.historyStack : this.redoStack;
     const destination = direction === "undo" ? this.redoStack : this.historyStack;
     const entry = source[0];
@@ -9812,6 +9932,23 @@ export class DatabaseView extends FileView {
   }
 
   private async applyHistoryEntry(entry: HistoryEntry, direction: "undo" | "redo"): Promise<void> {
+    if (entry.type === "workflow") {
+      await this.executeWorkflowSteps(entry.steps, direction === "undo" ? "reverse" : "forward");
+      await this.refreshAfterSave(); this.rerenderToolbar(); return;
+    }
+    if (entry.type === "button") {
+      const expected = direction === "undo" ? entry.after : entry.before;
+      const desired = direction === "undo" ? entry.before : entry.after;
+      const writes: Record<string, FrontmatterWrite> = {};
+      for (const [key, snapshot] of Object.entries(desired)) writes[key] = snapshot.exists
+        ? { kind: "set", value: snapshot.value } : { kind: "delete" };
+      await this.dataSource.patchFrontmatter(entry.path, expected, writes, () => {
+        if (this.app.vault.getAbstractFileByPath(entry.path) !== entry.file) throw new Error(t("button.configurationChanged"));
+      });
+      await this.refreshAfterSave();
+      this.rerenderToolbar();
+      return;
+    }
     if (entry.type === "rename") {
       await this.applyRenameHistoryEntry(entry, direction);
       return;
@@ -10619,6 +10756,7 @@ export class DatabaseView extends FileView {
   }
 
   private sortByColumn(col: ColumnDef): void {
+    if (col.type === "button") return;
     const config = this.getConfig();
     if (!config) return;
     ensureColumnOrder(config);
@@ -10951,6 +11089,7 @@ export class DatabaseView extends FileView {
         showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
         openRow: (r) => this.dataSource.openNote(r.file),
         renderRecordIcon: (parent, r, view, compact) => this.renderRowRecordIcon(parent, r, view, compact),
+        runRecordButton: (row, col) => this.executeRecordButton(row, col),
         applyConditionalFormat: (element, r, view, targetField) =>
           applyConditionalFormat(element, r, view, this.getActiveDb(), targetField),
         isReadOnly: false,

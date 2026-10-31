@@ -140,7 +140,7 @@ export class RelationRollupConfigModal extends Modal {
       const isNumericTarget = (column: ColumnDef) =>
         isRollupNumericTarget(column, targetDatabase?.schema.computedFields);
       const targetColumns = (targetDatabase?.schema.columns || []).filter((column) => {
-        if (column.type === "rollup") return false;
+        if (column.type === "rollup" || column.type === "button") return false;
         if (isSumAvg) return isNumericTarget(column);
         return true;
       });

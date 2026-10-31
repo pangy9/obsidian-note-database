@@ -109,7 +109,7 @@ export class StatusOptionsModal extends Modal {
     this.listEl = this.contentEl.createDiv({ cls: "db-status-option-list" });
     this.renderList();
 
-    const addBtn = this.contentEl.createEl("button", { text: t("modal.addOption") });
+    const addBtn = this.contentEl.createEl("button", { cls: "db-add-entry", text: t("modal.addOption") });
     addBtn.onclick = () => {
       this.markCustomOptions();
       this.options.push({ value: t("modal.newOption"), color: "gray" });

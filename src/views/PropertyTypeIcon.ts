@@ -1,3 +1,4 @@
+import { addIcon } from "obsidian";
 import { ColumnDef } from "../data/types";
 import type { DropdownOption } from "./DropdownField";
 
@@ -17,6 +18,7 @@ export const PROPERTY_TYPE_ICON_NAMES: Record<ColumnDef["type"], string> = {
   computed: "math-function",
   relation: "link",
   rollup: "sum",
+  button: "click",
 };
 
 interface SvgPathDef {
@@ -114,6 +116,17 @@ export const PROPERTY_TYPE_ICON_DEFS: Record<string, PropertyTypeIconDef> = {
       { d: "M14 11a5 5 0 0 0 -7.07 -.07l-2 2a5 5 0 0 0 7.07 7.07l1.15 -1.15" },
     ],
   },
+  // Tabler outline/click: https://github.com/tabler/tabler-icons/blob/main/icons/outline/click.svg
+  click: {
+    paths: [
+      { d: "M3 12l3 0" },
+      { d: "M12 3l0 3" },
+      { d: "M7.8 7.8l-2.2 -2.2" },
+      { d: "M16.2 7.8l2.2 -2.2" },
+      { d: "M7.8 16.2l-2.2 2.2" },
+      { d: "M12 12l9 3l-4 2l-2 4l-3 -9" },
+    ],
+  },
   sum: {
     paths: [
       { d: "M18 4h-10l6 8l-6 8h10" },
@@ -155,7 +168,28 @@ export function renderDropdownPropertyTypeIcon(parent: HTMLElement, icon: string
 export function renderPropertyTypeIcon(parent: HTMLElement, col: ColumnDef, cls = "db-property-icon"): HTMLElement {
   const icon = parent.createSpan({ cls });
   const iconName = getPropertyTypeIconName(col);
-  const doc = parent.ownerDocument || window.activeDocument;
+  icon.setAttribute("data-icon", iconName);
+  icon.appendChild(createPropertyTypeSvg(col, parent.ownerDocument || window.activeDocument));
+  return icon;
+}
+
+/** Native menus resolve icon IDs; register the same SVG used by headers and type pickers. */
+const registeredPropertyIcons = new Set<string>();
+export function getPropertyTypeMenuIcon(col: ColumnDef): string {
+  const id = `note-database-property-${getPropertyTypeIconName(col)}`;
+  if (!registeredPropertyIcons.has(id)) {
+    const svg = createPropertyTypeSvg(col, window.activeDocument);
+    // Obsidian custom icons use a 100 × 100 outer viewport; retain our 24 × 24 viewBox.
+    svg.setAttribute("width", "100");
+    svg.setAttribute("height", "100");
+    addIcon(id, svg.outerHTML);
+    registeredPropertyIcons.add(id);
+  }
+  return id;
+}
+
+function createPropertyTypeSvg(col: ColumnDef, doc: Document): SVGSVGElement {
+  const iconName = getPropertyTypeIconName(col);
   const svg = doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("width", "24");
   svg.setAttribute("height", "24");
@@ -179,7 +213,5 @@ export function renderPropertyTypeIcon(parent: HTMLElement, col: ColumnDef, cls 
     svg.appendChild(path);
   }
 
-  icon.setAttribute("data-icon", iconName);
-  icon.appendChild(svg);
-  return icon;
+  return svg;
 }

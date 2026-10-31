@@ -90,7 +90,7 @@ export class FilterPanelRenderer {
     }
 
     const addBtn = panel.createEl("button", {
-      cls: "db-panel-button",
+      cls: "db-panel-button db-add-entry",
       text: `+ ${t("panel.addCondition")}`,
     });
     addBtn.onclick = () => {

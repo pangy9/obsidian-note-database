@@ -167,7 +167,7 @@ function getSourceRuleColumns(database: DatabaseConfig): ColumnDef[] {
   const seen = new Set<string>();
   const columns: ColumnDef[] = [];
   const add = (candidate: ColumnDef | undefined) => {
-    if (!candidate || seen.has(candidate.key)) return;
+    if (!candidate || candidate.type === "button" || seen.has(candidate.key)) return;
     seen.add(candidate.key);
     columns.push(candidate);
   };
@@ -676,7 +676,7 @@ export class ViewConfigPanelRenderer {
           parent: row,
           label: t("filter.field"),
           value: rule.condition.field,
-          options: database.schema.columns.map((col) => ({
+          options: database.schema.columns.filter((col) => col.type !== "button").map((col) => ({
             value: col.key,
             text: col.label || col.key,
             icon: getPropertyDropdownIcon(getColumnDisplayType(col, database.schema.computedFields)),
@@ -1535,7 +1535,7 @@ export class ViewConfigPanelRenderer {
       [
         { value: "", text: t("viewConfig.noCover") },
         ...config.schema.columns
-          .filter((col) => col.key !== "file.name")
+          .filter((col) => col.key !== "file.name" && col.type !== "button")
           .map((col) => this.toFieldDropdownOption(config, col)),
         ...(actions.createProperty ? [{ value: "__create_property__", text: t("panel.createProperty"), icon: "plus", preserveValueOnSelect: true }] : []),
       ],
@@ -1607,7 +1607,7 @@ export class ViewConfigPanelRenderer {
       [
         { value: "", text: t("viewConfig.titleAuto") },
         { value: NO_TITLE_FIELD, text: t("viewConfig.noTitle") },
-        ...config.schema.columns.map((col) => this.toFieldDropdownOption(config, col)),
+        ...config.schema.columns.filter((col) => col.type !== "button").map((col) => this.toFieldDropdownOption(config, col)),
         ...(actions.createProperty ? [{ value: "__create_property__", text: t("panel.createProperty"), icon: "plus", preserveValueOnSelect: true }] : []),
       ],
       config.titleField || "",
@@ -1635,7 +1635,7 @@ export class ViewConfigPanelRenderer {
       [
         { value: "", text: t("viewConfig.noSubgroup") },
         ...config.schema.columns
-          .filter((col) => col.key !== "file.name" && col.key !== groupField)
+          .filter((col) => col.key !== "file.name" && col.key !== groupField && col.type !== "button")
           .map((col) => this.toFieldDropdownOption(config, col)),
         ...(actions.createProperty ? [{ value: "__create_property__", text: t("panel.createProperty"), icon: "plus", preserveValueOnSelect: true }] : []),
       ],

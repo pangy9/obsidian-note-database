@@ -1,3 +1,4 @@
+import { renderRecordButton, type RunRecordButton } from "./RecordButtonRenderer";
 import { App, setIcon, setTooltip } from "obsidian";
 import { isObsidianTagsKey, resolveOptionDisplay, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { getColumnDisplayType, getNumberDisplayStyle } from "../data/ColumnDisplay";
@@ -47,6 +48,7 @@ export interface RecordDetailActions {
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   isReadOnly?: boolean;
+  runRecordButton?: RunRecordButton;
 }
 
 export interface OpenRecordDetailOptions {
@@ -201,7 +203,7 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
       if (col.key === titleField) continue;
       const value = getRecordCellValue(r, col);
       const displayType = getRecordDisplayType(config, col);
-      const empty = isEmptyValue(value) && displayType !== "checkbox";
+      const empty = isEmptyValue(value) && displayType !== "checkbox" && col.type !== "button";
       if (empty && config.showEmptyFields !== true) continue;
       renderRecordField(fieldsEl, r, col, config, app, actions);
     }
@@ -242,7 +244,7 @@ function renderRecordField(
 ): void {
   const value = getRecordCellValue(row, col);
   const displayType = getRecordDisplayType(config, col);
-  const empty = isEmptyValue(value) && displayType !== "checkbox";
+  const empty = isEmptyValue(value) && displayType !== "checkbox" && col.type !== "button";
   const displayValue = empty ? getEmptyDisplayValue(displayType) : value;
 
   const field = parent.createDiv({ cls: "db-record-detail-field" });
@@ -291,6 +293,7 @@ function renderRecordValue(
   app: App,
   actions: RecordDetailActions,
 ): void {
+  if (col.type === "button") { renderRecordButton(valueEl, row, col, actions.runRecordButton, actions.isReadOnly); return; }
   // checkbox
   if (displayType === "checkbox") {
     valueEl.addClass("db-checkbox-cell");

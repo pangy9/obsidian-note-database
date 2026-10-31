@@ -24,6 +24,11 @@ export function isDateLikeColumnType(type: string | undefined): boolean {
   return type === "date" || type === "datetime";
 }
 
+/** Use the displayed calendar day for date columns while retaining raw datetime values. */
+export function normalizeDateColumnValue(value: unknown, type: string | undefined): unknown {
+  return type === "date" ? parseDateTimeParts(value)?.dateKey ?? value : value;
+}
+
 export function hasDateTimeValue(value: unknown): boolean {
   if (value instanceof Date) {
     return value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0 || value.getUTCSeconds() !== 0 || value.getUTCMilliseconds() !== 0;

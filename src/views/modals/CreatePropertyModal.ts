@@ -28,7 +28,7 @@ export interface CreatePropertyModalOptions {
 const PROPERTY_TYPES: ColumnDef["type"][] = [
   "text", "number", "date", "datetime", "currency", "checkbox",
   "select", "multi-select", "status",
-  "computed", "relation", "rollup",
+  "computed", "relation", "rollup", "button",
 ];
 
 /**

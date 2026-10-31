@@ -117,7 +117,7 @@ function addViewCsvEntries(
   for (const entry of allViews) {
     const view = entry.view;
     const viewRows = getRowsForView(entry.index);
-    const visibleColumns = getVisibleColumns(view).filter((col) => col.key !== "file.name");
+    const visibleColumns = getVisibleColumns(view).filter((col) => col.key !== "file.name" && col.type !== "button");
     for (const col of visibleColumns) {
       if (seenColumnKeys.has(col.key)) continue;
       seenColumnKeys.add(col.key);

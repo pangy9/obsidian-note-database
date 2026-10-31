@@ -24,6 +24,7 @@ Edit frontmatter in place, save several views of the same notes, and keep every 
 ## Highlights
 
 - **Eight database views:** see the same notes as a table, board, gallery, list, chart, calendar, timeline, or form.
+- **Local button workflows:** edit properties, create or duplicate notes, update another database, and open the result, with dynamic values and grouped undo.
 - **Forms for local capture:** build a form view with required fields and a cover, or open the same quick-capture form from another view or the command palette. Unsubmitted drafts are kept during the current session.
 - **Database starters:** begin with one of six built-in setups, each with properties and views; optionally add sample notes.
 - **Local Markdown storage:** each database is an ordinary Markdown file with `db_view: true`; records, properties, and relations also stay inside your vault.
@@ -68,10 +69,26 @@ A database never duplicates your notes — the eight views are just different le
 | ![Calendar month view](assets/screenshots/calendar-view-month.png) | ![Calendar week view](assets/screenshots/calendar-view-week.png) |
 | Arrange all-day and multi-day records in a monthly overview. | Work with all-day and timed records on a detailed weekly grid. |
 
-## New in 1.3.2
+## New in 1.3.3
 
-- **Frozen columns:** freeze up to five left-most properties from the column menu. While scrolling a wide table, the frozen columns, the checkbox column, the summary bar, and each group header's name, count, and summaries all stay in view. Available in the main view and editable embeds.
-- **Fixes:** right-click "Insert above/below" works again; calendar and timeline option popovers no longer stop responding after the first change; embedded calendars keep column-width drags and month navigation.
+- **Button workflows:** add a Button property to edit records, create or duplicate notes, update filtered records in another database, show confirmation, and open the result. Configure actions visually and combine dynamic values with text without writing code; built-in starters include example buttons. All changes made by a single button execution can be undone together.
+- **Collapsible descriptions:** collapse a database description to a one-line preview and expand it when needed.
+- **Fixes:** fix calendar events not using the selected status property’s colors (GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)); align date-valued computed fields across summaries, filters, sorting, and charts; show update notes in the plugin interface language.
+
+## Local workflows with buttons
+
+Add a **Button** property, then choose **Configure button** from its column menu to combine actions that edit records, create or duplicate notes, update another database, show confirmation, and open a page. For example: create a follow-up task → link it to a project → set its due date → update the project → open the task. All changes made by a single button execution can be undone together.
+
+Type `{` or use the variable button to insert dynamic-value chips for titles, body text, links, properties, or dates. Combine chips with ordinary text without writing code.
+
+Try the project, task, reading, and CRM starters with built-in buttons: **Complete project**, **Complete task**, **Schedule for tomorrow**, **Mark as read**, and **Follow up in 7 days**.
+
+![Table buttons for completing tasks, scheduling tomorrow, and creating follow-ups](assets/screenshots/en-1.3.3-button-workflows.png)
+
+| Browse and reorder actions | Compose titles and body text | Set button icons and styles |
+| --- | --- | --- |
+| ![A collapsed three-step button workflow](assets/screenshots/en-1.3.3-button-editor.png) | ![Combine title and wiki-link chips in a create action](assets/screenshots/en-1.3.3-button-dynamic-values.png) | ![Set button icons and styles from the column menu](assets/screenshots/en-1.3.3-button-appearance.png) |
+| Collapse actions to review their order; click a heading to edit. | Combine dynamic values with ordinary text, without code. | Choose an icon and button style from the column menu. |
 
 ## Start from a template, or capture on the go
 
@@ -91,7 +108,6 @@ Internal links reuse the core Page preview plugin and honor your modifier-key se
 | ![Obsidian Page Preview opened from a record link](assets/screenshots/en-1.2.7-page-preview.png) |
 
 Enable Obsidian's core **Page preview** plugin first. Preview works on record titles, Relation properties, clickable `file.*` metadata, text properties in Link display mode, and internal links or `[[wikilinks]]` in inline-Markdown text/computed-text properties. Table, Board, Gallery, List, Calendar, Timeline, the record detail panel, database-file views, and embedded views share the same behavior.
-
 
 ## Edit many notes without opening them
 

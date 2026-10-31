@@ -361,7 +361,7 @@ export class CalendarTimelineToolbarRenderer {
   private getAnyFieldOptions(config: ViewConfig): DropdownOption[] {
     return [
       { value: "", text: t("viewConfig.titleAuto") },
-      ...config.schema.columns.map((col) => ({
+      ...config.schema.columns.filter((col) => col.type !== "button").map((col) => ({
         value: col.key,
         text: col.label || col.key,
         icon: getPropertyDropdownIcon(getColumnDisplayType(col, config.schema.computedFields)),

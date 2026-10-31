@@ -1,9 +1,9 @@
 import { ColumnDef, DatabaseConfig, RowData, ViewConfig } from "../data/types";
 import { toChartNumber } from "../data/ChartAggregation";
-import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "../data/DateTimeFormat";
+import { isDateLikeColumnType, normalizeDateColumnValue, parseDateTimeParts, toDateTimestamp } from "../data/DateTimeFormat";
 import { isBaseFileField } from "../data/FileFields";
 import { getRowFileFieldValue } from "../data/FileFieldObsidian";
-import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getColumnDisplayType, getComputedStorageKey } from "../data/ColumnDisplay";
 import { stringifyValue } from "../data/Stringify";
 import { t } from "../i18n";
 import { DropdownOption, openDropdownMenu } from "./DropdownField";
@@ -71,29 +71,19 @@ function getSummaryKindLabel(kind: SummaryKind): string {
   }
 }
 
-function isNumericSummaryColumn(config: ViewConfig, col: ColumnDef): boolean {
-  if (col.type === "number" || col.type === "currency") return true;
-  if (col.type === "rollup") {
-    return col.rollupConfig?.aggregation === "count" ||
-      col.rollupConfig?.aggregation === "sum" ||
-      col.rollupConfig?.aggregation === "avg";
-  }
-  if (col.type !== "computed") return false;
-  const computedKey = col.computedKey || col.key;
-  return config.schema.computedFields.find((field) => field.key === computedKey)?.type === "number";
-}
-
 function getSummaryKindsForColumn(config: ViewConfig, col: ColumnDef): SummaryKind[] {
+  if (col.type === "button") return [];
   const common: SummaryKind[] = ["COUNT", "UNIQUE", "EMPTY", "FILLED"];
-  if (isNumericSummaryColumn(config, col)) return ["SUM", "AVERAGE", "MEDIAN", "MIN", "MAX", "RANGE", "STDDEV", ...common];
-  if (isDateLikeColumnType(col.type)) return ["EARLIEST", "LATEST", "RANGE", ...common];
-  if (col.type === "checkbox") return ["CHECKED", "UNCHECKED", ...common];
+  const displayType = getColumnDisplayType(col, config.schema.computedFields);
+  if (displayType === "number" || displayType === "currency") return ["SUM", "AVERAGE", "MEDIAN", "MIN", "MAX", "RANGE", "STDDEV", ...common];
+  if (isDateLikeColumnType(displayType)) return ["EARLIEST", "LATEST", "RANGE", ...common];
+  if (displayType === "checkbox") return ["CHECKED", "UNCHECKED", ...common];
   return common;
 }
 
 function getSummaryFieldOptions(config: ViewConfig, includeNone = false): DropdownOption[] {
   const options = config.schema.columns
-    .filter((col) => col.key !== "file.name")
+    .filter((col) => col.key !== "file.name" && col.type !== "button")
     .map((col) => ({
       value: col.key,
       text: col.label || col.key,
@@ -142,7 +132,7 @@ export class SummaryRenderer {
     if (!config.summaryRules) return;
     for (const { field, summary: summaryName } of config.summaryRules) {
       const col = config.schema.columns.find((candidate) => candidate.key === field);
-      const values = rows.map((row) => this.getRowValue(row, field, col));
+      const values = this.getSummaryValues(rows, field, config, col);
       const result = this.calculateSummary(values, summaryName, database?.summaryFormulas?.[summaryName]);
       if (result == null || result === "") continue;
       const kind = normalizeSummaryKind(summaryName);
@@ -189,7 +179,7 @@ export class SummaryRenderer {
     if (config?.summaryRules) {
       config.summaryRules.forEach(({ field, summary: summaryName }, ruleIndex) => {
         const col = config.schema.columns.find((candidate) => candidate.key === field);
-        const values = rows.map((row) => this.getRowValue(row, field, col));
+        const values = this.getSummaryValues(rows, field, config, col);
         const result = this.calculateSummary(values, summaryName, database?.summaryFormulas?.[summaryName]);
         if (result == null || result === "") return;
         const label = col?.label || field;
@@ -419,9 +409,19 @@ export class SummaryRenderer {
     if (anchor?.parentElement) anchor.parentElement.insertBefore(summary, anchor.nextSibling);
   }
 
+  private getSummaryValues(rows: RowData[], field: string, config: ViewConfig, col?: ColumnDef): unknown[] {
+    const displayType = col ? getColumnDisplayType(col, config.schema.computedFields) : undefined;
+    return rows.map((row) => {
+      const value = this.getRowValue(row, field, col);
+      // Date results can retain a source datetime in memory. Summarize the same
+      // calendar date shown in the cell, without changing the formula's raw value.
+      return normalizeDateColumnValue(value, displayType);
+    });
+  }
+
   private getRowValue(row: RowData, field: string, col?: ColumnDef): unknown {
     if (col?.type === "computed" || col?.type === "rollup") {
-      return row.computed[col.type === "computed" ? col.computedKey || col.key : col.key] ?? row.computed[field];
+      return row.computed[getComputedStorageKey(col)] ?? row.computed[field];
     }
     if (field.startsWith("formula.")) return row.computed[field.slice("formula.".length)];
     if (isBaseFileField(field)) return getRowFileFieldValue(row, field);
@@ -549,7 +549,9 @@ export class SummaryRenderer {
   }
 
   private formatSummaryValue(value: unknown): string {
-    if (value instanceof Date) return parseDateTimeParts(value)?.dateKey ?? "";
+    // Summary Dates are constructed from local comparison timestamps, not YAML
+    // Date objects. Read them as timestamps to retain the local calendar day.
+    if (value instanceof Date) return parseDateTimeParts(value.getTime())?.dateKey ?? "";
     if (typeof value === "number") {
       if (!Number.isFinite(value)) return "";
       if (Math.abs(value) >= 86400000 && value % 86400000 === 0) return `${value / 86400000}d`;
@@ -565,7 +567,14 @@ export class SummaryRenderer {
   }
 
   private toTime(value: unknown): number | null {
-    // 统一走本地墙上时间时间戳，与排序同口径；避免 Date.parse 对带时间值按 UTC 解析导致与排序差一天。
+    // YAML Date values display their UTC components as wall time. Compare that
+    // same clock with string values before formatting the local summary Date.
+    if (value instanceof Date) {
+      const parts = parseDateTimeParts(value);
+      if (!parts) return null;
+      const timestamp = toDateTimestamp(`${parts.dateKey}T${parts.time || "00:00"}`);
+      return timestamp == null ? null : timestamp + value.getUTCSeconds() * 1000 + value.getUTCMilliseconds();
+    }
     return toDateTimestamp(value);
   }
 

@@ -17,6 +17,7 @@ import { getDateGroupMode } from "../data/GroupDisplay";
 import { isHTMLElement } from "./DomGuards";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { replaceToolbarBadge } from "./ToolbarBadge";
+import { HeaderCollapseState, applyHeaderCollapseState } from "./HeaderCollapseControls";
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -31,6 +32,7 @@ export interface ToolbarViewEntry {
 }
 
 export interface ToolbarActions {
+  headerCollapse?: { state: HeaderCollapseState; onChange(state: HeaderCollapseState): void };
   selectDatabase(index: number): void;
   moveDatabase?(fromIndex: number, toIndex: number): void;
   /** Read the current order when opening the selector, after in-place reordering. */
@@ -200,7 +202,7 @@ export class ToolbarRenderer {
           this.startDatabaseTextEdit(event, heading, currentDb?.name || "", false, (name) => actions.renameDatabase?.(name));
         };
       }
-      if (!actions.hideDatabaseActions) {
+      if (!actions.hideDatabaseActions || actions.headerCollapse) {
         const moreBtn = headingRow.createEl("button", {
           cls: "db-heading-more-button",
           attr: { type: "button" },
@@ -284,6 +286,11 @@ export class ToolbarRenderer {
     }
     if (!phoneLayout && !isChartView && !isFormView) this.renderSearch(right, state, actions);
     if (!actions.isReadOnly && !isChartView && !isFormView) this.renderNewButton(right, actions);
+    if (actions.headerCollapse) {
+      applyHeaderCollapseState(header, actions.headerCollapse.state);
+      // Active filter/sort chips are appended after this content boundary.
+      header.createDiv({ cls: "db-header-divider", attr: { role: "separator" } });
+    }
   }
 
   private isPhoneLayout(): boolean {
@@ -571,24 +578,39 @@ export class ToolbarRenderer {
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("common.database") });
 
-    if (actions.renameDatabase) {
-      this.renderTitleActionsPopoverRow(panel, t("toolbar.renameDatabase"), "pencil", (rowEvent) => {
-        this.startDatabaseTextEdit(rowEvent, headingEl, currentName, false, (name) => actions.renameDatabase?.(name));
-      });
+    if (actions.headerCollapse) {
+      const collapse = actions.headerCollapse;
+      this.renderTitleActionsPopoverRow(panel, t("headerCollapse.description"), "align-left", () => {
+        collapse.state = { description: !collapse.state.description };
+        const databaseHeader = headingEl.closest<HTMLElement>(".db-header");
+        if (databaseHeader) applyHeaderCollapseState(databaseHeader, collapse.state);
+        collapse.onChange({ ...collapse.state });
+      }, "", collapse.state.description);
     }
-    if (actions.copyCurrentDatabase) {
-      this.renderTitleActionsPopoverRow(panel, t("toolbar.copyCurrentDatabase"), "copy", () => actions.copyCurrentDatabase?.());
+    if (!actions.hideDatabaseActions && actions.toggleDatabaseIcon) {
+      this.renderTitleActionsPopoverRow(panel, t("toolbar.toggleDatabaseIcon"), "database", () => actions.toggleDatabaseIcon?.(), "", actions.showDatabaseIcon !== false);
     }
-    if (actions.saveStarterTemplate) {
-      this.renderTitleActionsPopoverRow(panel, t("starter.custom.save"), "layout-template", () => actions.saveStarterTemplate?.());
+    if (!actions.hideDatabaseActions) {
+      if (actions.headerCollapse || actions.toggleDatabaseIcon) {
+        panel.createDiv({ cls: "db-title-actions-separator", attr: { role: "separator" } });
+      }
+      if (actions.renameDatabase) {
+        this.renderTitleActionsPopoverRow(panel, t("toolbar.renameDatabase"), "pencil", (rowEvent) => {
+          this.startDatabaseTextEdit(rowEvent, headingEl, currentName, false, (name) => actions.renameDatabase?.(name));
+        });
+      }
+      if (actions.copyCurrentDatabase) {
+        this.renderTitleActionsPopoverRow(panel, t("toolbar.copyCurrentDatabase"), "copy", () => actions.copyCurrentDatabase?.());
+      }
+      if (actions.saveStarterTemplate) {
+        this.renderTitleActionsPopoverRow(panel, t("starter.custom.save"), "layout-template", () => actions.saveStarterTemplate?.());
+      }
+      this.renderTitleActionsPopoverRow(panel, t("toolbar.addDatabase"), "plus", () => actions.addDatabase());
+      panel.createDiv({ cls: "db-title-actions-separator", attr: { role: "separator" } });
+      this.renderTitleActionsPopoverRow(panel, t("toolbar.deleteDatabase"), "trash", () => actions.deleteDatabase(), "is-danger");
     }
-    this.renderTitleActionsPopoverRow(panel, t("toolbar.addDatabase"), "plus", () => actions.addDatabase());
-    if (actions.toggleDatabaseIcon) {
-      this.renderTitleActionsPopoverRow(panel, t("toolbar.toggleDatabaseIcon"), actions.showDatabaseIcon === false ? "circle-off" : "circle-check", () => actions.toggleDatabaseIcon?.());
-    }
-    this.renderTitleActionsPopoverRow(panel, t("toolbar.deleteDatabase"), "trash", () => actions.deleteDatabase(), "is-danger");
 
-    positionToolbarPopover(panel, anchorEl);
+    positionToolbarPopover(panel, anchorEl, { preferredWidth: 280, maxWidth: 280 });
     const onOutside = (outsideEvent: MouseEvent) => {
       const target = outsideEvent.target as Node | null;
       if (target && (panel.contains(target) || anchorEl.contains(target))) return;
@@ -608,14 +630,23 @@ export class ToolbarRenderer {
     label: string,
     icon: string,
     onClick: (event: MouseEvent) => void,
-    extraClass = ""
+    extraClass = "",
+    checked?: boolean
   ): void {
     const row = panel.createEl("button", {
       cls: `db-view-tab-popover-row ${extraClass}`.trim(),
       attr: { type: "button" },
     });
-    setIcon(row.createSpan({ cls: "db-view-tab-popover-marker" }), icon);
+    const marker = row.createSpan({ cls: "db-view-tab-popover-marker" });
+    if (icon) setIcon(marker, icon);
+    if (checked !== undefined) {
+      row.setAttribute("role", "menuitemcheckbox");
+      row.setAttribute("aria-checked", String(checked));
+      row.toggleClass("is-unchecked", !checked);
+    }
     row.createSpan({ cls: "db-view-tab-popover-label", text: label });
+    const status = row.createSpan({ cls: "db-title-actions-check", attr: { "aria-hidden": "true" } });
+    if (checked === true) setIcon(status, "check");
     row.onclick = (event) => {
       this.closeTitleActionsPopover();
       onClick(event);
@@ -1274,7 +1305,7 @@ export class ToolbarRenderer {
         onClick: () => actions.setGroupByField(""),
       });
     }
-    for (const col of config.schema.columns) {
+    for (const col of config.schema.columns.filter((col) => col.type !== "button")) {
       this.renderGroupPopoverRow(panel, {
         label: col.label,
         column: col,
@@ -1480,7 +1511,7 @@ export class ToolbarRenderer {
   }
 
   private getBoardSubgroupCandidates(config: ViewConfig, groupValue: string): ColumnDef[] {
-    return config.schema.columns.filter((col) => col.key !== "file.name" && col.key !== groupValue);
+    return config.schema.columns.filter((col) => col.key !== "file.name" && col.key !== groupValue && col.type !== "button");
   }
 
   private addGroupOrderRows(panel: HTMLElement, config: ViewConfig, col: ColumnDef, actions: ToolbarActions): void {

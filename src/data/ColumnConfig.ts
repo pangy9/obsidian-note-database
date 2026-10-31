@@ -96,7 +96,7 @@ export function getVisibleColumns(
   const allCols = getColumnsInOrder(config);
   for (const col of allCols) {
     if (rows.length === 0) continue;
-    if (col.type === "computed" || col.type === "rollup" || col.key === "file.name" || isOptionColumnType(col.type) || col.type === "checkbox") continue;
+    if (col.type === "computed" || col.type === "rollup" || col.type === "button" || col.key === "file.name" || isOptionColumnType(col.type) || col.type === "checkbox") continue;
     if (pendingShowColumns.has(col.key)) continue;
     if (explicitlyOrderedKeys.has(col.key)) continue;
     const hasValue = rows.some((row) => {

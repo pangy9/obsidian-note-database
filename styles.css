@@ -281,6 +281,22 @@
   --db-header-content-gap: 6px;
 }
 
+/* Full pages separate heading controls from the content, including summaries. */
+.note-database-container:not(.note-database-embed) > .db-header {
+  --db-header-divider-space: 0px;
+}
+
+.note-database-container:not(.note-database-embed) > .db-header > .db-header-divider {
+  flex: 0 0 auto;
+  height: 0;
+  margin: calc(var(--db-header-divider-space) - var(--db-header-content-gap)) -12px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-container:not(.note-database-embed) > .db-header > .db-toolbar {
+  border-bottom: 0;
+}
+
 .note-database-container > .db-database-cover {
   position: sticky;
   left: -12px;
@@ -796,6 +812,18 @@
   padding-right: 4px;
   scrollbar-gutter: stable;
   white-space: pre-wrap;
+}
+
+/* Collapsed descriptions retain a single readable line. Editing uses a separate
+ * textarea class, so the full description remains available in the editor. */
+.note-database-container .db-header.is-description-collapsed > .db-description:not(.is-empty) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  max-height: var(--db-description-min-height);
+  overflow: hidden;
+  white-space: pre-wrap;
+  scrollbar-gutter: auto;
 }
 
 .note-database-container .db-description:not(.is-scrolling):not(:hover)::-webkit-scrollbar-thumb {
@@ -2056,7 +2084,7 @@
   white-space: nowrap;
 }
 
-.note-database-container .db-dropdown-popover {
+.db-dropdown-popover {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -2065,16 +2093,17 @@
   overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
+  border-radius: var(--db-radius-lg, 8px);
   background: var(--background-primary);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: 12px;
+  line-height: 1.4;
   z-index: 80;
 }
 
-.note-database-container .db-dropdown-section-title {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-section-title {
   flex: 0 0 auto;
   padding: 6px 6px 5px;
   color: var(--text-normal);
@@ -2082,7 +2111,7 @@
   font-weight: 700;
 }
 
-.note-database-container .db-dropdown-search {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-search {
   flex: 0 0 auto;
   margin: 0 0 6px;
   padding: 0;
@@ -2090,38 +2119,41 @@
 
 /* When searchable, the popover itself doesn't scroll — an inner .db-dropdown-options
    does, so the search box stays truly fixed at the top (no sticky drift). */
-.note-database-container .db-dropdown-popover.is-searchable {
+.db-dropdown-popover.is-searchable {
   overflow: hidden;
 }
 
-.note-database-container .db-dropdown-options {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-.note-database-container .db-dropdown-search input {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-search input {
   width: 100%;
   min-height: 28px;
   padding: 4px 8px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-sm);
+  border-radius: var(--db-radius-sm, 4px);
   background: var(--background-secondary);
   color: var(--text-normal);
   font: inherit;
 }
 
-.note-database-container .db-dropdown-search input:focus {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-search input:focus {
   border-color: var(--interactive-accent);
   outline: none;
 }
 
-.note-database-container .db-dropdown-option + .db-dropdown-section-title {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option + .db-dropdown-section-title {
   margin-top: 8px;
 }
 
-.note-database-container .db-dropdown-option {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option {
   display: grid;
   flex: 0 0 auto;
   grid-template-columns: 16px minmax(0, 1fr);
@@ -2129,11 +2161,12 @@
   gap: 7px;
   width: 100%;
   min-width: 0;
+  height: auto;
   min-height: 30px;
   box-sizing: border-box;
   padding: 5px 7px;
   border: 0;
-  border-radius: var(--db-radius-sm);
+  border-radius: var(--db-radius-sm, 4px);
   background: transparent;
   box-shadow: none;
   color: var(--text-normal);
@@ -2142,38 +2175,38 @@
   cursor: pointer;
 }
 
-.note-database-container .db-dropdown-option.has-icon {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.has-icon {
   grid-template-columns: 16px 16px minmax(0, 1fr);
 }
 
-.note-database-container .db-dropdown-option.has-swatches {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.has-swatches {
   grid-template-columns: 16px minmax(0, 1fr) auto;
 }
 
-.note-database-container .db-dropdown-option.has-icon.has-swatches {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.has-icon.has-swatches {
   grid-template-columns: 16px 16px minmax(0, 1fr) auto;
 }
 
-.note-database-container .db-dropdown-option:hover {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option:hover {
   background: var(--background-modifier-hover);
 }
 
-.note-database-container .db-dropdown-option.is-selected {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.is-selected {
   background: color-mix(in srgb, var(--background-modifier-hover) 72%, transparent);
 }
 
-.note-database-container .db-dropdown-option:disabled,
-.note-database-container .db-dropdown-option.is-disabled {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option:disabled,
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.is-disabled {
   cursor: default;
   opacity: 0.45;
 }
 
-.note-database-container .db-dropdown-option.is-hidden,
-.note-database-container .db-dropdown-section-title.is-hidden {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option.is-hidden,
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-section-title.is-hidden {
   display: none;
 }
 
-.note-database-container .db-dropdown-option-check {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-check {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -2182,7 +2215,7 @@
   color: var(--text-accent);
 }
 
-.note-database-container .db-dropdown-option-icon {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -2191,45 +2224,45 @@
   color: var(--text-faint);
 }
 
-.note-database-container .db-dropdown-option-check,
-.note-database-container .db-dropdown-option-icon,
-.note-database-container .db-dropdown-option-swatches {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-check,
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-icon,
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-swatches {
   flex: 0 0 auto;
   min-width: 0;
 }
 
-.note-database-container .db-dropdown-option-check svg {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-check svg {
   display: block;
   width: 13px;
   height: 13px;
 }
 
-.note-database-container .db-dropdown-option-icon svg {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-icon svg {
   display: block;
   width: 14px;
   height: 14px;
 }
 
-.note-database-container .db-dropdown-option-text {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-text {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.note-database-container .db-dropdown-option-label,
-.note-database-container .db-dropdown-option-reason {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-label,
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-reason {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.note-database-container .db-dropdown-option-reason {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-reason {
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.2;
 }
 
-.note-database-container .db-dropdown-option-swatches {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-swatches {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -2238,25 +2271,28 @@
   min-width: 40px;
 }
 
-.note-database-container .db-dropdown-option-swatch {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-swatch {
   width: 9px;
   height: 9px;
   border-radius: 999px;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
-.note-database-container .db-dropdown-option-type-icon svg {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-type-icon svg {
   width: 14px;
   height: 14px;
 }
 
-.note-database-container .db-dropdown-option-label {
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option-label {
   overflow: hidden;
   color: var(--text-normal);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.db-dropdown-popover.db-dropdown-popover-context-settings,
+.db-dropdown-popover.db-dropdown-popover-context-modal { z-index: 1000; }
 
 /* Right-aligned muted hint on a column-menu item showing the current display
    style (e.g. "评分" for number, "链接" for text). Menu items live on body. */
@@ -2348,113 +2384,6 @@
   white-space: nowrap;
 }
 
-.note-database-modal .db-dropdown-popover {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: min(360px, calc(100vh - 24px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
-  background: var(--background-primary);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
-  color: var(--text-normal);
-  font-family: var(--font-interface);
-  font-size: 12px;
-  z-index: 1000;
-}
-
-.note-database-modal .db-dropdown-section-title {
-  flex: 0 0 auto;
-  padding: 6px 6px 5px;
-  color: var(--text-normal);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.note-database-modal .db-dropdown-option + .db-dropdown-section-title {
-  margin-top: 8px;
-}
-
-.note-database-modal .db-dropdown-option {
-  display: grid;
-  flex: 0 0 auto;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-  box-sizing: border-box;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: var(--db-radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.note-database-modal .db-dropdown-option.has-icon {
-  grid-template-columns: 16px 16px minmax(0, 1fr);
-}
-
-.note-database-modal .db-dropdown-option:hover {
-  background: var(--background-modifier-hover);
-}
-
-.note-database-modal .db-dropdown-option.is-selected {
-  background: color-mix(in srgb, var(--background-modifier-hover) 72%, transparent);
-}
-
-.note-database-modal .db-dropdown-option:disabled,
-.note-database-modal .db-dropdown-option.is-disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.note-database-modal .db-dropdown-option-check {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-accent);
-}
-
-.note-database-modal .db-dropdown-option-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-faint);
-}
-
-.note-database-modal .db-dropdown-option-check svg {
-  display: block;
-  width: 13px;
-  height: 13px;
-}
-
-.note-database-modal .db-dropdown-option-icon svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.note-database-modal .db-dropdown-option-label {
-  overflow: hidden;
-  color: var(--text-normal);
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .note-database-settings .db-dropdown-field {
   position: relative;
   display: grid;
@@ -2541,214 +2470,6 @@
   overflow: hidden;
   color: var(--text-normal);
   font-size: 13px;
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.note-database-settings .db-dropdown-popover {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: min(360px, calc(100vh - 24px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
-  background: var(--background-primary);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
-  color: var(--text-normal);
-  font-family: var(--font-interface);
-  font-size: 12px;
-  z-index: 1000;
-}
-
-.db-dropdown-popover.db-dropdown-popover-context-settings,
-.db-dropdown-popover.db-dropdown-popover-context-modal {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: min(360px, calc(100vh - 24px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--db-radius-lg);
-  background: var(--background-primary);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
-  color: var(--text-normal);
-  font-family: var(--font-interface);
-  font-size: 12px;
-  z-index: 1000;
-}
-
-.note-database-settings .db-dropdown-section-title {
-  flex: 0 0 auto;
-  padding: 6px 6px 5px;
-  color: var(--text-normal);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-section-title,
-.db-dropdown-popover-context-modal .db-dropdown-section-title {
-  flex: 0 0 auto;
-  padding: 6px 6px 5px;
-  color: var(--text-normal);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.note-database-settings .db-dropdown-option + .db-dropdown-section-title {
-  margin-top: 8px;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option + .db-dropdown-section-title,
-.db-dropdown-popover-context-modal .db-dropdown-option + .db-dropdown-section-title {
-  margin-top: 8px;
-}
-
-.note-database-settings .db-dropdown-option {
-  display: grid;
-  flex: 0 0 auto;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-  box-sizing: border-box;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: var(--db-radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option,
-.db-dropdown-popover-context-modal .db-dropdown-option {
-  display: grid;
-  flex: 0 0 auto;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-  box-sizing: border-box;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: var(--db-radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.note-database-settings .db-dropdown-option.has-icon {
-  grid-template-columns: 16px 16px minmax(0, 1fr);
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option.has-icon,
-.db-dropdown-popover-context-modal .db-dropdown-option.has-icon {
-  grid-template-columns: 16px 16px minmax(0, 1fr);
-}
-
-.note-database-settings .db-dropdown-option:hover,
-.note-database-settings .db-dropdown-option.is-selected {
-  background: var(--background-modifier-hover);
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option:hover,
-.db-dropdown-popover-context-settings .db-dropdown-option.is-selected,
-.db-dropdown-popover-context-modal .db-dropdown-option:hover,
-.db-dropdown-popover-context-modal .db-dropdown-option.is-selected {
-  background: var(--background-modifier-hover);
-}
-
-.note-database-settings .db-dropdown-option-check {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-accent);
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option-check,
-.db-dropdown-popover-context-modal .db-dropdown-option-check {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-accent);
-}
-
-.note-database-settings .db-dropdown-option-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-faint);
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option-icon,
-.db-dropdown-popover-context-modal .db-dropdown-option-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  color: var(--text-faint);
-}
-
-.note-database-settings .db-dropdown-option-check svg {
-  display: block;
-  width: 13px;
-  height: 13px;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option-check svg,
-.db-dropdown-popover-context-modal .db-dropdown-option-check svg {
-  display: block;
-  width: 13px;
-  height: 13px;
-}
-
-.note-database-settings .db-dropdown-option-icon svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option-icon svg,
-.db-dropdown-popover-context-modal .db-dropdown-option-icon svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.note-database-settings .db-dropdown-option-label {
-  overflow: hidden;
-  color: var(--text-normal);
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.db-dropdown-popover-context-settings .db-dropdown-option-label,
-.db-dropdown-popover-context-modal .db-dropdown-option-label {
-  overflow: hidden;
-  color: var(--text-normal);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3211,6 +2932,8 @@
 .note-database-settings .db-settings-add-database {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
+  text-align: left;
   gap: 6px;
   margin-bottom: 12px;
   padding: 6px 14px;
@@ -4098,7 +3821,8 @@
   display: inline-flex;
   align-items: center;
   width: 100%;
-  justify-content: center;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .note-database-container .db-chart-visible-group-row {
@@ -7891,6 +7615,9 @@ body.is-phone .note-database-container .db-record-detail-panel {
 /* 看板底部“新建卡片”和末端“新建分组” */
 .note-database-container .db-board-new-card,
 .note-database-container .db-board-add-group-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   width: 100%;
   min-height: 30px;
   border: 0;
@@ -8302,6 +8029,9 @@ body.is-phone .note-database-container .db-record-detail-panel {
 }
 
 .note-database-container .db-gallery-new-card {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--background-modifier-border);
@@ -8885,6 +8615,33 @@ body.is-phone .note-database-container .db-record-detail-panel {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.note-database-container .db-title-actions-separator {
+  height: 0;
+  margin: 5px 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.note-database-container .db-title-actions-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-normal);
+}
+
+.note-database-container .db-title-actions-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-database-container .db-title-actions-popover .is-unchecked {
+  color: var(--text-muted);
+}
+
+.note-database-container .db-title-actions-popover .is-danger,
+.note-database-container .db-title-actions-popover .is-danger .db-view-tab-popover-marker {
+  color: var(--text-error);
 }
 
 .note-database-container .db-group-popover-check {
@@ -9869,6 +9626,16 @@ body.is-phone .note-database-container .db-record-detail-panel {
   white-space: nowrap;
 }
 
+/* 行/部件追加入口：加号与文案整体左对齐，不继承宿主按钮的居中布局。 */
+.note-database-container .db-add-entry,
+.note-database-modal .db-add-entry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 6px;
+}
+
 /* 面板内通用按钮 */
 .note-database-container .db-panel-button {
   height: 28px;
@@ -9884,7 +9651,8 @@ body.is-phone .note-database-container .db-record-detail-panel {
 .note-database-container .db-column-manager-add-button {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  text-align: left;
   margin: 0;
   padding: 0 6px;
   line-height: 1;
@@ -15068,6 +14836,8 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   left: var(--db-timeline-create-content-left);
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
+  text-align: left;
   width: max(var(--db-timeline-create-width, var(--db-timeline-unit-width)), var(--db-timeline-create-label-min-width));
   max-width: calc(100% - var(--db-timeline-create-content-left));
   min-width: 0;
@@ -15638,9 +15408,7 @@ body.is-mobile .note-database-container .db-calendar-month-time {
 }
 
 .note-database-embed.note-database-container > .db-selection-status-bar.db-embed-history-only {
-  position: static;
-  margin-left: auto;
-  width: auto;
+  width: max-content;
   flex: 0 0 auto;
 }
 
@@ -16392,7 +16160,7 @@ img.db-text-md-image {
 .db-icon-picker-section { margin-top: 12px; }
 .db-icon-picker-label { margin-bottom: 6px; color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: 600; }
 .db-icon-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, 28px); justify-content: center; gap: 2px; }
-.db-icon-picker-popover button.db-icon-picker-item { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 5px; font-size: 22px; }
+.db-icon-picker-popover button.db-icon-picker-item { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 5px; font-size: 20px; }
 .db-icon-picker-popover button.db-icon-picker-item:hover, .db-icon-picker-popover button.db-icon-picker-item:focus-visible { background: var(--background-modifier-hover); box-shadow: none; }
 .db-icon-picker-popover button.db-icon-picker-item.is-selected { background: var(--background-modifier-hover); }
 .db-icon-picker-item svg { width: 22px; height: 22px; color: inherit; }
@@ -18020,3 +17788,364 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
     padding: 12px 12px 12px 22px;
   }
 }
+
+/* Record button properties */
+.note-database-container .db-record-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  justify-self: start;
+  align-self: center;
+  flex: 0 1 auto;
+  box-sizing: border-box;
+  gap: 4px;
+  width: max-content;
+  min-width: 0;
+  max-width: min(100%, 180px);
+  height: 24px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  vertical-align: middle;
+}
+.note-database-container .db-record-button:not(:disabled):hover { background: var(--background-modifier-hover); border-color: var(--background-modifier-border-hover); }
+.note-database-container .db-record-button.is-primary { background: color-mix(in srgb, var(--interactive-accent) 12%, transparent); color: var(--text-accent); border-color: transparent; }
+.note-database-container .db-record-button.is-primary:not(:disabled):hover { background: var(--interactive-accent); color: var(--text-on-accent); border-color: transparent; }
+.note-database-container .db-record-button.is-plain { background: transparent; border-color: transparent; }
+.note-database-container .db-record-button.is-plain:not(:disabled):hover { background: var(--background-modifier-hover); border-color: transparent; }
+.note-database-container .db-record-button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.note-database-container .db-record-button:disabled { opacity: 0.45; cursor: not-allowed; }
+.note-database-container .db-record-button .db-record-button-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-database-container .db-record-button-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 12px; width: 12px; height: 12px; }
+.note-database-container .db-record-button-icon .db-record-icon { flex-basis: 12px; width: 12px; min-width: 12px; height: 12px; }
+.note-database-container .db-record-button-icon svg { width: 12px; height: 12px; }
+.note-database-container .db-record-button-icon .db-record-icon-emoji { font-size: 12px; }
+/* Button workflow editor: secondary cards with primary, outlined controls. */
+.modal.db-button-modal-host {
+  --db-button-modal-max-height: min(820px, calc(100vh - 64px));
+  width: min(640px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  border-radius: 16px;
+  padding: 28px;
+  max-height: var(--db-button-modal-max-height);
+  overflow: hidden;
+}
+.db-button-modal {
+  --db-button-field-background: var(--background-primary);
+  scrollbar-gutter: stable;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: calc(var(--db-button-modal-max-height) - 56px);
+  margin: 0;
+  padding: 4px 4px 0;
+}
+.db-button-modal > h3 { margin: 0 0 12px; font-size: 22px; font-weight: 650; }
+.db-button-modal > .db-modal-help { margin-bottom: 24px; font-size: 13px; line-height: 1.65; }
+.db-button-modal .db-modal-row { gap: 14px; margin-top: 12px; font-size: 13px; }
+.db-button-modal .db-modal-row .db-modal-label {
+  flex: 0 0 116px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.db-button-modal .db-modal-row .db-modal-input,
+.db-button-modal .db-modal-row .db-modal-dropdown {
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--db-button-field-background);
+  box-shadow: none;
+  font-size: 14px;
+}
+.db-button-modal .db-modal-row .db-modal-input:hover,
+.db-button-modal .db-modal-row .db-modal-dropdown:hover { border-color: var(--background-modifier-border-hover); }
+.db-button-modal .db-modal-row .db-modal-input:focus,
+.db-button-modal button:focus-visible,
+.db-button-modal .checkbox-container:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+.db-button-modal .db-dropdown-field-value { font-size: 14px; }
+.db-button-modal textarea.db-modal-input { min-height: 84px; resize: vertical; line-height: 1.6; }
+.db-button-modal .db-button-toggle-row { min-height: 30px; flex-wrap: nowrap; }
+.db-button-modal .db-button-toggle-row .db-modal-label { flex: 1 1 0; }
+.db-button-modal .checkbox-container { flex: 0 0 auto; margin-left: auto; }
+.db-button-modal .db-button-section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 20px;
+  margin: 28px 0 14px;
+}
+.db-button-modal .db-button-section-heading h4 { margin: 0; font-size: 16px; font-weight: 600; }
+.db-button-modal .db-button-actions { display: flex; flex-direction: column; gap: 16px; }
+.db-button-modal .db-button-action {
+  position: relative;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--background-secondary);
+}
+.db-button-modal .db-button-action-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; min-height: 26px; }
+.db-button-modal .db-button-action-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; }
+.db-button-modal .db-button-action-heading svg,
+.db-button-modal .db-button-add svg { display: block; width: 16px; height: 16px; }
+.db-button-modal .db-button-action-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 14px; width: 14px; height: 14px; color: var(--text-muted); }
+.db-button-modal .db-button-action-icon svg { width: 14px; height: 14px; }
+.db-button-modal .db-button-card-tools { display: flex; gap: 4px; opacity: 0; transition: opacity 120ms ease; }
+.db-button-modal .db-button-action:hover > .db-button-action-heading > .db-button-card-tools,
+.db-button-modal .db-button-property-action:hover > .db-button-action-heading > .db-button-card-tools,
+.db-button-modal .db-button-action-heading:focus-within > .db-button-card-tools { opacity: 1; }
+.db-button-modal button.db-button-quiet-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+}
+.db-button-modal button.db-button-quiet-icon:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.db-button-modal button.db-button-delete:hover { color: var(--text-error); }
+.db-button-modal button.db-button-drag-handle { cursor: grab; width: 20px; margin-left: -4px; touch-action: none; }
+.db-button-modal button.db-button-drag-handle:active { cursor: grabbing; }
+.db-button-modal .db-button-property-action {
+  --db-button-field-background: var(--background-secondary);
+  position: relative;
+  margin: 16px 0 12px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 65%, transparent);
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+.db-button-modal .db-button-property-action .db-button-action-title { color: var(--text-muted); font-size: 13px; font-weight: 500; }
+.db-button-modal .db-button-property-action .db-button-action-heading { margin-bottom: 8px; }
+.db-button-modal .db-button-filter-tools { display: flex; justify-content: flex-end; }
+.db-button-modal button.db-button-add {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  height: auto;
+  margin-top: 16px;
+  padding: 8px 12px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.db-button-modal button.db-button-add:hover { color: var(--text-normal); border-color: var(--background-modifier-border-hover); background: var(--background-modifier-hover); }
+.db-button-modal button.db-button-add-step { min-height: 44px; }
+.db-button-modal .db-button-add-step .db-dropdown-field-chevron { display: none; }
+.db-button-modal .db-button-add-step .db-dropdown-field-value { color: inherit; font-size: 13px; }
+.db-button-modal .db-button-option-list { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.db-button-modal .db-button-option-list label { display: flex; align-items: center; gap: 6px; }
+.db-button-modal .db-button-error { color: var(--text-error); }
+.db-button-modal .is-dragging { opacity: 0.45; }
+.db-button-modal .is-drop-before::before,
+.db-button-modal .is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+.db-button-modal .is-drop-before::before { top: -9px; }
+.db-button-modal .is-drop-after::after { bottom: -9px; }
+.db-button-modal > .db-modal-button-row { position: sticky; bottom: 0; padding: 16px 0 2px; margin-top: 12px; background: var(--modal-background, var(--background-primary)); z-index: 1; }
+@media (hover: none), (pointer: coarse) {
+  .db-button-modal .db-button-card-tools { opacity: 1; }
+  .db-button-modal button.db-button-quiet-icon { width: 44px; height: 44px; }
+  .note-database-container .db-record-button { min-height: 44px; }
+}
+@media (max-width: 600px) {
+  .modal.db-button-modal-host { padding: 20px 16px; }
+  .db-button-modal .db-button-action { padding: 12px; }
+  .db-button-modal .db-modal-row { flex-wrap: wrap; gap: 6px; }
+  .db-button-modal .db-modal-row .db-modal-label { flex-basis: 100%; }
+  .db-button-modal .db-button-toggle-row .db-modal-label { flex: 1 1 0; }
+  .db-button-modal .db-modal-row .db-modal-input,
+  .db-button-modal .db-modal-row .db-modal-dropdown { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .db-button-modal .db-button-card-tools { transition: none; }
+}
+
+.db-button-drag-preview {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(320px, 70vw);
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: var(--shadow-s);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* Visual dynamic values: text slots and removable references share one writing surface. */
+.db-button-modal .db-button-composition-row { align-items: flex-start; }
+.db-button-modal .db-button-composition { position: relative; flex: 1; min-width: 0; }
+.db-button-modal .db-button-composition-surface { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 40px; padding: 5px 36px 5px 7px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--db-button-field-background); }
+.db-button-modal .db-button-composition-surface:hover { border-color: var(--background-modifier-border-hover); }
+.db-button-modal .db-button-composition-surface:focus-within { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.db-button-modal .db-button-composition-surface.is-multiline { display: block; min-height: 76px; }
+.db-button-modal .db-button-composition-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px; min-height: 28px; }
+.db-button-modal .db-button-composition-text { flex: 0 1 auto; min-width: 2px; max-width: 100%; height: 28px; min-height: 28px; padding: 3px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font: inherit; line-height: 22px; resize: none; }
+.db-button-modal .db-button-composition-text:only-child { flex: 1; }
+.db-button-modal .db-button-composition-text:focus { outline: none; box-shadow: none; }
+.db-button-modal .db-button-value-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 4px 2px 8px; min-height: 28px; border-radius: 6px; color: var(--text-accent); background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary)); font-size: 12px; }
+.db-button-modal .db-button-value-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-button-modal .db-button-value-chip > button { flex: 0 0 auto; width: 22px; height: 24px; padding: 3px; border: 0; background: transparent; box-shadow: none; color: inherit; }
+.db-button-modal .db-button-value-chip svg { display: block; width: 14px; height: 14px; }
+.db-button-modal .db-button-value-chip > .db-button-value-chip-icon { display: inline-flex; flex: 0 0 14px; align-items: center; }
+.db-button-modal .db-button-value-chip-icon svg { width: 14px; height: 14px; }
+.db-button-modal .db-modal-row[hidden] { display: none; }
+.db-button-modal .db-button-action-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 4px; overflow: hidden; }
+.db-button-modal .db-button-action-name { display: inline-flex; align-items: center; flex: 0 0 auto; min-height: 24px; line-height: 20px; }
+.db-button-modal .db-button-summary-group { display: contents; }
+.db-button-modal .db-button-summary-tag { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; min-height: 24px; padding: 0 6px; border: 1px solid var(--background-modifier-border); border-radius: 5px; background: var(--background-primary); color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 20px; }
+.db-button-modal .db-button-summary-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-button-modal .db-button-summary-tag-icon { display: inline-flex; align-items: center; flex: 0 0 12px; }
+.db-button-modal .db-button-summary-tag-icon .db-dropdown-option-type-icon { display: inline-flex; }
+.db-button-modal .db-button-summary-tag-icon svg { width: 12px; height: 12px; }
+.db-button-modal .db-button-summary-tag-icon .db-record-icon { flex-basis: 12px; width: 12px; min-width: 12px; height: 12px; }
+.db-button-modal .db-button-summary-tag-icon .db-record-icon-emoji { font-size: 12px; }
+.db-button-modal .is-sorting-actions .db-button-action-title { flex-wrap: nowrap; }
+.db-button-modal .is-sorting-actions .db-button-summary-group { flex-wrap: nowrap; overflow: hidden; }
+.db-button-modal .db-button-actions.is-sorting-actions { justify-content: flex-start; }
+.db-button-modal .is-sorting-actions > .db-button-action > :not(.db-button-action-heading) { display: none; }
+.db-button-modal .is-sorting-actions > .db-button-action { padding: 8px 14px; flex: 0 0 auto; }
+.db-button-modal .is-sorting-actions > .db-button-action > .db-button-action-heading { margin-bottom: 0; }
+.db-button-modal .is-sorting-actions > .db-button-action > .db-button-action-heading > .db-button-card-tools { visibility: hidden; }
+@media (max-width: 600px) { .db-button-modal .db-button-composition { flex-basis: 100%; } }
+
+/* Button appearance reuses the full icon picker and shows real style examples. */
+.db-button-style-popover .db-dropdown-option.has-icon { grid-template-columns: 16px 52px minmax(0, 1fr); }
+.db-button-style-popover .db-dropdown-option-icon { display: flex; align-items: center; justify-content: flex-start; align-self: center; height: 20px; line-height: 1; }
+.db-button-style-sample { display: inline-flex; align-items: center; justify-content: center; gap: 3px; box-sizing: border-box; flex: 0 0 48px; width: 48px; height: 20px; padding: 0 4px; border-radius: var(--button-radius, 5px); border: 1px solid var(--background-modifier-border); background: transparent; color: var(--text-normal); font-size: 10px; font-weight: 400; line-height: 1; box-shadow: none; }
+.db-button-style-sample > span { display: inline-flex; align-items: center; }
+.db-button-style-popover .db-button-style-sample svg { display: block; width: 10px; height: 10px; }
+.db-button-style-sample.is-primary { background: color-mix(in srgb, var(--interactive-accent) 12%, transparent); color: var(--text-accent); border-color: transparent; }
+.db-button-style-sample.is-plain { background: transparent; color: var(--text-normal); border-color: transparent; }
+.db-record-button .db-record-icon { vertical-align: middle; }
+.db-record-button .db-record-icon-color-gray { color: inherit; }
+.db-button-modal .db-button-actions { margin-left: 20px; }
+.db-button-modal button.db-button-add-step { margin-left: 20px; width: calc(100% - 20px); }
+@media (max-width: 600px) {
+  .db-button-modal .db-button-actions { margin-left: 12px; }
+  .db-button-modal button.db-button-add-step { margin-left: 12px; width: calc(100% - 12px); }
+}
+
+/* The recommendation section shares category typography/grid, outside the scrolling pages. */
+.db-icon-picker-recommendations { flex: 0 0 auto; padding: 0 14px; overflow: hidden; scrollbar-gutter: stable; }
+
+/* Keep nested type icons centered; icon size comes from shared dropdown styles. */
+.db-dropdown-popover.db-button-menu-popover .db-dropdown-option-type-icon { display: inline-flex; align-items: center; }
+
+/* Sub-action sorting compacts only this list while its measured height is reserved. */
+.db-button-modal .db-button-property-actions { display: flow-root; }
+.db-button-modal .db-button-property-action .db-button-summary-group { display: contents; }
+.db-button-modal .is-sorting-properties > .db-button-property-action { margin: 8px 0; padding: 8px 12px; }
+.db-button-modal .is-sorting-properties > .db-button-property-action > :not(.db-button-action-heading) { display: none; }
+.db-button-modal .is-sorting-properties > .db-button-property-action > .db-button-action-heading { margin-bottom: 0; }
+.db-button-modal .is-sorting-properties .db-button-summary-group { display: inline-flex; align-items: baseline; flex-wrap: nowrap; }
+.db-button-modal .is-sorting-properties .db-button-action-title { flex-wrap: nowrap; }
+.db-button-modal .is-sorting-properties .db-button-card-tools { visibility: hidden; }
+.db-button-modal .db-button-summary-group.is-target + .db-button-summary-group.is-property::before { content: ""; align-self: center; flex: 0 0 auto; height: 14px; border-left: 1px solid var(--background-modifier-border-hover); margin: 0 3px 0 1px; }
+
+/* Button editor: scan targets first, then read the quieter property summary. */
+.db-button-modal .db-button-summary-tag { border-color: transparent; }
+.db-button-modal .is-property > .db-button-summary-tag { padding-inline: 2px; border: 0; background: transparent; color: var(--text-muted); }
+.db-button-modal .db-button-summary-more { display: inline-flex; align-items: center; min-height: 24px; line-height: 20px; font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.db-button-modal .db-button-property-summary-detail { display: none; min-width: 0; min-height: 24px; line-height: 20px; align-items: center; font-size: 12px; font-weight: 400; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+.db-button-modal .is-sorting-properties .db-button-property-summary-detail { display: inline-flex; white-space: nowrap; }
+.db-button-modal .db-button-field-help { margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.db-button-modal button.db-button-insert-value { position: absolute; top: 6px; right: 5px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border: 0; background: transparent; box-shadow: none; color: var(--text-accent); opacity: 0; pointer-events: none; }
+.db-button-modal .db-button-insert-value svg { width: 14px; height: 14px; }
+.db-button-modal .db-button-composition:focus-within .db-button-insert-value { opacity: 1; pointer-events: auto; }
+.db-button-modal .db-button-insert-value:hover { background: var(--background-modifier-hover); }
+.db-button-modal .is-compact-card { display: flex; flex-direction: column; }
+.db-button-modal .is-compact-card:not(.is-editing) > :not(.db-button-action-heading):not(.db-button-card-footer) { display: none; }
+.db-button-modal .is-compact-card:not(.is-editing) > .db-button-action-heading { margin-bottom: 0; align-items: flex-start; }
+.db-button-modal .is-compact-card:not(.is-editing) > .db-button-action-heading .db-button-property-summary-detail { display: inline-flex; overflow-wrap: anywhere; }
+.db-button-modal .db-button-card-footer { order: 2; display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+.db-button-modal .db-button-card-order { display: flex; gap: 4px; }
+.db-button-modal .db-button-card-edit { min-width: 56px; min-height: 44px; padding: 6px 12px; background: transparent; box-shadow: none; color: var(--text-accent); }
+.db-button-modal.is-compact-editor .db-button-quiet-icon { width: 44px; height: 44px; color: var(--text-muted); }
+.db-button-modal.is-compact-editor .db-button-quiet-icon:disabled { opacity: 0.3; }
+.db-button-modal.is-compact-editor .db-button-card-tools { opacity: 1; gap: 0; }
+.db-button-modal.is-compact-editor .db-button-card-tools .db-button-quiet-icon { width: 44px; }
+.db-button-modal.is-compact-editor .db-button-action-icon { margin-top: 7px; }
+.db-button-modal.is-compact-editor .db-button-action-title { padding-top: 4px; }
+.db-button-modal.is-compact-editor .db-button-actions { margin-left: 0; }
+.db-button-modal.is-compact-editor .db-button-property-action { margin-block: 10px; }
+.db-button-modal.is-compact-editor .db-button-value-chip > button { width: 36px; height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+.db-button-modal.is-compact-editor .db-button-value-chip { padding-block: 0; }
+.db-button-modal.is-compact-editor .db-button-insert-value { opacity: 1; pointer-events: auto; }
+@media (pointer: coarse) {
+  .db-button-modal button.db-button-insert-value { opacity: 1; pointer-events: auto; width: 40px; height: 40px; top: 1px; right: 1px; }
+  .db-button-modal .db-button-composition-surface { padding-right: 44px; min-height: 44px; }
+  .db-button-modal .db-button-value-chip > button { width: 40px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+}
+
+/* Discover dynamic values while editing, without a permanent helper row on every field. */
+.db-button-modal .db-button-composition-hint { display: none; }
+.db-button-modal .db-button-composition:focus-within .db-button-composition-hint { display: block; }
+.db-button-modal.is-compact-editor button.db-button-delete { color: var(--text-error); }
+.db-button-modal.is-compact-editor button.db-button-add-step { margin-left: 0; width: 100%; }
+@media (pointer: coarse) {
+  .db-button-modal button.db-button-delete { color: var(--text-error); }
+}
+
+/* Desktop disclosure is transient editor state, independent of drag compaction. */
+.db-button-modal .db-button-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.db-button-modal button.db-button-fold-all { min-height: 28px; padding: 4px 0 4px 8px; border: 0; background: transparent; box-shadow: none; color: var(--text-muted); font-size: 12px; }
+.db-button-modal button.db-button-fold-all:hover { color: var(--text-normal); }
+.db-button-modal .db-button-fold-all[hidden] { display: none; }
+.db-button-modal button.db-button-card-disclosure { width: 20px; height: 28px; margin-left: -4px; }
+.db-button-modal .db-button-card-disclosure svg { width: 12px; height: 12px; }
+.db-button-modal .db-button-action-title.is-collapsible { cursor: pointer; border-radius: 4px; }
+.db-button-modal .db-button-action-title.is-collapsible:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.db-button-modal .db-button-action.is-collapsed { padding-block: 8px; min-height: 46px; }
+.db-button-modal .db-button-action.is-collapsed > :not(.db-button-action-heading) { display: none; }
+.db-button-modal .db-button-action.is-collapsed > .db-button-action-heading { margin-bottom: 0; }
+.db-button-modal .db-button-action.is-collapsed > .db-button-action-heading .db-button-action-title { flex-wrap: nowrap; white-space: nowrap; }
+.db-button-modal .db-button-action.is-collapsed .db-button-summary-tag { flex-shrink: 1; }
+.db-button-modal .db-button-action.is-collapsed .db-button-summary-more { flex-shrink: 0; }
+
+.db-button-modal .db-button-action,
+.db-button-modal .db-button-property-action { scroll-margin-block: 12px 80px; }
+
+.db-menu-button-icon { display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
+.db-menu-button-icon svg { width: 14px; height: 14px; }

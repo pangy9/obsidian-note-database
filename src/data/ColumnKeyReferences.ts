@@ -10,7 +10,7 @@
  * 真实 updateSourceRuleTreeKeyReferences 所在的 SourceRules.ts 耦合 obsidian，
  * 故不由本模块直接 import；生产侧（ColumnConfig wrapper）注入，测试可传 fake。
  */
-import type { DatabaseConfig, SourceRule, ViewConfig } from "./types";
+import type { DatabaseConfig, SourceRule, ViewConfig, RecordButtonValue } from "./types";
 import type { DatabaseViewState } from "../views/ViewStateStore";
 import { buildRenameKnownFields, replaceFormulaFieldReferences } from "./FormulaRename";
 
@@ -49,6 +49,34 @@ export function updateColumnKeyReferences(
     changed = true;
     return keys.map((key) => key === oldKey ? newKey : key);
   };
+  for (const column of config.schema.columns) {
+    const renameDynamic = (value: RecordButtonValue | undefined, targetIsLocal: boolean): void => {
+      if (!value) return;
+      if ((value.source === "trigger" || (value.source === "target" && targetIsLocal)) && value.value === oldKey) { value.value = newKey; changed = true; }
+      if (value.source === "template" && typeof value.value === "string") value.value = renameTokens(value.value, targetIsLocal);
+    };
+    const renameTokens = (text: string, targetIsLocal = false): string => text.replace(/\{\{\s*(trigger|target)\.([^{}]+?)\s*\}\}/g, (match, scope: string, key: string) => {
+      if ((scope === "trigger" || targetIsLocal) && key === oldKey) { changed = true; return `{{${scope}.${newKey}}}`; }
+      return match;
+    });
+    for (const step of column.buttonConfig?.steps || []) {
+      const local = step.kind === "edit" && step.target === "trigger";
+      if (step.kind === "edit" || step.kind === "create" || step.kind === "duplicate") {
+        for (const action of step.actions) {
+          if (local && action.field === oldKey) { action.field = newKey; changed = true; }
+          renameDynamic(action.dynamic, local);
+        }
+      }
+      if (step.kind === "create" || step.kind === "duplicate") { step.title = renameTokens(step.title); if (step.body) step.body = renameTokens(step.body); }
+      if (step.kind === "edit") for (const filter of step.filters || []) renameDynamic(filter.value, false);
+      if (step.kind === "variable") renameDynamic(step.value, false);
+      if (step.kind === "open" && step.link) step.link = renameTokens(step.link);
+      if (step.kind === "confirm") step.message = renameTokens(step.message);
+    }
+    for (const action of column.buttonConfig?.actions || []) {
+      if (action.field === oldKey) { action.field = newKey; changed = true; }
+    }
+  }
   config.columnOrder = replaceKeys(config.columnOrder);
   config.titleField = replaceValue(config.titleField);
   config.recordIconField = replaceValue(config.recordIconField);

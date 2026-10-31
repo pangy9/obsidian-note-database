@@ -15,7 +15,7 @@ export function getFrontmatterWriteKey(col: ColumnDef): string {
 
 /** 该列是否可写入：computed/rollup 派生列与只读 file 字段不可写（file.tags 例外）。 */
 export function canFillColumn(col: ColumnDef): boolean {
-  if (col.type === "computed" || col.type === "rollup") return false;
+  if (col.type === "computed" || col.type === "rollup" || col.type === "button") return false;
   if (!isFileFieldKey(col.key)) return true;
   return col.key === "file.tags";
 }

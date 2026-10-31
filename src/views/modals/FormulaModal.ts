@@ -691,7 +691,7 @@ export class FormulaModal extends Modal {
     const currentKeys = new Set([this.col.key, this.col.computedKey || ""]);
     const seen = new Set<string>();
     return [...this.columns, ...FORMULA_FILE_FIELDS].filter((candidate) => {
-      if (currentKeys.has(candidate.key) || currentKeys.has(candidate.computedKey || "")) return false;
+      if (candidate.type === "button" || currentKeys.has(candidate.key) || currentKeys.has(candidate.computedKey || "")) return false;
       if (seen.has(candidate.key)) return false;
       seen.add(candidate.key);
       return true;

@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import { getColumnOptionValues, isOptionColumnType, toBooleanValue } from "./ColumnTypes";
-import { isDateLikeColumnType } from "./DateTimeFormat";
+import { isDateLikeColumnType, normalizeDateColumnValue } from "./DateTimeFormat";
+import { getColumnDisplayType } from "./ColumnDisplay";
 import { stringifyValue } from "./Stringify";
 import { ChartAggregation as ChartAggregationType, ChartDateBucket, ChartNumberBucket, ColumnDef, ComputedFieldDef, RowData } from "./types";
 
@@ -154,7 +155,7 @@ export function isChartAggregationValueColumn(
   aggregation: ChartAggregation | undefined,
   computedFields: ComputedFieldDef[] = [],
 ): boolean {
-  if (!requiresChartValueField(aggregation)) return false;
+  if (column.type === "button" || !requiresChartValueField(aggregation)) return false;
   if (isNumericChartAggregation(aggregation)) return isChartValueColumn(column, computedFields);
   if (isCheckboxChartAggregation(aggregation)) {
     if (column.type === "checkbox") return true;
@@ -217,6 +218,14 @@ function getChartFieldValue(row: RowData, fieldKey: string, column?: ColumnDef):
     return row.frontmatter[fieldKey];
   }
   return null;
+}
+
+function getChartAggregationValue(row: RowData, column: ColumnDef | undefined, computedFields: ComputedFieldDef[]): unknown {
+  if (!column) return undefined;
+  return normalizeDateColumnValue(
+    getChartFieldValue(row, column.key, column),
+    getColumnDisplayType(column, computedFields),
+  );
 }
 
 function getChartFileFieldValue(row: RowData, fieldKey: string): unknown {
@@ -472,7 +481,7 @@ export function aggregateChart(
       labels.set(bucket.key, bucket.label);
       dateRanks.set(bucket.key, bucket.rank);
     }
-    const aggregationValue = valueColumn ? getChartFieldValue(row, valueColumn.key, valueColumn) : undefined;
+    const aggregationValue = getChartAggregationValue(row, valueColumn, computedFields);
     for (const key of keys) {
       const current = stats.get(key) || emptyStat();
       addStatValue(current, aggregation, aggregationValue);
@@ -590,7 +599,7 @@ export function aggregateSeriesChart(
   for (const row of rows) {
     const primary = getGroupEntries(row, column, fieldKey, primaryDateBucket, uncategorizedLabel, computedFields, primaryNumberBucketContext);
     const stacks = getGroupEntries(row, stackColumn, seriesFieldKey, undefined, uncategorizedLabel, computedFields);
-    const aggregationValue = valueColumn ? getChartFieldValue(row, valueColumn.key, valueColumn) : undefined;
+    const aggregationValue = getChartAggregationValue(row, valueColumn, computedFields);
     for (const group of primary) {
       primaryLabels.set(group.key, group.label);
       primaryRanks.set(group.key, group.rank);

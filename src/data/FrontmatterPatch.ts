@@ -71,6 +71,7 @@ export function mergeFrontmatterDesired(
 export function configsDeepEqual(a: unknown, b: unknown): boolean {
   // Object.is 额外覆盖 NaN===NaN；computed 保存结果可能合法地是 NaN，不能误报 CAS conflict。
   if (Object.is(a, b)) return true;
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime());
   if (a === null || b === null) return a === b;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
@@ -96,6 +97,7 @@ export function configsDeepEqual(a: unknown, b: unknown): boolean {
  */
 export function configsSemanticEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime());
   if (a === null || b === null) return a === b;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;

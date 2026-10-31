@@ -95,7 +95,7 @@ export function getPropertyWriters(entries: PropertyTypeConflictEntry[]): Proper
     const computedFields = entry.config.schema?.computedFields || [];
 
     for (const col of columns) {
-      if (!col.key || col.type === "computed" || col.type === "rollup" || isFileFieldKey(col.key)) continue;
+      if (!col.key || col.type === "button" || col.type === "computed" || col.type === "rollup" || isFileFieldKey(col.key)) continue;
       const observableType = mapColumnTypeToObservablePropertyType(col.type);
       if (!observableType) continue;
       writers.push({

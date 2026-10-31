@@ -8,10 +8,16 @@ import { getValidRecordIconIds } from "./RecordIconRenderer";
 
 export interface IconPickerOptions {
   anchor: HTMLElement;
+  /** Keep a menu-owned picker inside its parent menu for outside-click handling. */
+  container?: HTMLElement;
+  placement?: "vertical" | "submenu";
   current?: string;
   recent?: string[];
+  /** Contextual shortcuts filtered by tab; fixed below the icon color palette. */
+  recommended?: Array<{ value: string; label: string }>;
   onRecentChange?(recent: string[]): void | Promise<void>;
   onConfigureField?(): void;
+  onClose?(): void;
   onSelect(value: string | null): void | Promise<void>;
 }
 
@@ -23,7 +29,11 @@ const EMOJI_CATEGORY_ICONS: Record<string, string> = {
 export function openIconPickerPopover(options: IconPickerOptions): () => void {
   const doc = window.activeDocument;
   doc.querySelectorAll(".db-icon-picker-popover").forEach((element) => element.remove());
-  const panel = doc.body.createDiv({ cls: "db-icon-picker-popover" });
+  const panel = (options.container || doc.body).createDiv({ cls: "db-icon-picker-popover" });
+  if (options.container) {
+    // Let the picker controls run, but do not activate the ancestor Menu's dismiss handler.
+    for (const type of ["mousedown", "click", "pointerdown"]) panel.addEventListener(type, event => event.stopPropagation());
+  }
   let tab: "emoji" | "lucide" = options.current?.startsWith("lucide:") ? "lucide" : "emoji";
   let category = tab === "emoji" ? "people" : "common";
   let color: RecordIconColor = (options.current?.match(/^lucide:[^@]+@([a-z]+)$/)?.[1] as RecordIconColor) || "gray";
@@ -39,6 +49,7 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
     panel.remove();
     doc.removeEventListener("mousedown", onOutside, true);
     doc.removeEventListener("keydown", onKeydown, true);
+    options.onClose?.();
   };
   const commit = async (value: string | null) => {
     try {
@@ -86,6 +97,16 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
       };
     }
 
+    const renderToken = (target: HTMLElement, value: string, label = value) => {
+      const selected = value === current || (value.startsWith("lucide:") && value.replace(/@[^@]+$/, "") === current?.replace(/@[^@]+$/, ""));
+      const button = target.createEl("button", { cls: `db-icon-picker-item${selected ? " is-selected" : ""}`, attr: { type: "button", title: label, "aria-label": label, "aria-pressed": String(selected) } });
+      if (value.startsWith("lucide:")) {
+        const match = value.match(/^lucide:([^@]+)(?:@(.+))?$/);
+        if (match) { setIcon(button, match[1]); button.addClass(`db-record-icon-color-${match[2] || "gray"}`); }
+      } else button.createSpan({ text: value });
+      button.onclick = () => { void commit(value); };
+    };
+
     if (tab === "lucide") {
       const colors = panel.createDiv({ cls: "db-icon-picker-colors" });
       for (const candidate of RECORD_ICON_COLORS) {
@@ -94,6 +115,18 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
           attr: { type: "button", title: candidate, "aria-label": candidate },
         });
         dot.onclick = () => { color = candidate; render(true); };
+      }
+    }
+
+    const recommendations = options.recommended?.filter(item => tab === "lucide" ? item.value.startsWith("lucide:") : !item.value.startsWith("lucide:"));
+    if (recommendations?.length) {
+      const row = panel.createDiv({ cls: "db-icon-picker-recommendations", attr: { role: "group", "aria-label": t("button.appearance.recommended") } });
+      const section = row.createDiv({ cls: "db-icon-picker-section" });
+      section.createDiv({ cls: "db-icon-picker-label", text: t("button.appearance.recommended") });
+      const grid = section.createDiv({ cls: "db-icon-picker-grid" });
+      for (const item of recommendations) {
+        const id = item.value.match(/^lucide:([^@]+)/)?.[1];
+        renderToken(grid, id ? serializeLucideIconToken(id, color) : item.value, item.label);
       }
     }
 
@@ -117,15 +150,6 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
     };
     const renderGrid = (scroller: HTMLElement) => {
       const { recentValues, values, sectionLabel } = computeValues();
-      const renderToken = (target: HTMLElement, value: string) => {
-        const selected = value === current || (value.startsWith("lucide:") && value.replace(/@[^@]+$/, "") === current?.replace(/@[^@]+$/, ""));
-        const button = target.createEl("button", { cls: `db-icon-picker-item${selected ? " is-selected" : ""}`, attr: { type: "button", title: value } });
-        if (value.startsWith("lucide:")) {
-          const match = value.match(/^lucide:([^@]+)(?:@(.+))?$/);
-          if (match) { setIcon(button, match[1]); button.addClass(`db-record-icon-color-${match[2] || "gray"}`); }
-        } else button.createSpan({ text: value });
-        button.onclick = () => { void commit(value); };
-      };
       if (category !== "recent" && recentValues.length) {
         const recent = scroller.createDiv({ cls: "db-icon-picker-section" });
         recent.createDiv({ cls: "db-icon-picker-label", text: t("recordIcon.recent") });
@@ -164,7 +188,7 @@ export function openIconPickerPopover(options: IconPickerOptions): () => void {
       const value = values[Math.floor(Math.random() * values.length)];
       if (value) void commit(tab === "emoji" || category === "recent" ? value : serializeLucideIconToken(value, color));
     };
-    positionToolbarPopover(panel, options.anchor, { preferredWidth: 318, maxWidth: 318, minWidth: 318, gap: 8 });
+    positionToolbarPopover(panel, options.anchor, { preferredWidth: 318, maxWidth: 318, minWidth: 318, gap: 8, placement: options.placement });
     if (preserveScroll) scroller.scrollTop = previousScrollTop;
   };
 

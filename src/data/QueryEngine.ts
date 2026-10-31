@@ -1,6 +1,6 @@
 import { getColumnOptionValues, hasObsidianTagValue, isObsidianAliasesKey, isObsidianTagsKey, normalizeObsidianTagValue, toBooleanValue, toMultiSelectValues, toObsidianTagValues } from "./ColumnTypes";
-import { getColumnDisplayType } from "./ColumnDisplay";
-import { isDateLikeColumnType, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
+import { getColumnDisplayType, normalizeComputedStorageKey } from "./ColumnDisplay";
+import { isDateLikeColumnType, normalizeDateColumnValue, parseDateTimeParts, toDateTimestamp } from "./DateTimeFormat";
 import { getDateGroupMode } from "./GroupDisplay";
 import { isBaseFileField } from "./FileFields";
 import { getRowFileFieldValue } from "./FileFieldObsidian";
@@ -51,15 +51,15 @@ export class QueryEngine {
   private compareRowsByColumn(a: RowData, b: RowData, column: ColumnDef): number {
     if (column.type === "select" || column.type === "status") {
       return this.compareOptionValues(
-        stringifyValue(this.getFieldValue(a, column.key)),
-        stringifyValue(this.getFieldValue(b, column.key)),
+        stringifyValue(this.getFieldValue(a, column.key, column)),
+        stringifyValue(this.getFieldValue(b, column.key, column)),
         this.getComparableOptionValues(column)
       );
     }
     if (column.type === "multi-select") {
       return compareMultiSelect(
-        this.getFieldValue(a, column.key),
-        this.getFieldValue(b, column.key),
+        this.getFieldValue(a, column.key, column),
+        this.getFieldValue(b, column.key, column),
         this.getComparableOptionValues(column)
       );
     }
@@ -90,11 +90,12 @@ export class QueryEngine {
   }
 
   private matchesFilter(row: RowData, rule: FilterRule, column?: ColumnDef): boolean {
-    const val = this.getFieldValue(row, rule.field);
+    const val = normalizeDateColumnValue(this.getFieldValue(row, rule.field, column), column?.type);
     const values = this.getComparableValues(val);
+    const comparableRuleValue = stringifyValue(normalizeDateColumnValue(rule.value || "", column?.type));
     const ruleValue = column && isObsidianTagsKey(column.key)
-      ? normalizeObsidianTagValue(rule.value || "")
-      : rule.value || "";
+      ? normalizeObsidianTagValue(comparableRuleValue)
+      : comparableRuleValue;
 
     switch (rule.op) {
       case "eq":
@@ -140,7 +141,7 @@ export class QueryEngine {
     const dateGroupMode = config ? getDateGroupMode(config, field) : undefined;
     const groups = new Map<string, RowData[]>();
     for (const row of rows) {
-      const raw = this.getFieldValue(row, field);
+      const raw = this.getFieldValue(row, field, column);
       const keys = this.getGroupKeys(raw, column, dateGroupMode, config);
       for (const key of keys) {
         if (!groups.has(key)) groups.set(key, []);
@@ -165,13 +166,13 @@ export class QueryEngine {
   }
 
   private getSortValue(row: RowData, col: ColumnDef): number | string {
-    const val = this.getFieldValue(row, col.key);
+    const val = normalizeDateColumnValue(this.getFieldValue(row, col.key, col), col.type);
     if (val == null) return "";
     if (col.type === "number" || col.type === "currency") {
       return typeof val === "number" ? val : parseFloat(stringifyValue(val)) || 0;
     }
     if (isDateLikeColumnType(col.type)) {
-      // 统一用本地墙上时间时间戳排序（带时间值与纯日期同口径），空值/非法回退 ""排最前。
+      // Date columns compare by day; datetime columns retain their time component.
       if (val == null || val === "") return "";
       return toDateTimestamp(val) ?? "";
     }
@@ -263,7 +264,7 @@ export class QueryEngine {
     // date 列总按 dateKey 归一化；datetime 列在 "date" 模式也按 dateKey（忽略时刻），清理"同日不同
     // 时间/带时间脏值"造成的分裂分组。归一化必须对原始值做（parseDateTimeParts 已支持毫秒 number），
     // 不能在 getComparableValues(stringify) 之后做，否则 number 会被当年份解析。
-    if (column?.type === "date" || (column?.type === "datetime" && dateGroupMode === "date")) {
+    if (displayType === "date" || (displayType === "datetime" && dateGroupMode === "date")) {
       const parts = parseDateTimeParts(value);
       if (parts) return [parts.dateKey];
       const fallback = stringifyValue(value).trim();
@@ -281,9 +282,13 @@ export class QueryEngine {
     return Array.from(new Set(keys));
   }
 
-  private getFieldValue(row: RowData, field: string): unknown {
+  private getFieldValue(row: RowData, field: string, column?: ColumnDef): unknown {
     if (isBaseFileField(field)) return getRowFileFieldValue(row, field);
     // Computed fields first (they override frontmatter)
+    if (column?.computedKey) {
+      const computedKey = normalizeComputedStorageKey(column.computedKey);
+      if (computedKey in row.computed) return row.computed[computedKey];
+    }
     if (field.startsWith("formula.") && field.slice("formula.".length) in row.computed) return row.computed[field.slice("formula.".length)];
     if (field in row.computed) return row.computed[field];
     if (isObsidianTagsKey(field) && field in row.frontmatter) return toObsidianTagValues(row.frontmatter[field]);

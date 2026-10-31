@@ -54,7 +54,7 @@ export class RowPipeline {
           if (!visibleKeys.has(col.key)) hidden.add(col.key);
         }
       }
-      const searchCols = config.schema.columns.filter((col) => !hidden.has(col.key));
+      const searchCols = config.schema.columns.filter((col) => !hidden.has(col.key) && col.type !== "button");
       rows = rows.filter((row) => {
         if (isCalendarTimeline) {
           const title = this.getCalendarTimelineSearchTitle(row, config);
@@ -91,7 +91,7 @@ export class RowPipeline {
       rows = rows.filter((row) => row.frontmatter["status"] === state.statusFilter);
     }
 
-    const validFields = new Set(config.schema.columns.map((col) => col.key));
+    const validFields = new Set(config.schema.columns.filter((col) => col.type !== "button").map((col) => col.key));
     const effectiveFilters = getEffectiveFilterRules(state.filters, validFields);
     if (effectiveFilters.length > 0) {
       rows = this.queryEngine.applyFilters(rows, effectiveFilters, state.filterLogic, queryColumns);
@@ -139,19 +139,9 @@ export class RowPipeline {
   }
 
   private withComputedResultTypes(config: ViewConfig): ColumnDef[] {
-    return config.schema.columns.map((col) => {
-      if (col.type === "rollup") {
-        const type = col.rollupConfig?.aggregation === "count" ||
-          col.rollupConfig?.aggregation === "sum" ||
-          col.rollupConfig?.aggregation === "avg"
-          ? "number"
-          : "text";
-        return { ...col, type };
-      }
-      if (col.type !== "computed") return col;
-      const computedKey = col.computedKey || col.key;
-      const computedType = config.schema.computedFields.find((field) => field.key === computedKey)?.type;
-      return computedType ? { ...col, type: computedType } : col;
+    return config.schema.columns.filter((col) => col.type !== "button").map((col) => {
+      if (col.type !== "computed" && col.type !== "rollup") return col;
+      return { ...col, type: getColumnDisplayType(col, config.schema.computedFields) };
     });
   }
 

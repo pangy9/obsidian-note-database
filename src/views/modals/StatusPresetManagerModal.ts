@@ -38,7 +38,7 @@ export class StatusPresetManagerModal extends Modal {
     this.listEl = this.contentEl.createDiv({ cls: "db-status-preset-manager-list" });
     this.renderList();
 
-    const addBtn = this.contentEl.createEl("button", { text: `+ ${t("statusPresets.add")}` });
+    const addBtn = this.contentEl.createEl("button", { cls: "db-add-entry", text: `+ ${t("statusPresets.add")}` });
     addBtn.onclick = () => {
       const source = this.presets.find((preset) => preset.id === this.defaultPresetId) || this.presets[0] || getBuiltinStatusPresets()[0];
       const preset = cloneStatusPreset(source);

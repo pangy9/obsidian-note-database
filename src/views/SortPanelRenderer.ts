@@ -56,7 +56,7 @@ export class SortPanelRenderer {
       rules.forEach((rule, index) => this.renderRule(panel, config, state, rule, index, actions));
     }
 
-    panel.createEl("button", { cls: "db-panel-button", text: `+ ${t("panel.addSort")}` }).onclick = () => {
+    panel.createEl("button", { cls: "db-panel-button db-add-entry", text: `+ ${t("panel.addSort")}` }).onclick = () => {
       const first = getViewRuleColumns(config)[0]?.key || "file.name";
       state.sortColumn = undefined;
       state.sortDirection = "asc";

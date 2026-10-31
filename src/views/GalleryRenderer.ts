@@ -1,3 +1,4 @@
+import { renderRecordButton, type RunRecordButton } from "./RecordButtonRenderer";
 import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { isObsidianTagsKey, resolveOptionDisplay, toBooleanValue, toMultiSelectValuesForKey } from "../data/ColumnTypes";
 import { isExplicitlySorted } from "../data/ManualOrder";
@@ -74,6 +75,7 @@ export interface GalleryRendererActions {
   renderGroupSummaries?(parent: HTMLElement, rows: RowData[], config: ViewConfig): void;
   applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   readonly isReadOnly?: boolean;
+  runRecordButton?: RunRecordButton;
   readonly hideCreateEntry?: boolean;
 }
 
@@ -245,7 +247,7 @@ export class GalleryRenderer {
     for (const col of fields) {
       const value = this.getCellValue(row, col);
       const displayType = this.getDisplayType(config, col);
-      const empty = this.isEmptyValue(value) && displayType !== "checkbox";
+      const empty = this.isEmptyValue(value) && displayType !== "checkbox" && col.type !== "button";
       if (empty && !this.shouldShowEmptyField(config, col)) continue;
       const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
       const item = meta.createDiv({ cls: "db-gallery-field", attr: { "data-note-database-column-key": col.key } });
@@ -551,6 +553,7 @@ export class GalleryRenderer {
   }
 
   private renderValue(item: HTMLElement, row: RowData, col: ColumnDef, value: unknown, empty = false, displayType: ColumnDef["type"] = col.type): void {
+    if (col.type === "button") { renderRecordButton(item, row, col, this.actions.runRecordButton, this.actions.isReadOnly); return; }
     const valueEl = item.createDiv({ cls: "db-gallery-field-value" });
     if (empty) valueEl.addClass("db-card-empty-placeholder");
     item.addEventListener("click", (event) => {
@@ -666,7 +669,7 @@ export class GalleryRenderer {
   renderCardFieldContent(row: RowData, col: ColumnDef, config: ViewConfig): HTMLElement {
     const value = this.getCellValue(row, col);
     const displayType = this.getDisplayType(config, col);
-    const empty = this.isEmptyValue(value) && displayType !== "checkbox";
+    const empty = this.isEmptyValue(value) && displayType !== "checkbox" && col.type !== "button";
     const displayValue = empty ? this.getEmptyDisplayValue(col, displayType) : value;
     const item = window.activeDocument.createElement("div");
     item.className = "db-gallery-field";

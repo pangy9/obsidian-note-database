@@ -132,6 +132,7 @@ export function planCreateEntry(input: CreateEntryPlanInput): CreateEntryPlan {
   };
   // 上下文默认值是最低优先级基底，先整体拷贝；来源规则在其上叠加。
   for (const [key, value] of Object.entries(input.contextFrontmatter)) {
+    if (input.schema.columns.some((col) => col.key === key && col.type === "button")) continue;
     plan.frontmatter[key] = value;
   }
 
@@ -317,7 +318,7 @@ function applyRequiredRule(ctx: RuleApplyContext, rule: SourceRule): void {
     return;
   }
   // computed 列的值由公式求值产生，不能在创建时写入。
-  if (col.type === "computed" || col.type === "rollup") {
+  if (col.type === "button" || col.type === "computed" || col.type === "rollup") {
     plan.diagnostics.push({ reason: "unconstructable", field, op });
     return;
   }
@@ -334,7 +335,7 @@ function applyHasProperty(ctx: RuleApplyContext, rule: SourceRule): void {
     return;
   }
   const col = ctx.schema.columns.find((candidate) => candidate.key === field);
-  if (col?.type === "computed" || col?.type === "rollup") {
+  if (col?.type === "button" || col?.type === "computed" || col?.type === "rollup") {
     plan.diagnostics.push({ reason: "unconstructable", field, op });
     return;
   }

@@ -14,12 +14,14 @@ function fixture(enabled: () => boolean = () => true, enqueue?: <T>(write: () =>
   desktopNotification?: DesktopReminderNotification, desktopPreviewEnabled?: () => boolean) {
   const unsubscribe = vi.fn();
   const content: { tag: string; options: { text: string; cls?: string; attr?: Record<string, string> }; onclick?: () => void; addClass(): void }[] = [];
+  const createEl = (tag: string, options: typeof content[number]["options"]) => {
+    const element = { tag, options, addClass() {} };
+    content.push(element);
+    return element;
+  };
   const app = { vault: { getName: () => "Test vault" }, workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({
-    createEl(tag: string, options: typeof content[number]["options"]) {
-      const element = { tag, options, addClass() {} };
-      content.push(element);
-      return element;
-    },
+    createEl,
+    createSpan: (options: typeof content[number]["options"]) => createEl("span", options),
   }) } } } } as unknown as App;
   const emit = { data: (_batch: DataChangeBatch) => {} };
   const source = { getRecordSnapshot: () => undefined, onDataChanged: (cb: typeof emit.data) => {
@@ -327,7 +329,7 @@ it("rolls a failed dismissal back before the next plugin settings write takes it
 
 
 describe("desktop notification channel", () => {
-  function desktopFixture(useNativeWindow = false, routing: ConstructorParameters<typeof DesktopReminderNotification>[4] = {}) {
+  function desktopFixture(useNativeWindow = false, routing: Partial<ConstructorParameters<typeof DesktopReminderNotification>[4]> = {}) {
     let focused = false;
     let optedIn = true;
     const openInbox = vi.fn();
@@ -352,7 +354,10 @@ describe("desktop notification channel", () => {
       setInterval: (fn: () => void, delay: number) => setInterval(fn, delay),
       clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
       clearInterval: (id: ReturnType<typeof setInterval>) => clearInterval(id) } as unknown as Window & typeof globalThis;
-    const adapter = new DesktopReminderNotification(() => win, () => optedIn, () => focused, openInbox, routing);
+    const adapter = new DesktopReminderNotification(() => win, () => optedIn, () => focused, openInbox, {
+      isActiveWindow: () => true,
+      ...routing,
+    });
     return { adapter, instances, openInbox, win, DesktopNotificationMock, issuingWindow, otherWindow,
       focus: () => { focused = true; }, blur: () => { focused = false; }, optOut: () => { optedIn = false; } };
   }
@@ -541,8 +546,7 @@ describe("desktop notification channel", () => {
     const popoutFocus = vi.fn();
     const status = vi.fn();
     const popoutNative = { focus: vi.fn(), show: vi.fn(), restore: vi.fn(), isDestroyed: () => false, isMinimized: () => true };
-    const popout = { focus: popoutFocus, electronWindow: popoutNative,
-      document: { hasFocus: () => false } } as unknown as Window;
+    const popout = { focus: popoutFocus, electronWindow: popoutNative } as unknown as Window;
     const desktop = desktopFixture(true, {
       getInboxWindow: () => popout, isActiveWindow: () => false, onStatusChange: status,
     });
@@ -581,10 +585,12 @@ describe("desktop notification channel", () => {
     vi.useFakeTimers();
     try {
       let active = false;
-      const desktop = desktopFixture(true, { isActiveWindow: () => active });
+      const isActiveWindow = vi.fn(() => active);
+      const desktop = desktopFixture(true, { isActiveWindow });
       expect(desktop.adapter.show("Due", "Generic", vi.fn())).toBe(true);
       desktop.instances[0].onclick?.();
       expect(desktop.issuingWindow.focus).toHaveBeenCalledOnce();
+      expect(isActiveWindow).toHaveBeenCalledWith(desktop.win);
       expect(desktop.openInbox).not.toHaveBeenCalled();
       active = true;
       await vi.advanceTimersByTimeAsync(25);

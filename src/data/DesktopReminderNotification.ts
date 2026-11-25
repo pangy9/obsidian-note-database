@@ -2,9 +2,6 @@ import type { ReminderInboxTarget } from "./RecordReminderNotice";
 
 interface DesktopNotificationWindow extends Pick<Window, "setInterval" | "clearInterval" | "setTimeout" | "clearTimeout"> {
   Notification?: typeof Notification;
-  // Query the specific BrowserWindow, not whichever Obsidian document is active.
-  // eslint-disable-next-line obsidianmd/prefer-active-doc
-  document?: Pick<Document, "hasFocus">;
   addEventListener?(type: "focus", callback: () => void): void;
   removeEventListener?(type: "focus", callback: () => void): void;
   closed?: boolean;
@@ -37,7 +34,8 @@ function desktopRemote(win: DesktopNotificationWindow | null): DesktopRemote | u
 
 interface ReminderWindowRouting {
   getInboxWindow?: () => DesktopNotificationWindow | null | undefined;
-  isActiveWindow?: (win: DesktopNotificationWindow) => boolean;
+  /** The host must identify the active renderer before a new inbox can mount. */
+  isActiveWindow: (win: DesktopNotificationWindow) => boolean;
   onStatusChange?: () => void;
 }
 
@@ -58,7 +56,7 @@ export class DesktopReminderNotification {
     private readonly enabled: () => boolean,
     private readonly isAppFocused: () => boolean,
     private readonly openInbox: (reminder?: ReminderInboxTarget) => void,
-    private readonly routing: ReminderWindowRouting = {},
+    private readonly routing: ReminderWindowRouting,
   ) {}
 
   permission(): DesktopReminderPermission {
@@ -113,8 +111,7 @@ export class DesktopReminderNotification {
       // Modal.open attaches to Obsidian's activeWindow, updated by its DOM focus
       // listener after a native focus call. It may be safe before OS focus is
       // granted if the host already identifies this vault window as active.
-      const correctWindow = this.routing.isActiveWindow?.(target) ?? target.document?.hasFocus() !== false;
-      if (!correctWindow) return false;
+      if (!this.routing.isActiveWindow(target)) return false;
       cleanup();
       this.openInbox(reminder);
       return true;

@@ -34,6 +34,7 @@ function fixture(kind: "checkbox" | "status" = "checkbox", date: "date" | "datet
   const record = { file, frontmatter };
   const settings = { rules: [rule], states: {} };
   const app = { workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({
+    createSpan: () => ({ addClass() {} }),
     createEl: () => ({ addClass() {}, onclick: null }),
   }) } } } } as unknown as App;
   const snapshot = (key: string): FrontmatterKeySnapshot =>

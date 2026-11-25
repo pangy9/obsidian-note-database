@@ -495,7 +495,7 @@ export class GalleryRenderer {
       setIcon(cover.createSpan({ cls: "db-gallery-cover-placeholder" }), "image");
       return;
     }
-    const coverLink = cover.createEl("div", {
+    const coverLink = cover.createDiv({
       cls: "db-gallery-cover-button",
       attr: { role: "button", tabindex: "0", "aria-label": image.label },
     });

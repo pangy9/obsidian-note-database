@@ -20,7 +20,7 @@ it("keeps accepted pre-upgrade slash date-time with 12-hour clock in preview, in
   const records = ["2026/11/25 8:30 PM", "2026-11-25T20:30"].map((starts, i) => ({ file: { path: `Events/${i}.md`, basename: String(i) } as NoteRecord["file"], frontmatter: { starts, done: false } }));
   expect(records.map(record => parseDateTimeParts(record.frontmatter.starts)?.time)).toEqual(["20:30", "20:30"]);
   expect(formatDateTimeValueDisplay(records[0].frontmatter.starts)).toBe(formatDateTimeValueDisplay(records[1].frontmatter.starts));
-  const app = { workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createEl(tag: string, attrs: { text: string }) { if (tag === "span") noticeLabels.push(attrs.text); return { addClass() {}, onclick: null }; } }) } } } } as unknown as App;
+  const app = { workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createSpan(attrs: { text: string }) { noticeLabels.push(attrs.text); return { addClass() {} }; }, createEl: () => ({ onclick: null }) }) } } } } as unknown as App;
   const source = { getViewDefFiles: () => [{ file: { path: "Database.md" }, config: database }], getRecordsForDatabase: () => records, onDataChanged: () => () => {}, onViewConfigChanged: () => () => {} } as unknown as DataSource;
   vi.useFakeTimers();
   const service = new RecordReminderService(app, source, () => ({ rules: [rule], states: {} }), async () => {}, () => {});

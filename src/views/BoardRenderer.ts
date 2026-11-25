@@ -676,7 +676,7 @@ export class BoardRenderer {
       setIcon(cover.createSpan({ cls: "db-board-card-cover-placeholder" }), "image");
       return;
     }
-    const coverLink = cover.createEl("div", {
+    const coverLink = cover.createDiv({
       cls: "db-board-card-cover-button",
       attr: { role: "button", tabindex: "0", "aria-label": image.label },
     });

@@ -47,7 +47,7 @@ export class ColumnHeaderController {
   }
 
   private setupResizeHandle(th: HTMLElement, col: ColumnDef): void {
-    const handle = th.createEl("div", { cls: "db-resize-handle" });
+    const handle = th.createDiv({ cls: "db-resize-handle" });
     let startX = 0;
     let startWidth = 0;
 

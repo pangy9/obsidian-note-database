@@ -46,7 +46,9 @@ export class EmbeddedDataHistory {
   get busy(): boolean { return this.pending > 0; }
   get canUndo(): boolean { return !this.damaged && this.undoEntries.length > 0; }
   get canRedo(): boolean { return !this.damaged && this.redoEntries.length > 0; }
-  get undoLabel(): string | undefined { return this.undoEntries.at(-1)?.label; }
+  get undoLabel(): string | undefined {
+    return this.undoEntries[this.undoEntries.length - 1]?.label;
+  }
 
   private async enqueue<T>(task: () => Promise<T>): Promise<T> {
     this.pending++;
@@ -78,7 +80,7 @@ export class EmbeddedDataHistory {
     return this.enqueue(async () => {
       const source = direction === "undo" ? this.undoEntries : this.redoEntries;
       const target = direction === "undo" ? this.redoEntries : this.undoEntries;
-      const entry = source.at(-1);
+      const entry = source[source.length - 1];
       if (!entry) return undefined;
       await executeDataSteps(entry.steps, direction === "undo" ? "reverse" : "forward");
       source.pop();

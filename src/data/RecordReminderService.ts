@@ -210,7 +210,7 @@ export class RecordReminderService {
     const message = buildRecordReminderNotice(items, true);
     this.notice?.hide();
     const content = this.app.workspace.containerEl.ownerDocument.createDocumentFragment();
-    const label = content.createEl("span", { text: message.body });
+    const label = content.createSpan({ text: message.body });
     label.addClass("db-reminder-notice-label");
     content.createEl("button", {
       cls: "db-reminder-notice-action",

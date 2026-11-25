@@ -23,7 +23,7 @@ const when = (hour: number, minute: number, second = 0) => new Date(2026, 10, 25
 function setup() {
   vi.useFakeTimers();
   vi.setSystemTime(when(9, 54));
-  const app = { workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createEl: () => ({ addClass() {}, onclick: null }) }) } } } } as unknown as App;
+  const app = { workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createSpan: () => ({ addClass() {} }), createEl: () => ({ addClass() {}, onclick: null }) }) } } } } as unknown as App;
   let notify!: (batch: DataChangeBatch) => void;
   let records = [old];
   const source = { getRecordSnapshot: () => null, getViewDefFiles: () => [{ file: { path: "DB.md" }, config: database }], getRecordsForDatabase: () => records,
@@ -82,7 +82,7 @@ it("does not announce a completed task while the embedded editor renames its com
   const settings: RecordReminderSettings = { rules: [{ id: "r", databaseId: "db", enabled: true, dateField: "due", completionField: "state",
     completedValues: ["Done"], dateOnlyTime: "09:00", advanceMinutes: 0 }], states: {} };
   const app = { vault: { getAbstractFileByPath: (path: string) => path === dbFile.path ? dbFile : taskFile },
-    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createEl: () => ({ addClass() {}, onclick: null }) }) } } },
+    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createSpan: () => ({ addClass() {} }), createEl: () => ({ addClass() {}, onclick: null }) }) } } },
   } as unknown as App;
   let notify!: (batch: DataChangeBatch) => void;
   let resume!: () => void;

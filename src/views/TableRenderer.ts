@@ -115,7 +115,7 @@ export class TableRenderer {
     const tableMinWidth = this.getTableMinWidth(config, visibleColumns);
 
     for (const group of groups) {
-      const groupHeader = container.createEl("div", {
+      const groupHeader = container.createDiv({
         cls: "db-group-header",
         attr: {
           "data-note-database-group-key": group.key,

@@ -30,7 +30,7 @@ it("a rename that lands 40ms before the scheduled tick must not resurrect a dism
     handlers.set(event, callback); return { offref: () => handlers.delete(event) };
   };
   const app = {
-    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createEl: () => ({ addClass() {}, onclick: null }) }) } } },
+    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createSpan: () => ({ addClass() {} }), createEl: () => ({ addClass() {}, onclick: null }) }) } } },
     vault: { on, getMarkdownFiles: () => [definition, note], getAbstractFileByPath: (p: string) => [definition, note].find(x => x.path === p) },
     metadataCache: { on, getFileCache: (file: TFile) => ({ frontmatter: file === definition ? dbProperties : noteProperties }) },
   } as unknown as App;

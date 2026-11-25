@@ -37,7 +37,7 @@ function fixture({restricted, complete, legacy = false}: {restricted: boolean; c
     [a.path,{due,done:!legacy,team:"A"}],
     [b.path,{due,done:complete,team:"B"}],
   ] as Array<[string, Record<string, unknown>]>);
-  const workspace = {containerEl:{ownerDocument:{createDocumentFragment:() => ({createEl:() => ({addClass(){},onclick:null})})}}};
+  const workspace = {containerEl:{ownerDocument:{createDocumentFragment:() => ({createSpan:() => ({addClass(){}}),createEl:() => ({onclick:null})})}}};
   const app = {workspace,vault:{getMarkdownFiles:()=>[definition,a,b]},metadataCache:{ getFileCache:(f: TFile) => ({frontmatter:raw.get(f.path)}) }};
   const source = new DataSource(app as any);
   // Only the Obsidian storage boundary is replaced. Both queries are DataSource's actual implementation.

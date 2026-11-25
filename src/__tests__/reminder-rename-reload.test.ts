@@ -30,7 +30,7 @@ it.each([0, 79, 80])("a dismissed reminder remains dismissed when the plugin rel
     handlers.set(event, callback); return { offref: () => handlers.delete(event) };
   };
   const app = {
-    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createEl: () => ({ addClass() {}, onclick: null }) }) } } },
+    workspace: { containerEl: { ownerDocument: { createDocumentFragment: () => ({ createSpan: () => ({ addClass() {} }), createEl: () => ({ addClass() {}, onclick: null }) }) } } },
     vault: { on, getMarkdownFiles: () => [definition, note], getAbstractFileByPath: (p: string) => [definition, note].find(x => x.path === p) },
     metadataCache: { on, getFileCache: (file: TFile) => ({ frontmatter: file === definition ? dbProperties : noteProperties }) },
   } as unknown as App;

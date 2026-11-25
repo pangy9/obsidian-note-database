@@ -56,6 +56,16 @@ export class ViewStateStore {
     return state;
   }
 
+  /** Reload persisted filters after changing shared options, without dropping quick search. */
+  reloadDatabase(dbIndex: number, configs: ViewConfig[]): void {
+    configs.forEach((config, viewIndex) => {
+      const key = this.getKey(dbIndex, viewIndex);
+      const previous = this.states.get(key);
+      if (!previous) return;
+      this.states.set(key, { ...this.create(config), searchText: previous.searchText });
+    });
+  }
+
   /** Remove all cached states */
   clear(): void {
     this.states.clear();

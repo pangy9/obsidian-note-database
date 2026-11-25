@@ -9,6 +9,10 @@ export interface PopoverAutoCloseOptions {
 }
 
 export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () => void {
+  // Keep listeners and target checks tied to the surface's renderer, even
+  // when a different Obsidian window becomes active before cleanup.
+  const doc = options.panel.ownerDocument;
+  const host = doc.defaultView ?? window;
   const delayMs = options.delayMs ?? 5000;
   let lastActivity = Date.now();
   let pointerInsidePanel = false;
@@ -41,7 +45,7 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
       return;
     }
     const target = event.target;
-    if (target instanceof Node && (
+    if (target instanceof host.Node && (
       options.panel.contains(target) ||
       options.anchorEl?.contains(target)
     )) {
@@ -65,10 +69,10 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
   };
   const onWindowBlur = () => close();
   const onVisibilityChange = () => {
-    if (window.activeDocument.visibilityState === "hidden") close();
+    if (doc.visibilityState === "hidden") close();
   };
 
-  const timer = window.setInterval(() => {
+  const timer = host.setInterval(() => {
     if (!options.panel.isConnected) {
       cleanup();
       return;
@@ -90,16 +94,16 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
   options.panel.addEventListener("wheel", markActivity, { passive: true });
   options.anchorEl?.addEventListener("pointermove", markActivity);
   options.anchorEl?.addEventListener("mousedown", markActivity, true);
-  window.activeDocument.addEventListener("pointermove", onDocumentActivity, true);
-  window.activeDocument.addEventListener("pointerover", onDocumentActivity, true);
-  window.activeDocument.addEventListener("mousedown", onDocumentActivity, true);
-  window.activeDocument.addEventListener("keydown", onDocumentKeydown, true);
-  window.activeDocument.addEventListener("wheel", onDocumentActivity, { passive: true, capture: true });
-  window.addEventListener("blur", onWindowBlur);
-  window.activeDocument.addEventListener("visibilitychange", onVisibilityChange);
+  doc.addEventListener("pointermove", onDocumentActivity, true);
+  doc.addEventListener("pointerover", onDocumentActivity, true);
+  doc.addEventListener("mousedown", onDocumentActivity, true);
+  doc.addEventListener("keydown", onDocumentKeydown, true);
+  doc.addEventListener("wheel", onDocumentActivity, { passive: true, capture: true });
+  host.addEventListener("blur", onWindowBlur);
+  doc.addEventListener("visibilitychange", onVisibilityChange);
 
   function cleanup(): void {
-    window.clearInterval(timer);
+    host.clearInterval(timer);
     options.panel.removeEventListener("pointerenter", onPanelEnter);
     options.panel.removeEventListener("pointerleave", onPanelLeave);
     options.panel.removeEventListener("pointermove", markActivity);
@@ -108,13 +112,13 @@ export function installPopoverAutoClose(options: PopoverAutoCloseOptions): () =>
     options.panel.removeEventListener("wheel", markActivity);
     options.anchorEl?.removeEventListener("pointermove", markActivity);
     options.anchorEl?.removeEventListener("mousedown", markActivity, true);
-    window.activeDocument.removeEventListener("pointermove", onDocumentActivity, true);
-    window.activeDocument.removeEventListener("pointerover", onDocumentActivity, true);
-    window.activeDocument.removeEventListener("mousedown", onDocumentActivity, true);
-    window.activeDocument.removeEventListener("keydown", onDocumentKeydown, true);
-    window.activeDocument.removeEventListener("wheel", onDocumentActivity, true);
-    window.removeEventListener("blur", onWindowBlur);
-    window.activeDocument.removeEventListener("visibilitychange", onVisibilityChange);
+    doc.removeEventListener("pointermove", onDocumentActivity, true);
+    doc.removeEventListener("pointerover", onDocumentActivity, true);
+    doc.removeEventListener("mousedown", onDocumentActivity, true);
+    doc.removeEventListener("keydown", onDocumentKeydown, true);
+    doc.removeEventListener("wheel", onDocumentActivity, true);
+    host.removeEventListener("blur", onWindowBlur);
+    doc.removeEventListener("visibilitychange", onVisibilityChange);
   }
 
   return cleanup;

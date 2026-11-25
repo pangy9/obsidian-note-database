@@ -1,4 +1,6 @@
 import { getLocalDateKey } from "./CalendarDateTime";
+import { getTypedQueryColumns } from "./QueryColumns";
+import { isEffectiveFilterRule } from "./FilterRules";
 import { QueryEngine } from "./QueryEngine";
 import { ConditionalFormatRule, DatabaseConfig, RowData, StatusColor, ViewConfig } from "./types";
 
@@ -36,6 +38,8 @@ export function getConditionalFormatMatch(
   targetField?: string,
 ): ConditionalFormatMatch | null {
   const rules = config.conditionalFormats || [];
+  if (!rules.length) return null;
+  const typedColumns = rules.some(rule => rule?.comparison === "typed") ? getTypedQueryColumns(config) : [];
   for (const rawRule of rules) {
     if (!rawRule?.id || !rawRule.condition?.field) continue;
     if (targetField) {
@@ -44,7 +48,14 @@ export function getConditionalFormatMatch(
       continue;
     }
     const rule = resolveRule(rawRule);
-    if (queryEngine.applyFilters([row], [rule.condition], "and", config.schema.columns).length === 0) continue;
+    if (rule.comparison === "typed" && !isEffectiveFilterRule(rule.condition)) continue;
+    let columns = rule.comparison === "typed" ? typedColumns : config.schema.columns;
+    if (rule.comparison === "typed" && rule.valueSource === "today") {
+      // “Today” denotes the local calendar day, not the midnight instant.
+      columns = columns.map(column => column.key === rule.condition.field && column.type === "datetime"
+        ? { ...column, type: "date" as const } : column);
+    }
+    if (queryEngine.applyFilters([row], [rule.condition], "and", columns, rule.comparison !== "typed").length === 0) continue;
     return { color: rule.color || "gray", ruleId: rule.id };
   }
   return null;

@@ -11,6 +11,7 @@ import { isImeComposing } from "../data/KeyboardUtils";
 import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { createDropdownField, DropdownOption, openDropdownMenu } from "./DropdownField";
 import { CalendarTimelineToolbarRenderer } from "./CalendarTimelineToolbarRenderer";
+import type { SettingsFoldingPreferences } from "../data/SettingsFolding";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { isEmptyGroupVisibilityColumn, shouldShowEmptyGroups } from "../data/GroupVisibility";
 import { getDateGroupMode } from "../data/GroupDisplay";
@@ -18,6 +19,7 @@ import { isHTMLElement } from "./DomGuards";
 import { renderRecordIcon } from "./RecordIconRenderer";
 import { replaceToolbarBadge } from "./ToolbarBadge";
 import { HeaderCollapseState, applyHeaderCollapseState } from "./HeaderCollapseControls";
+
 
 /** Safely append an SVG string to an element through parsed DOM nodes. */
 function appendSvg(el: HTMLElement, svgString: string): void {
@@ -68,11 +70,13 @@ export interface ToolbarActions {
   setBoardSubgroupEnabled(enabled: boolean): void;
   setBoardSubgroupField(value: string): void;
   toggleViewConfig(anchorEl: HTMLElement): void;
+  reminderConfiguration?: { label: string; open: () => void };
   configureGroupOrder(): void;
   toggleSortPanel(anchorEl: HTMLElement): void;
   toggleChartOptions?(anchorEl: HTMLElement): void;
   toggleCalendarOptions?(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig): void;
   updateViewConfig?(label?: string): void;
+  getSettingsFolding?(): SettingsFoldingPreferences | undefined;
   updateTimelineScale?(scale: TimelineScale, label?: string): boolean | Promise<boolean> | void;
   syncComputedFields?(): void;
   refreshDatabase?(): void;
@@ -267,6 +271,12 @@ export class ToolbarRenderer {
     if (!isFormView) this.renderFilterButton(right, state, actions);
     if (showSortButton) this.renderSortButton(right, state, actions);
     this.renderViewConfigButton(right, actions);
+    if (!actions.isReadOnly && actions.reminderConfiguration) {
+      const { label, open } = actions.reminderConfiguration;
+      const button = this.createIconButton(right, "bell", label);
+      button.setAttribute("aria-label", label);
+      button.onclick = open;
+    }
     if (showGroupButton) {
       this.renderGroupSelect(right, currentView, state, actions);
       if (showColumnButton) this.renderColumnButton(right, currentView, state, actions);
@@ -359,6 +369,7 @@ export class ToolbarRenderer {
 
   private toggleCalendarTimelineOptions(toolbar: HTMLElement, anchor: HTMLElement, config: ViewConfig, database: DatabaseConfig, actions: ToolbarActions): void {
     this.calendarTimelineToolbarRenderer.togglePopover(toolbar.closest(".note-database-container") as HTMLElement || toolbar, anchor, config, {
+      getSettingsFolding: () => actions.getSettingsFolding?.(),
       onChange: (label) => actions.updateViewConfig?.(label),
       database,
       createRecordIconField: actions.createRecordIconField ? () => actions.createRecordIconField?.() : undefined,

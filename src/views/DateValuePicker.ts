@@ -20,6 +20,7 @@ import { installPopoverAutoClose } from "./PopoverAutoClose";
 import { positionToolbarPopover } from "./PopoverPosition";
 import { isHTMLElement } from "./DomGuards";
 import { createFormPopoverPortal } from "./FormPopoverPortal";
+import { createTimeSegments } from "./TimeSegments";
 
 export interface DateValuePickerOptions {
   parent: HTMLElement;
@@ -28,12 +29,14 @@ export interface DateValuePickerOptions {
   disabled?: boolean;
   includeTime?: boolean;
   displayText?: string;
+  allowEmpty?: boolean;
   footerAction?: {
     label: string;
     onSelect(): void;
   };
   className?: string;
   onChange(value: string): void;
+  onClose?(): void;
 }
 
 interface ActiveDateValuePicker {
@@ -128,20 +131,7 @@ function openDateValuePicker(
   let minuteInput: HTMLInputElement | undefined;
   if (includeTime) {
     segments.createSpan({ cls: "db-date-sep db-time-sep", text: " " });
-    hourInput = segments.createEl("input", {
-      cls: "db-date-seg db-time-seg db-hour-seg",
-      attr: { maxlength: "2", inputmode: "numeric", placeholder: "HH", "aria-label": "HH" },
-    });
-    segments.createSpan({ cls: "db-date-sep db-time-colon", text: ":" });
-    minuteInput = segments.createEl("input", {
-      cls: "db-date-seg db-time-seg db-minute-seg",
-      attr: {
-        maxlength: "2",
-        inputmode: "numeric",
-        placeholder: t("calendar.minutePlaceholder"),
-        "aria-label": "Minute",
-      },
-    });
+    ({ hour: hourInput, minute: minuteInput } = createTimeSegments(segments));
   }
   const inputs = [yearInput, monthInput, dayInput, hourInput, minuteInput]
     .filter((input): input is HTMLInputElement => Boolean(input));
@@ -168,6 +158,7 @@ function openDateValuePicker(
 
   const readDraft = (): string | null => {
     const dateKey = readDraftDateKey();
+    if (dateKey === "" && options.allowEmpty === false) return null;
     if (!includeTime || dateKey == null || dateKey === "") return dateKey;
     return composeDatePickerValue(dateKey, hourInput?.value || "", minuteInput?.value || "", true);
   };
@@ -193,7 +184,7 @@ function openDateValuePicker(
   const close = (commit: boolean) => {
     if (closed) return;
     closed = true;
-    if (commit) commitDraft();
+    if (commit && readDraft() != null) commitDraft();
     else {
       options.value = committedValue;
       options.displayText = originalDisplayText;
@@ -204,6 +195,7 @@ function openDateValuePicker(
     formPortal?.remove();
     trigger.setAttribute("aria-expanded", "false");
     if (activePickers.get(doc)?.anchor === trigger) activePickers.delete(doc);
+    options.onClose?.();
   };
   activePickers.set(doc, { anchor: trigger, close });
   trigger.setAttribute("aria-expanded", "true");

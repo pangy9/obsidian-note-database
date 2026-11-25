@@ -467,7 +467,12 @@ export function buildRenamePlan(
   }
   const stats = computeMigrationStats(frontmatter, mode);
   return {
-    plan: { frontmatter, primaryConfig, externalConfigs, undoLabel },
+    plan: {
+      frontmatter, primaryConfig, externalConfigs, undoLabel,
+      ...(input.request.oldKey !== input.request.newKey ? { columnKeyRename: {
+        databaseId: input.primary.typedBefore.id, oldKey: input.request.oldKey, newKey: input.request.newKey,
+      } } : {}),
+    },
     stateAfter: cloneViewState(appliedPrimary.state),
     stats,
   };

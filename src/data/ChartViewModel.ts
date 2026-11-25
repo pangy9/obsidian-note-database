@@ -268,7 +268,9 @@ export function getChartFilterRules(
   if (field === "file.tags" || isObsidianTagsKey(field)) {
     return [{ field, op: "hasTag", value: normalizeObsidianTagValue(key) }];
   }
-  return [{ field, op: "eq", value: key }];
+  const comparison = column && (column.type === "select" || column.type === "status" || isChartNumberGroupColumn(column, computedFields))
+    ? "typed" : "chart-label";
+  return [{ field, op: "eq", value: key, comparison }];
 }
 
 export function rowMatchesChartGroup(row: RowData, field: string, key: string, column: ColumnDef | undefined, bucket?: ChartDateBucket, computedFields: ComputedFieldDef[] = []): boolean {

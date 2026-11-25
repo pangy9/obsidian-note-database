@@ -20,9 +20,9 @@ export function renderButtonCardSummary(parent: HTMLElement, label: string, tags
       if (tag.icon && kind !== "property") renderButtonMenuIcon(chip.createSpan({ cls: "db-button-summary-tag-icon", attr: { "aria-hidden": "true" } }), tag.icon);
       chip.createSpan({ cls: "db-button-summary-tag-label", text: tag.text });
     }
-    if (all.length > members.length) group.createSpan({ cls: "db-button-summary-more", text: `+${all.length - members.length}`, attr: { title: all.slice(members.length).map(tag => tag.text).join(" · ") } });
+    if (all.length > members.length) group.createSpan({ cls: "db-button-summary-more", text: `+${all.length - members.length}`, attr: { title: all.slice(members.length).map(tag => tag.text).join("\n") } });
   }
-  parent.title = [label, ...tags.map(tag => tag.text)].join(" · ");
+  parent.title = [label, ...tags.map(tag => tag.text)].join("\n");
 }
 
 /** Use Obsidian's complete switch (track + thumb), including keyboard/ARIA state. */

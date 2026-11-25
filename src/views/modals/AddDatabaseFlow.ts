@@ -14,6 +14,7 @@ import { t } from "../../i18n";
 import { buildStarterDatabaseConfig, getStarterRecordFolder, getStarterTemplate } from "../../data/DatabaseStarterTemplates";
 import { getStarterArtworkFiles } from "../../data/DatabaseStarterArtwork";
 import type { DataSource } from "../../data/DataSource";
+import { applyNewDatabaseDefaults, type NewViewDefaults } from "../../data/NewViewDefaults";
 import { DataHistoryFailure } from "../../data/EmbeddedDataHistory";
 import type { NewDatabaseConflictPreparation } from "../PropertyTypeConflictWorkflow";
 import { instantiateVaultStarter, cleanStarterSamples } from "../../data/VaultStarterTemplates";
@@ -165,6 +166,7 @@ export async function createDatabaseFromModalResult(
   dbName: string,
   databaseFolder: string,
   prepareConflicts: (config: DatabaseConfig) => Promise<NewDatabaseConflictPreparation | null>,
+  defaults?: NewViewDefaults | (() => NewViewDefaults | undefined),
 ): Promise<TFile | null> {
   const db = await buildDatabaseWithInferredColumns(app, result, dbName, databaseFolder);
   if (!db) return null;
@@ -192,6 +194,8 @@ export async function createDatabaseFromModalResult(
     return null;
   }
   if (!conflicts) return null;
+  // Resolve the final schema and the latest saved preferences before writing the new database.
+  applyNewDatabaseDefaults(db, typeof defaults === "function" ? defaults() : defaults);
 
   const created: Array<{ file: TFile; content: string | null }> = [];
   const track = async (file: TFile): Promise<void> => {

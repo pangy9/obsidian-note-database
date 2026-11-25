@@ -1,5 +1,8 @@
+import { defaultSetting, markDefaultSetting } from "./DefaultSettingControl";
 import { setIcon, setTooltip } from "obsidian";
 import { getColumnOptionValues } from "../data/ColumnTypes";
+import { selectedSettingFolds, type SettingsFoldingPreferences } from "../data/SettingsFolding";
+import { createSettingsFoldSection, readSettingsFoldOpen, type SettingsFoldSection } from "./MoreDisplayOptions";
 import {
   getDefaultChartValueField,
   getDefaultChartNumberBucket,
@@ -24,6 +27,8 @@ import { createDropdownField, DropdownOption } from "./DropdownField";
 import { getPropertyDropdownIcon, renderDropdownPropertyTypeIcon } from "./PropertyTypeIcon";
 
 export interface ChartToolbarActions {
+  creationDefaults?: boolean;
+  getSettingsFolding?(): SettingsFoldingPreferences | undefined;
   onChange(label?: string): void;
   onExportImage?(): void;
   onCopyPng?(): void;
@@ -288,6 +293,7 @@ function isSelectedChartValueFieldValid(
 export class ChartToolbarRenderer {
   private cleanupPopover?: () => void;
   private popover?: HTMLElement;
+  private repositionPopover?: () => void;
   private childCleanupPopover?: () => void;
   private childPopover?: HTMLElement;
 
@@ -304,14 +310,26 @@ export class ChartToolbarRenderer {
     return Boolean(this.popover?.isConnected);
   }
 
-  private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: ChartToolbarActions): void {
-    this.closePopover();
-    const panel = containerEl.createDiv({ cls: "db-chart-options-popover" });
-    this.popover = panel;
+  renderPreview(host: HTMLElement, config: ViewConfig, actions: ChartToolbarActions): HTMLElement {
+    const panel = this.createPopoverFrame(host);
+    this.renderPopoverContent(panel, host, config, actions);
+    return panel;
+  }
+
+  private createPopoverFrame(host: HTMLElement) {
+    const panel = host.createDiv({ cls: "db-chart-options-popover" });
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("chart.options") });
+    return panel;
+  }
+
+  private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: ChartToolbarActions): void {
+    this.closePopover();
+    const panel = this.createPopoverFrame(containerEl);
+    this.popover = panel;
+    this.repositionPopover = () => positionToolbarPopover(panel, anchor, { preferredWidth: 520, maxWidth: 560 });
     this.renderPopoverContent(panel, containerEl, config, actions);
-    positionToolbarPopover(panel, anchor, { preferredWidth: 520, maxWidth: 560 });
+    this.repositionPopover();
     const onOutside = (event: MouseEvent) => {
       const target = event.target as Node | null;
       if (target && this.childPopover?.isConnected) {
@@ -359,11 +377,13 @@ export class ChartToolbarRenderer {
     };
   }
 
-  private renderPopoverContent(panel: HTMLElement, containerEl: HTMLElement, config: ViewConfig, actions: ChartToolbarActions): void {
+  private renderPopoverContent(panel: HTMLElement, containerEl: HTMLElement, config: ViewConfig, actions: ChartToolbarActions, open = false): void {
+    const fold = createSettingsFoldSection(panel, selectedSettingFolds(actions.getSettingsFolding?.()), "chart", open, this.repositionPopover);
     this.renderDataSection(panel, containerEl, config, actions);
-    this.renderGroupsSection(panel, containerEl, config, actions);
-    this.renderStyleEntry(panel, containerEl, config, actions);
-    this.renderExportSection(panel, actions);
+    this.renderGroupsSection(fold.target("chartVisibleGroups"), containerEl, config, actions);
+    this.renderStyleEntry(panel, containerEl, config, actions, fold);
+    this.renderExportSection(fold.target("chartExport"), actions);
+    fold.finish();
   }
 
   private refreshOpenPopover(containerEl: HTMLElement | undefined, config: ViewConfig, actions: ChartToolbarActions): void {
@@ -371,15 +391,18 @@ export class ChartToolbarRenderer {
     const host = containerEl || panel?.parentElement;
     if (!panel?.isConnected || !host) return;
     this.closeChildPopover();
+    const open = readSettingsFoldOpen(panel, "chart");
     Array.from(panel.children).forEach((child) => {
       if (!isHTMLElement(child) || !child.hasClass("db-panel-header")) child.remove();
     });
-    this.renderPopoverContent(panel, host, config, actions);
+    this.renderPopoverContent(panel, host, config, actions, open);
+    this.repositionPopover?.();
   }
 
   closePopover(): void {
     this.cleanupPopover?.();
     this.cleanupPopover = undefined;
+    this.repositionPopover = undefined;
     this.closeChildPopover();
     this.popover?.remove();
     this.popover = undefined;
@@ -639,22 +662,26 @@ export class ChartToolbarRenderer {
     const aggregation = (slot === "primary" ? config.chartAggregation : config.chartSecondaryAggregation) || "count";
     const fieldLabel = getChartMeasureFieldOptions(config).find((option) => option.value === (fieldKey || ""))?.text || t("chart.recordsValue");
     const aggregationLabel = getChartAggregationOptions(config, fieldKey).find((option) => option.value === aggregation)?.text || t("chart.countAggregation");
-    return `${fieldLabel} · ${aggregationLabel}`;
+    return t("chart.fieldAggregation", { field: fieldLabel, aggregation: aggregationLabel });
   }
 
-  private renderStyleEntry(panel: HTMLElement, containerEl: HTMLElement, config: ViewConfig, actions: ChartToolbarActions): void {
+  private renderStyleEntry(panel: HTMLElement, containerEl: HTMLElement, config: ViewConfig, actions: ChartToolbarActions, fold: SettingsFoldSection): void {
     const section = this.createSection(panel, t("chart.optionsStyle"));
-    this.renderSelect(section, t("chart.colorPalette"), getColorPaletteOptions(), config.chartColorPalette || "auto", (value) => {
+    this.renderSelect(section, t("chart.colorPalette"), getColorPaletteOptions(), config.chartColorPalette || "auto", defaultSetting("chartColorPalette", (value) => {
       config.chartColorPalette = value as ViewConfig["chartColorPalette"];
       actions.onChange(t("undo.chartColorPaletteConfig"));
-    }, "palette");
+    }), "palette");
     this.renderSwitch(section, t("chart.colorByValue"), config.chartColorByValue === true, (checked) => {
       config.chartColorByValue = checked;
       actions.onChange(t("undo.chartColorByValueConfig"));
     }, "paint-bucket", !["bar", "horizontal-bar"].includes(config.chartType || "bar"), undefined, t("chart.disabledBarOnly"));
-    this.renderPopoverEntry(section, t("chart.optionsStyleEntry"), "", "paintbrush", (anchor) => {
-      this.openStylePopover(containerEl, anchor, config, actions);
-    });
+    if (actions.creationDefaults) {
+      this.renderStyleSection(section, config, actions);
+    } else {
+      this.renderPopoverEntry(fold.target("chartStyleDetails", section), t("chart.optionsStyleEntry"), "", "paintbrush", (anchor) => {
+        this.openStylePopover(containerEl, anchor, config, actions);
+      });
+    }
     this.renderTextInput(section, t("chart.title"), config.chartTitle || "", getChartAutoTitle(config, config.schema.columns), (value) => {
       config.chartTitle = value.trim() || undefined;
       actions.onChange(t("undo.chartTitleConfig"));
@@ -684,27 +711,27 @@ export class ChartToolbarRenderer {
       { value: "always", text: t("viewConfig.yearDisplayMode.always") },
       { value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
       { value: "never", text: t("viewConfig.yearDisplayMode.never") },
-    ], config.yearDisplayMode || "always", (value) => {
+    ], config.yearDisplayMode || "always", defaultSetting("yearDisplayMode", (value) => {
       config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
       actions.onChange(t("undo.yearDisplayModeConfig"));
-    }, "calendar");
+    }), "calendar");
     this.renderSelect(section, t("chart.gridLines"), [
       { value: "none", text: t("chart.gridNone") },
       { value: "value", text: t("chart.gridValue") },
       { value: "both", text: t("chart.gridBoth") },
-    ], config.chartGridLines || "value", (value) => {
+    ], config.chartGridLines || "value", defaultSetting("chartGridLines", (value) => {
       config.chartGridLines = value as ViewConfig["chartGridLines"];
       actions.onChange(t("undo.chartGridLinesConfig"));
-    }, "chart:grid-horizontal");
+    }), "chart:grid-horizontal");
     this.renderSelect(section, t("chart.axisNames"), [
       { value: "none", text: t("chart.axisNone") },
       { value: "x", text: t("chart.axisX") },
       { value: "y", text: t("chart.axisY") },
       { value: "both", text: t("chart.axisBoth") },
-    ], config.chartAxisNames || "none", (value) => {
+    ], config.chartAxisNames || "none", defaultSetting("chartAxisNames", (value) => {
       config.chartAxisNames = value as ViewConfig["chartAxisNames"];
       actions.onChange(t("undo.chartAxisNamesConfig"));
-    }, "chart:axis-xy");
+    }), "chart:axis-xy");
     if (!isAxislessChart(config.chartType)) {
       this.renderSelect(section, t("chart.valueAxisRange"), getAxisRangeOptions(), config.chartValueAxisRange || "auto", (value) => {
         config.chartValueAxisRange = value as ChartValueAxisRange;
@@ -726,15 +753,15 @@ export class ChartToolbarRenderer {
       }
       this.renderReferenceLinesSection(section, config, actions);
     }
-    this.renderSwitch(section, t("chart.showTitle"), config.chartShowTitle !== false, (checked) => {
+    this.renderSwitch(section, t("chart.showTitle"), config.chartShowTitle !== false, defaultSetting("chartShowTitle", (checked) => {
       config.chartShowTitle = checked;
       actions.onChange(t("undo.chartShowTitleConfig"));
-    }, "heading");
-    this.renderSwitch(section, t("chart.showDataLabels"), config.chartShowDataLabels === true, (checked) => {
+    }), "heading");
+    this.renderSwitch(section, t("chart.showDataLabels"), config.chartShowDataLabels === true, defaultSetting("chartShowDataLabels", (checked) => {
       config.chartShowDataLabels = checked;
       actions.onChange(t("undo.chartDataLabelsConfig"));
       this.refreshOpenPopover(undefined, config, actions);
-    }, "chart:data-labels");
+    }), "chart:data-labels");
     if (config.chartShowDataLabels === true) {
       this.renderSelect(section, t("chart.dataLabelMode"), getDataLabelModeOptions(), config.chartDataLabelMode || "value", (value) => {
         config.chartDataLabelMode = value as ViewConfig["chartDataLabelMode"];
@@ -745,10 +772,10 @@ export class ChartToolbarRenderer {
         actions.onChange(t("undo.chartDataLabelColorConfig"));
       }, "palette");
     }
-    this.renderSwitch(section, t("chart.showLegend"), config.chartShowLegend !== false, (checked) => {
+    this.renderSwitch(section, t("chart.showLegend"), config.chartShowLegend !== false, defaultSetting("chartShowLegend", (checked) => {
       config.chartShowLegend = checked;
       actions.onChange(t("undo.chartLegendConfig"));
-    }, "list");
+    }), "list");
     this.renderSwitch(section, t("chart.smoothLine"), config.chartSmoothLine !== false, (checked) => {
       config.chartSmoothLine = checked;
       actions.onChange(t("undo.chartSmoothLineConfig"));
@@ -902,7 +929,7 @@ export class ChartToolbarRenderer {
   }
 
   private renderSelect(parent: HTMLElement, label: string, options: SelectOption[], value: string, onChange: (value: string) => void, icon: ChartOptionIcon = "chevron-right", disabled = false, isFieldPicker = false, disabledReason?: string): void {
-    createDropdownField({
+    const { button } = createDropdownField({
       parent,
       label,
       options,
@@ -918,6 +945,7 @@ export class ChartToolbarRenderer {
       closeOnSelect: false,
       renderIcon: (target, iconName) => this.renderOptionIcon(target, iconName),
     });
+    markDefaultSetting(button, onChange);
   }
 
   private renderTextInput(parent: HTMLElement, label: string, value: string, placeholder: string, onChange: (value: string) => void, icon: ChartOptionIcon = "text"): void {
@@ -936,6 +964,7 @@ export class ChartToolbarRenderer {
 
   private renderSwitch(parent: HTMLElement, label: string, checked: boolean, onChange: (checked: boolean) => void, icon: ChartOptionIcon, disabled = false, switchKey?: string, disabledReason?: string): void {
     const row = parent.createDiv({ cls: `db-chart-options-row db-chart-options-switch${disabled ? " is-disabled" : ""}` });
+    markDefaultSetting(row, onChange);
     if (switchKey) row.dataset.chartSwitch = switchKey;
     applyDisabledReason(row, label, disabled, disabledReason);
     this.renderOptionIcon(row, icon);

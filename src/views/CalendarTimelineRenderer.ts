@@ -1,8 +1,10 @@
+import { TimelinePanPositionStore, timelinePanPositionKey } from "./TimelinePanPositionStore";
+import { getTimelineJumpVisibility, getTimelinePanBufferUnits, getTimelinePanVisibleRange, getTimelineScaleAnchor, normalizeTimelinePanOffset, resolveTimelinePanRecenter, shiftTimelinePanAnchor } from "../data/TimelinePan";
 import { App, Menu, setIcon, setTooltip } from "obsidian";
 import { formatCalendarTime, getCalendarSlotDuration } from "../data/CalendarLayoutModel";
 import { isExplicitlySorted } from "../data/ManualOrder";
 import { CalendarTitleParts, buildTimelineAxisBands, formatCalendarTitleParts } from "../data/CalendarTitleFormatter";
-import { buildCalendarMonthModel, buildTimelineModel, buildTimelineTicks, CalendarTimelineEvent, getDefaultEventDateField, getTimelineAnchor, getTimelineNavigationShiftUnits, getTimelineShortNavigationShiftUnits, getTimelineTitleWindow, getTimelineViewportContentWidth, getTimelineViewportStartAnchor, normalizeTimelineDayScale, resolveEventAbsoluteScale, resolveTimelineJumpAnchor, resolveTimelineReorderNeighbors, resolveTimelineUnitWidth, resolveTimelineViewportUnitCount, resolveTimelineViewportUnitSpan, shiftCalendarMonth, TimelineUnit, UNCATEGORIZED_TIMELINE_LANE } from "../data/CalendarTimelineModel";
+import { buildCalendarMonthModel, buildTimelineModel, buildTimelineTicks, CalendarTimelineEvent, getDefaultEventDateField, getTimelineAnchor, getTimelineNavigationShiftUnits, getTimelineShortNavigationShiftUnits, getTimelineTitleWindow, getTimelineViewportContentWidth, getTimelineViewportStartAnchor, getTimelineViewportWindow, normalizeTimelineDayScale, resolveEventAbsoluteScale, resolveTimelineJumpAnchor, resolveTimelineReorderNeighbors, resolveTimelineUnitWidth, resolveTimelineViewportUnitCount, resolveTimelineViewportUnitSpan, shiftCalendarMonth, TimelineUnit, UNCATEGORIZED_TIMELINE_LANE } from "../data/CalendarTimelineModel";
 import {
   CALENDAR_TIME_SNAP_MINUTES,
   MINUTES_PER_DAY,
@@ -22,6 +24,7 @@ import { formatDateRangeDisplay, formatDateValueDisplay, parseDateTimeParts } fr
 import { RowData, TimelineScale, ViewConfig } from "../data/types";
 import { getEffectiveLocale, t } from "../i18n";
 import { openDropdownMenu } from "./DropdownField";
+import { isElement } from "./DomGuards";
 import { buildMiniCalendarEventIndex, MiniCalendarMode, renderMiniCalendar } from "./CalendarMiniCalendarRenderer";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
@@ -32,6 +35,7 @@ import { startMobileRecordTargetMode } from "./MobileRecordTargetMode";
 import { setRecordReorderContext } from "./RecordReorderContext";
 
 const TIME_SNAP_MINUTES = CALENDAR_TIME_SNAP_MINUTES;
+const NATIVE_TIMELINE_SCROLL_SETTLE_MS = 180;
 
 export interface TimelineTimedPositionStyle {
   offsetUnits: number;
@@ -137,6 +141,8 @@ export interface CalendarTimelineRendererActions {
     beforePath?: string,
     afterPath?: string
   ): void | Promise<void>;
+  getTimelinePositionSource?(): string;
+  onTimelineViewportChanged?(root: HTMLElement, config: ViewConfig, redrawn: boolean): void;
   updateTimelineAnchor?(dateKey: string, label?: string, timeMinutes?: number): void;
   updateTimelineScale?(scale: TimelineScale, label?: string): boolean | Promise<boolean> | void;
   onConfigChange?(label?: string): void;
@@ -169,6 +175,12 @@ interface TimelineFlashWindow {
 }
 
 export class CalendarTimelineRenderer {
+  private panState?: { signature: string; anchor: string; minutes: number; offset: number };
+  private panRaf: number | null = null;
+  private panTouchCleanup?: () => void;
+  private panPositionStore?: TimelinePanPositionStore;
+  private panPositionIdentity?: { key: string; win: Window };
+  private panPositionCleanup?: () => void;
   private rowByPath = new Map<string, RowData>();
   private currentRows: RowData[] = [];
   private timelineResizeInProgress = false;
@@ -202,6 +214,14 @@ export class CalendarTimelineRenderer {
    * 取消挂起的 flash RAF/定时器、中断进行中的拖拽并移除其 capture 监听器。
    * 避免反复打开/关闭时间线视图（尤其嵌入代码块）累积 observer/监听器/闭包泄漏。 */
   destroy(): void {
+    this.panPositionStore?.flush();
+    this.panPositionCleanup?.();
+    this.panPositionStore = undefined;
+    this.panPositionIdentity = undefined;
+    this.panPositionCleanup = undefined;
+    this.clearTimelinePanListeners();
+    this.panState = undefined;
+    this.timelineRoot?.parentElement?.removeClass("db-timeline-continuous");
     this.stopMobileTargetMode?.();
     this.stopMobileTargetMode = undefined;
     this.disconnectTimelineResizeObserver();
@@ -222,21 +242,34 @@ export class CalendarTimelineRenderer {
     this.timelineFlashWindow = null;
   }
 
-  renderTimeline(container: HTMLElement, config: ViewConfig, rows: RowData[]): void {
+  renderTimeline(container: HTMLElement, config: ViewConfig, rows: RowData[], panRepaint = false, preserveFocus = false): void {
+    const previousRoot = this.timelineRoot?.parentElement === container ? this.timelineRoot : null;
+    const reusableRoot = panRepaint ? previousRoot : null;
+    this.clearTimelinePanListeners();
+    const active = (panRepaint || preserveFocus) ? container.ownerDocument.activeElement : null;
+    const focusKey = active && previousRoot?.contains(active)
+      ? active.closest("[data-timeline-focus-key]")?.getAttribute("data-timeline-focus-key") : null;
     this.stopMobileTargetMode?.();
     this.stopMobileTargetMode = undefined;
-    if (normalizeTimelineDayScale(config)) {
-      this.actions.onConfigChange?.(t("undo.timelineScaleConfig"));
+    // Old snapshots may still contain a Day scale with date-only properties.
+    // Render the compatible scale without writing or synchronously reentering the host.
+    if (config.timelineScale === "day") {
+      const compatible = { ...config };
+      if (normalizeTimelineDayScale(compatible)) config = compatible;
     }
-    this.closeTimelineMiniCalendar();
-    this.closeTimelineScaleMenu();
+    if (!reusableRoot) {
+      this.closeTimelineMiniCalendar();
+      this.closeTimelineScaleMenu();
+    }
     this.disconnectTimelineResizeObserver();
-    if (this.timelineRoot?.isConnected && this.timelineRoot.parentElement === container) this.timelineRoot.remove();
+    if (!reusableRoot && this.timelineRoot?.isConnected && this.timelineRoot.parentElement === container) this.timelineRoot.remove();
     this.timelineRoot = null;
     this.timelineFlashWindow = null;
     this.currentVisibleRange = null;
     this.currentRows = rows;
     this.rowByPath = new Map(rows.map((row) => [row.file.path, row]));
+    // Explicit navigation in a non-continuous view must never clear the previous view's cache.
+    this.prepareTimelinePositionStore(container, config);
     const startField = config.timelineStartDateField || config.calendarStartDateField || getDefaultEventDateField(config);
     if (!startField) {
       this.renderEmpty(container, "timeline.noDateField");
@@ -247,10 +280,37 @@ export class CalendarTimelineRenderer {
     const unitWidth = this.getTimelineRenderUnitWidth(config, scale);
     const visibleUnitCount = this.getTimelineViewportUnitCount(container, config, unitWidth);
     const visibleUnitSpan = this.getTimelineViewportUnitSpan(container, unitWidth);
-    const model = buildTimelineModel(rows, { ...config, timelineStartDateField: startField }, {
+    const nativeTouch = container.ownerDocument.body?.classList.contains("is-mobile")
+      || container.ownerDocument.defaultView?.matchMedia?.("(pointer: coarse)").matches;
+    const bufferUnits = config.timelineContinuous === true && visibleUnitCount != null
+      ? getTimelinePanBufferUnits(visibleUnitSpan ?? visibleUnitCount, nativeTouch)
+      : undefined;
+    const continuous = bufferUnits !== undefined;
+    container.toggleClass("db-timeline-continuous", continuous);
+    const signature = this.getTimelineRenderSignature(config, scale, unitWidth);
+    if (continuous && this.panState?.signature !== signature) {
+      this.panPositionStore?.flush();
+      const saved = this.panPositionStore?.load(this.getTimelineNavigationSignature(config));
+      this.panState = {
+        signature, anchor: saved?.anchor ?? getTimelineViewportWindow(config, getTimelineAnchor(config), visibleUnitCount ?? 1).startDateKey,
+        minutes: saved?.minutes ?? this.getTimelineAnchorTimeMinutes(config), offset: (saved?.offsetUnits || 0) * unitWidth,
+      };
+    }
+    if (!continuous) this.panState = undefined;
+    let renderConfig = config;
+    const renderUnitCount = continuous ? bufferUnits * 3 : visibleUnitCount;
+    if (continuous && this.panState) {
+      const pan = this.panState;
+      Object.assign(pan, normalizeTimelinePanOffset(pan.anchor, pan.minutes, scale, pan.offset, unitWidth));
+      const start = shiftTimelinePanAnchor(pan.anchor, pan.minutes, scale, -bufferUnits);
+      const center = getTimelineViewportStartAnchor(config, start.dateKey, bufferUnits * 3, start.minutes);
+      renderConfig = { ...config, timelineAnchor: center.dateKey, timelineAnchorTimeMinutes: center.timeMinutes };
+    }
+    const renderUnitSpan = continuous ? renderUnitCount : visibleUnitSpan;
+    const model = buildTimelineModel(rows, { ...renderConfig, timelineStartDateField: startField }, {
       uncategorizedLabel: t("timeline.uncategorized"),
-      visibleUnitCount,
-      visibleUnitSpan,
+      visibleUnitCount: renderUnitCount,
+      visibleUnitSpan: renderUnitSpan,
     });
     this.currentVisibleRange = this.getModelVisibleRange(model);
     if ((model.eventCount === 0 && model.lanes.length === 0) || !model.startDateKey || !model.endDateKey) {
@@ -258,7 +318,8 @@ export class CalendarTimelineRenderer {
       return;
     }
 
-    const wrap = container.createDiv({ cls: `db-timeline is-scale-${model.scale} is-slot-${this.getTimelineSlotDuration(config)}` });
+    const wrap = reusableRoot || container.createDiv({ cls: `db-timeline is-scale-${model.scale} is-slot-${this.getTimelineSlotDuration(config)}` });
+    wrap.toggleClass("is-continuous", continuous);
     this.timelineRoot = wrap;
     this.timelineObservedUnitCount = visibleUnitCount;
     this.timelineObservedUnitSpan = visibleUnitSpan;
@@ -278,19 +339,24 @@ export class CalendarTimelineRenderer {
       startMinutes: model.startMinutes,
     };
 
-    this.renderTimelineHeader(wrap, config, model);
+    // Recenter only changes buffered dates. Navigation controls, popovers and
+    // keyboard focus must stay attached to the existing header.
+    if (!reusableRoot) this.renderTimelineHeader(wrap, config, model);
     if (model.visibleEventCount === 0 && model.lanes.length === 0) {
       this.renderTimelineEmptyRange(wrap);
       return;
     }
 
-    const scroll = wrap.createDiv({ cls: "db-timeline-scroll" });
+    const scroll = reusableRoot?.querySelector<HTMLElement>(".db-timeline-scroll") || wrap.createDiv({ cls: "db-timeline-scroll" });
+    scroll.setAttribute("data-timeline-focus-key", "scroll");
+    if (reusableRoot) scroll.empty();
     const axis = scroll.createDiv({ cls: "db-timeline-axis" });
     const allTicks = buildTimelineTicks(
       { startDateKey: model.startDateKey, endDateKey: model.endDateKey, totalUnits: model.totalUnits, unit: model.unit, startMinutes: model.startMinutes },
       model.scale,
       config,
       getEffectiveLocale(),
+      visibleUnitSpan,
     );
     const axisBands = buildTimelineAxisBands({
       scale: model.scale,
@@ -309,6 +375,7 @@ export class CalendarTimelineRenderer {
     }
     const now = new Date();
     const ticksEl = axis.createDiv({ cls: "db-timeline-ticks" });
+    const tickElements: Array<{ offset: number; node: HTMLElement }> = [];
     for (const tick of allTicks) {
       const tickClasses = [
         "db-timeline-tick",
@@ -321,9 +388,20 @@ export class CalendarTimelineRenderer {
       });
       tickEl.style.setProperty("--db-timeline-tick-offset", String(tick.offsetUnits + 1));
       this.renderTimelineTickLabel(tickEl, tick.label, model.scale);
+      tickElements.push({ offset: tick.offsetUnits * unitWidth, node: tickEl });
     }
 
     const body = scroll.createDiv({ cls: "db-timeline-body" });
+    const viewportUpdates: Array<(start: number, end: number) => void> = [];
+    if (continuous) {
+      let previousLeading: HTMLElement | undefined;
+      viewportUpdates.push(() => {
+        const leading = tickElements.find(item => item.offset >= scroll.scrollLeft);
+        if (previousLeading !== leading?.node) previousLeading?.style.removeProperty("--db-timeline-leading-tick-shift");
+        previousLeading = leading?.node;
+        leading?.node.style.setProperty("--db-timeline-leading-tick-shift", `${scroll.scrollLeft - leading.offset}px`);
+      });
+    }
     const todayPosition = getTimelineTodayPositionStyle(now, model, unitWidth);
     // 无分组时不渲染 group header（与表格等视图一致），events 直接占满宽度；
     // collapsed 强制 false（无折叠按钮，也不应折叠唯一泳道）。
@@ -341,8 +419,8 @@ export class CalendarTimelineRenderer {
       events.setAttribute("data-timeline-lane-key", lane.key);
       // day scale：可见小时范围（绝对分钟，可跨午夜）；week/month/quarter：整个多天窗口（0 → totalUnits 天）。
       const visible = model.scale === "day"
-        ? this.getTimelineVisibleMinutes(config, { ...model, totalUnits: Math.max(1, visibleUnitSpan ?? model.totalUnits) })
-        : { startMinutes: 0, endMinutes: Math.max(1, visibleUnitSpan ?? model.totalUnits) * MINUTES_PER_DAY };
+        ? this.getTimelineVisibleMinutes(config, { ...model, totalUnits: Math.max(1, renderUnitSpan ?? model.totalUnits) })
+        : { startMinutes: 0, endMinutes: Math.max(1, renderUnitSpan ?? model.totalUnits) * MINUTES_PER_DAY };
       const limitCount = hasGroupField && config.timelineGroupField
         ? getGroupVisibleCount(config, config.timelineGroupField, lane.key, lane.events.length)
         : lane.events.length;
@@ -362,20 +440,49 @@ export class CalendarTimelineRenderer {
         const isClippedStart = scale.start < visible.startMinutes;
         const isClippedEnd = scale.end > visible.endMinutes;
         const isOverEvent = renderStart < renderEnd;
-        if (isOverEvent) {
-          this.renderTimelineEvent(events, config, event, lane.key, model, { renderStart, renderEnd, visible, isClippedStart, isClippedEnd }, lane.events, model.lanes, event.timelineRow || 1);
-        }
-        if (isClippedStart) {
-          this.renderTimelineJumpIndicator(events, config, event, "before", "start", model, event.timelineRow || 1, isOverEvent);
-        }
-        if (isClippedEnd) {
-          this.renderTimelineJumpIndicator(events, config, event, "after", "end", model, event.timelineRow || 1, isOverEvent);
+        const eventButton = isOverEvent
+          ? this.renderTimelineEvent(events, config, event, lane.key, model, { renderStart, renderEnd, visible, isClippedStart, isClippedEnd }, lane.events, model.lanes, event.timelineRow || 1)
+          : undefined;
+        if (continuous) {
+          const before = this.renderTimelineJumpIndicator(events, config, event, "before", "start", model, event.timelineRow || 1);
+          const after = this.renderTimelineJumpIndicator(events, config, event, "after", "end", model, event.timelineRow || 1);
+          before.setAttribute("data-timeline-focus-key", JSON.stringify([lane.key, event.filePath, "before"]));
+          after.setAttribute("data-timeline-focus-key", JSON.stringify([lane.key, event.filePath, "after"]));
+          viewportUpdates.push((start, end) => {
+            const jumps = getTimelineJumpVisibility(scale.start, scale.end, start, end);
+            const active = events.ownerDocument.activeElement;
+            const switchFocus = active === before && !jumps.before || active === after && !jumps.after
+              || !!eventButton?.contains(active) && !jumps.overlaps;
+            before.hidden = !jumps.before;
+            after.hidden = !jumps.after;
+            if (eventButton) {
+              // The card's readable minimum width can otherwise remain on screen
+              // even after its actual duration leaves the viewport.
+              eventButton.hidden = !jumps.overlaps;
+              eventButton.toggleClass("is-left-edge-jump", jumps.before && jumps.overlaps);
+              eventButton.toggleClass("is-fully-in-view", jumps.overlaps && !jumps.before && !jumps.after);
+              eventButton.tabIndex = jumps.overlaps ? 0 : -1;
+            }
+            if (jumps.before) before.toggleClass("is-over-event", jumps.overlaps);
+            if (jumps.after) after.toggleClass("is-over-event", jumps.overlaps);
+            if (switchFocus) {
+              const replacement = (jumps.overlaps ? eventButton : undefined) ?? (jumps.before ? before : jumps.after ? after : scroll);
+              replacement.focus({ preventScroll: true });
+            }
+          });
+        } else {
+          if (isClippedStart) this.renderTimelineJumpIndicator(events, config, event, "before", "start", model, event.timelineRow || 1, isOverEvent);
+          if (isClippedEnd) this.renderTimelineJumpIndicator(events, config, event, "after", "end", model, event.timelineRow || 1, isOverEvent);
         }
       }
-      if (hasGroupField && config.timelineGroupField) {
-        renderGroupExpandControls(groupEl, config, config.timelineGroupField, lane.key, lane.events.length, this.actions);
+      if (hasGroupField && config.timelineGroupField &&
+          renderGroupExpandControls(groupEl, config, config.timelineGroupField, lane.key, lane.events.length, this.actions) && continuous) {
+        groupEl.querySelectorAll(".db-group-expand-controls > button").forEach((button, index) => {
+          button.setAttribute("data-timeline-focus-key", JSON.stringify([lane.key, "group-expand", index]));
+        });
       }
-      this.renderTimelineCreateRow(groupEl, config, model, lane.key);
+      const refreshCreatePreview = this.renderTimelineCreateRow(groupEl, config, model, lane.key);
+      if (continuous && refreshCreatePreview) viewportUpdates.push(refreshCreatePreview);
     }
     if (hasGroupField) this.fitTimelineGroupHeaderWidth(wrap, container);
     if (todayPosition) {
@@ -383,6 +490,12 @@ export class CalendarTimelineRenderer {
         body.style.setProperty(property, value);
       }
       body.createDiv({ cls: "db-timeline-today-line", attr: { title: this.getTodayDateKey() } });
+    }
+    if (continuous) this.installTimelinePan(scroll, wrap, container, config, rows, { ...model, startDateKey: model.startDateKey, endDateKey: model.endDateKey }, bufferUnits, unitWidth, viewportUpdates);
+    if (focusKey && scroll.ownerDocument.activeElement === scroll.ownerDocument.body) {
+      const replacement = Array.from(wrap.querySelectorAll<HTMLElement>("[data-timeline-focus-key]"))
+        .find(el => el.getAttribute("data-timeline-focus-key") === focusKey && !el.hidden && el.tabIndex >= 0);
+      (replacement ?? scroll).focus({ preventScroll: true });
     }
     if (this.pendingFlashDateKey) {
       const key = this.pendingFlashDateKey;
@@ -392,6 +505,210 @@ export class CalendarTimelineRenderer {
         this.flashTimelineDate(key);
       });
     }
+  }
+
+  private getTimelineRenderSignature(config: ViewConfig, scale: TimelineScale, unitWidth: number): string {
+    return JSON.stringify([config.id, config.name, config.sourceFolder, scale, config.timelineAnchor, config.timelineAnchorTimeMinutes, unitWidth]);
+  }
+
+  /** Called only once the host has accepted the scale change, before changing config. */
+  preserveTimelineScalePosition(config: ViewConfig, scale: TimelineScale): void {
+    const current = config.timelineScale || "week";
+    const pan = this.panState;
+    if (!pan || !config.timelineContinuous || current === scale || !this.timelineRoot?.isConnected) return;
+    const currentWidth = this.getTimelineRenderUnitWidth(config, current);
+    if (pan.signature !== this.getTimelineRenderSignature(config, current, currentWidth)) return;
+    const anchor = getTimelineScaleAnchor(pan.anchor, pan.minutes, current, pan.offset / currentWidth);
+    const next = { ...config, timelineScale: scale };
+    const nextWidth = this.getTimelineRenderUnitWidth(next, scale);
+    const offsetUnits = scale === "day" ? anchor.fraction : 0;
+    this.panState = {
+      signature: this.getTimelineRenderSignature(next, scale, nextWidth),
+      anchor: anchor.dateKey, minutes: anchor.minutes, offset: offsetUnits * nextWidth,
+    };
+    // Keep the handoff in local browsing state, not the shared database anchor.
+    this.panPositionStore?.schedule({
+      navigation: this.getTimelineNavigationSignature(next), anchor: anchor.dateKey, minutes: anchor.minutes, offsetUnits,
+    });
+  }
+
+  private getTimelineNavigationSignature(config: ViewConfig): string {
+    return JSON.stringify([config.timelineScale || "week", config.timelineAnchor || null, config.timelineAnchorTimeMinutes ?? null, this.getDefaultTimelineStartMinutes(config)]);
+  }
+
+  private prepareTimelinePositionStore(container: HTMLElement, config: ViewConfig): void {
+    const win = container.ownerDocument.defaultView;
+    if (!win) return;
+    const vaultId = this.actions.app?.vault.adapter.getResourcePath("") || "";
+    const key = timelinePanPositionKey(vaultId, this.actions.getTimelinePositionSource?.() || config.baseThisFilePath || config.sourceFolder || "", config.id || config.name);
+    if (this.panPositionIdentity?.key === key && this.panPositionIdentity.win === win) return;
+    this.panPositionStore?.flush();
+    this.panPositionCleanup?.();
+    this.panPositionIdentity = { key, win };
+    this.panPositionStore = undefined;
+    this.panPositionCleanup = undefined;
+    this.panState = undefined;
+    try {
+      const store = new TimelinePanPositionStore(win.localStorage, win, key);
+      this.panPositionStore = store;
+      const flush = (): void => store.flush();
+      win.addEventListener("pagehide", flush);
+      const onVisibility = (): void => { if (container.ownerDocument.hidden) flush(); };
+      container.ownerDocument.addEventListener("visibilitychange", onVisibility);
+      this.panPositionCleanup = () => {
+        win.removeEventListener("pagehide", flush);
+        container.ownerDocument.removeEventListener("visibilitychange", onVisibility);
+      };
+    } catch { /* Browser storage may be unavailable; in-memory panning still works. */ }
+  }
+
+  private clearTimelinePanListeners(): void {
+    this.panTouchCleanup?.();
+    this.panTouchCleanup = undefined;
+    if (this.panRaf != null) {
+      this.timelineRoot?.ownerDocument.defaultView?.cancelAnimationFrame(this.panRaf);
+      this.panRaf = null;
+    }
+  }
+
+  private installTimelinePan(
+    scroll: HTMLElement, wrap: HTMLElement, container: HTMLElement, config: ViewConfig, rows: RowData[],
+    model: { startDateKey: string; endDateKey: string; startMinutes?: number; totalUnits: number; unit: TimelineUnit; scale: TimelineScale },
+    bufferUnits: number, unitWidth: number, viewportUpdates: ReadonlyArray<(start: number, end: number) => void>,
+  ): void {
+    const win = scroll.ownerDocument.defaultView!;
+    wrap.style.setProperty("--db-timeline-viewport-width", `${scroll.clientWidth}px`);
+    const center = bufferUnits * unitWidth;
+    scroll.scrollLeft = center + (this.panState?.offset || 0);
+    const getScrollLeft = (): number => Math.max(0, Math.min(scroll.scrollLeft, scroll.scrollWidth - scroll.clientWidth));
+    let lastScrollLeft = getScrollLeft();
+    let touchActive = false;
+    let waitingForTouchScrollEnd = false;
+    let settleTimer: number | undefined;
+    // The pointer belongs to this particular scroll node. A size change can
+    // replace it before lostpointercapture is delivered to that node.
+    let pointer: number | null = null, startX = 0, startLeft = 0;
+    scroll.setAttribute("tabindex", "0");
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", t("timeline.panHint"));
+    const updateRange = (redrawn = false): void => {
+      if (!this.panState) return;
+      const left = getScrollLeft();
+      this.panState.offset = left - center;
+      wrap.style.setProperty("--db-timeline-scroll-left", `${left}px`);
+      const minutesPerUnit = model.scale === "day" ? MINUTES_PER_HOUR : MINUTES_PER_DAY;
+      const visibleStart = (model.startMinutes ?? 0) + left / unitWidth * minutesPerUnit;
+      const visibleEnd = visibleStart + scroll.clientWidth / unitWidth * minutesPerUnit;
+      for (const update of viewportUpdates) update(visibleStart, visibleEnd);
+      const range = getTimelinePanVisibleRange(model.startDateKey, model.startMinutes || 0, model.scale, left, scroll.clientWidth, unitWidth);
+      const old = this.currentVisibleRange;
+      this.currentVisibleRange = range;
+      const changed = old?.startDateKey !== range.startDateKey || old?.endDateKey !== range.endDateKey
+        || old?.startMinutes !== range.startMinutes || old?.endMinutes !== range.endMinutes;
+      if (redrawn || changed) this.actions.onTimelineViewportChanged?.(wrap, config, redrawn);
+      const titleEnd = range.endMinutes === 0 ? addDateKeyDays(range.endDateKey, -1) : range.endDateKey;
+      const parts = formatCalendarTitleParts({ scale: model.scale, ...range, endDateKey: titleEnd, locale: getEffectiveLocale() });
+      wrap.querySelector<HTMLElement>(".db-timeline-title-main")?.setText(parts.main);
+      const year = wrap.querySelector<HTMLElement>(".db-timeline-title-year");
+      if (year) year.setText(parts.year);
+      const title = wrap.querySelector<HTMLElement>(".db-timeline-title");
+      if (title) setTooltip(title, parts.ariaLabel, { delay: 100 });
+    };
+    const rememberPosition = (): void => {
+      if (this.panState) this.panPositionStore?.schedule({
+        navigation: this.getTimelineNavigationSignature(config), anchor: this.panState.anchor,
+        minutes: this.panState.minutes, offsetUnits: this.panState.offset / unitWidth,
+      });
+    };
+    const rebase = (): void => {
+      if (!scroll.isConnected || this.timelineRoot !== wrap || !this.panState || pointer != null || touchActive || waitingForTouchScrollEnd || this.timelineResizeInProgress) return;
+      const change = resolveTimelinePanRecenter(getScrollLeft(), center, unitWidth, scroll.clientWidth, scroll.scrollWidth);
+      if (!change) return;
+      const next = shiftTimelinePanAnchor(this.panState.anchor, this.panState.minutes, model.scale, change.units);
+      this.panState.anchor = next.dateKey; this.panState.minutes = next.minutes; this.panState.offset = change.remainder;
+      // Pointer release can rebase before the browser delivers its queued scroll
+      // event. Keep the exact final position instead of relying on that event.
+      rememberPosition();
+      const top = container.scrollTop;
+      this.renderTimeline(container, config, rows, true);
+      container.scrollTop = top;
+    };
+    const clearSettleTimer = (): void => {
+      if (settleTimer !== undefined) win.clearTimeout(settleTimer);
+      settleTimer = undefined;
+    };
+    const finishTouchScroll = (): void => {
+      if (touchActive || !waitingForTouchScrollEnd) return;
+      clearSettleTimer();
+      waitingForTouchScrollEnd = false;
+      rebase();
+    };
+    const waitForTouchScroll = (): void => {
+      clearSettleTimer();
+      // Keep a fallback for WebViews without scrollend and gestures
+      // that ended without moving the scroll element at all.
+      settleTimer = win.setTimeout(finishTouchScroll, NATIVE_TIMELINE_SCROLL_SETTLE_MS);
+    };
+    const startTouch = (): void => {
+      touchActive = true;
+      waitingForTouchScrollEnd = true;
+      clearSettleTimer();
+    };
+    const endTouch = (event: TouchEvent): void => {
+      if (event.touches.length || !touchActive) return;
+      touchActive = false;
+      waitForTouchScroll();
+    };
+    scroll.addEventListener("touchstart", startTouch, { passive: true });
+    scroll.addEventListener("touchend", endTouch, { passive: true });
+    scroll.addEventListener("touchcancel", endTouch, { passive: true });
+    scroll.addEventListener("scrollend", finishTouchScroll);
+    this.panTouchCleanup = () => {
+      clearSettleTimer();
+      scroll.removeEventListener("touchstart", startTouch);
+      scroll.removeEventListener("touchend", endTouch);
+      scroll.removeEventListener("touchcancel", endTouch);
+      scroll.removeEventListener("scrollend", finishTouchScroll);
+    };
+    scroll.onscroll = () => {
+      if (!scroll.isConnected || this.timelineRoot !== wrap) return;
+      const left = getScrollLeft();
+      if (left === lastScrollLeft) return;
+      lastScrollLeft = left;
+      updateRange();
+      rememberPosition();
+      if (waitingForTouchScrollEnd) {
+        if (!touchActive) waitForTouchScroll();
+      } else if (this.panRaf == null) {
+        this.panRaf = win.requestAnimationFrame(() => { this.panRaf = null; rebase(); });
+      }
+    };
+    scroll.onwheel = event => {
+      if (event.shiftKey && !event.ctrlKey && Math.abs(event.deltaX) < Math.abs(event.deltaY)) {
+        event.preventDefault(); scroll.scrollLeft += event.deltaY;
+      }
+    };
+    scroll.onpointerdown = event => {
+      if (pointer != null || event.button !== 0 || event.pointerType === "touch" || !isElement(event.target) || !event.target.closest(".db-timeline-axis")) return;
+      pointer = event.pointerId; startX = event.clientX; startLeft = scroll.scrollLeft;
+      scroll.setPointerCapture(event.pointerId); event.preventDefault();
+    };
+    scroll.onpointermove = event => { if (event.pointerId === pointer) scroll.scrollLeft = startLeft + startX - event.clientX; };
+    const end = (event: PointerEvent): void => {
+      if (pointer !== event.pointerId) return;
+      pointer = null;
+      rebase();
+    };
+    scroll.onpointerup = end; scroll.onpointercancel = end; scroll.onlostpointercapture = end;
+    updateRange(true);
+  }
+
+  private getPannedConfig(config: ViewConfig): ViewConfig {
+    if (!config.timelineContinuous || !this.panState) return config;
+    const unitWidth = this.getTimelineRenderUnitWidth(config, config.timelineScale || "week");
+    const delta = Math.floor(this.panState.offset / unitWidth);
+    const current = shiftTimelinePanAnchor(this.panState.anchor, this.panState.minutes, config.timelineScale || "week", delta);
+    return { ...config, timelineAnchor: current.dateKey, timelineAnchorTimeMinutes: current.minutes };
   }
 
   private fitTimelineGroupHeaderWidth(wrap: HTMLElement, container: HTMLElement): void {
@@ -443,14 +760,15 @@ export class CalendarTimelineRenderer {
     laneEvents: CalendarTimelineEvent[],
     lanes: Array<{ key: string; label: string; color?: string; events: CalendarTimelineEvent[] }>,
     rowIndex: number,
-  ): void {
+  ): HTMLButtonElement {
     const dateText = this.formatTimelineEventMeta(event, model.scale, config);
     // date 列事件保留 muted 全天条视觉（仅样式，定位统一走 exact）。
     const isDateColumn = this.isTimelineDateColumn(config, event);
     const button = eventsEl.createEl("button", {
       cls: `db-timeline-event${isDateColumn ? " is-all-day" : ""}${range.isClippedStart ? " is-clipped-start" : ""}${range.isClippedEnd ? " is-clipped-end" : ""}`,
-      attr: { type: "button", title: `${event.title} · ${dateText} · ${event.filePath}`, "data-note-database-row-path": event.row.file.path },
+      attr: { type: "button", title: [event.title, dateText, event.filePath].filter(Boolean).join("\n"), "data-note-database-row-path": event.row.file.path },
     });
+    button.setAttribute("data-timeline-focus-key", JSON.stringify([groupKey, event.filePath, "event"]));
     button.style.setProperty("--db-timeline-row", String(rowIndex));
     // 统一绝对刻度定位（可见窗口夹取后的 [renderStart, renderEnd]）；所有事件同一路径，不再 is-timed 双轨。
     this.applyTimelineAbsolutePosition(button, range.renderStart, range.renderEnd, range.visible.startMinutes, model.unit);
@@ -490,6 +808,7 @@ export class CalendarTimelineRenderer {
     if (this.isPhoneLayout() && !this.actions.isReadOnly) {
       this.renderTimelineMobileMenuButton(button, config, event, groupKey, laneEvents, lanes);
     }
+    return button;
   }
 
   /**
@@ -517,23 +836,26 @@ export class CalendarTimelineRenderer {
     model: { startDateKey?: string; totalUnits: number; scale: TimelineScale },
     rowIndex: number,
     isOverEvent = false,
-  ): void {
+  ): HTMLButtonElement {
     const dateKey = target === "end" ? event.endDateKey : event.startDateKey;
+    const label = t("timeline.jumpToEvent", { title: event.title, date: dateKey });
     const button = eventsEl.createEl("button", {
       cls: `db-timeline-window-jump is-${direction}${isOverEvent ? " is-over-event" : ""}`,
       attr: {
         type: "button",
         "data-note-database-row-path": event.row.file.path,
+        "aria-label": label,
       },
     });
     button.style.setProperty("--db-timeline-row", String(rowIndex));
     setIcon(button, direction === "before" ? "arrow-left" : "arrow-right");
-    setTooltip(button, t("timeline.jumpToEvent", { title: event.title, date: dateKey }), { delay: 100 });
+    setTooltip(button, label, { delay: 100 });
     button.onclick = (mouseEvent) => {
       mouseEvent.preventDefault();
       mouseEvent.stopPropagation();
       this.jumpTimelineToEvent(config, event, model, target);
     };
+    return button;
   }
 
   private jumpTimelineToEvent(
@@ -546,9 +868,9 @@ export class CalendarTimelineRenderer {
       event,
       target,
       scale: model.scale || config.timelineScale || "week",
-      totalUnits: model.totalUnits,
+      totalUnits: config.timelineContinuous ? this.timelineObservedUnitCount ?? model.totalUnits / 3 : model.totalUnits,
     });
-    this.updateTimelineAnchor(anchor.dateKey, anchor.timeMinutes);
+    this.navigateToTimelineDate(anchor.dateKey, anchor.timeMinutes);
   }
 
   private renderTimelineGroupHeader(parent: HTMLElement, config: ViewConfig, lane: { key: string; label: string; color?: string; events: CalendarTimelineEvent[] }): boolean {
@@ -560,6 +882,7 @@ export class CalendarTimelineRenderer {
       cls: `db-timeline-group-toggle${collapsed ? " is-collapsed" : ""}`,
       attr: { type: "button", "aria-label": collapsed ? t("group.expand") : t("group.collapse") },
     });
+    toggle.setAttribute("data-timeline-focus-key", JSON.stringify([lane.key, "toggle"]));
     toggle.createSpan({ cls: "db-collapse-triangle" });
     toggle.onclick = (event) => {
       event.preventDefault();
@@ -602,15 +925,16 @@ export class CalendarTimelineRenderer {
   private renderTimelineCreateRow(
     parent: HTMLElement,
     config: ViewConfig,
-    model: { startDateKey?: string; endDateKey?: string; totalUnits: number; scale: TimelineScale },
+    model: { startDateKey?: string; endDateKey?: string; startMinutes?: number; totalUnits: number; scale: TimelineScale },
     groupKey: string,
-  ): void {
+  ): (() => void) | undefined {
     if (this.actions.isReadOnly || !this.actions.createEntryForDate || !model.startDateKey) return;
     const row = parent.createDiv({ cls: "db-timeline-create-row" });
     const button = row.createEl("button", {
       cls: "db-timeline-create-button",
       attr: { type: "button" },
     });
+    button.setAttribute("data-timeline-focus-key", JSON.stringify([groupKey, "create"]));
     button.setCssProps({
       "--db-timeline-create-offset": "1",
       "--db-timeline-create-span": String(this.getTimelineCreateSpanUnits(model)),
@@ -620,32 +944,39 @@ export class CalendarTimelineRenderer {
     const content = button.createSpan({ cls: "db-timeline-create-content" });
     setIcon(content.createSpan({ cls: "db-timeline-create-icon" }), "plus");
     content.createSpan({ cls: "db-timeline-create-label", text: t("toolbar.new") });
-    this.setupTimelineCreateRow(button, config, model, groupKey);
+    return this.setupTimelineCreateRow(button, config, model, groupKey);
   }
 
   private setupTimelineCreateRow(
     button: HTMLElement,
     config: ViewConfig,
-    model: { startDateKey?: string; endDateKey?: string; totalUnits: number; scale: TimelineScale },
+    model: { startDateKey?: string; endDateKey?: string; startMinutes?: number; totalUnits: number; scale: TimelineScale },
     groupKey: string,
-  ): void {
-    button.onmouseenter = (mouseEvent) => this.updateTimelineCreatePreview(button, config, model, mouseEvent.clientX);
-    button.onmousemove = (mouseEvent) => this.updateTimelineCreatePreview(button, config, model, mouseEvent.clientX);
-    button.onmouseleave = () => this.clearTimelineCreatePreview(button);
-    button.onfocus = () => {
-      button.setCssProps({
-        "--db-timeline-create-offset": "1",
-        "--db-timeline-create-span": String(this.getTimelineCreateSpanUnits(model)),
-        "--db-timeline-create-left": "0px",
-        "--db-timeline-create-width": `calc(var(--db-timeline-unit-width) * ${this.formatTimelineUnitValue(this.getTimelineCreateSpanUnits(model))})`,
-      });
+  ): () => void {
+    const keyboardX = (): number => {
+      const buttonLeft = button.getBoundingClientRect().left;
+      const viewport = button.closest<HTMLElement>(".db-timeline-scroll");
+      return viewport ? Math.max(buttonLeft, viewport.getBoundingClientRect().left + viewport.clientLeft) : buttonLeft;
     };
+    const previewKeyboardTarget = (): void => this.updateTimelineCreatePreview(button, config, model, keyboardX());
+    let hoverX: number | undefined;
+    button.onmouseenter = button.onmousemove = (mouseEvent) => {
+      hoverX = mouseEvent.clientX;
+      this.updateTimelineCreatePreview(button, config, model, hoverX);
+    };
+    button.onmouseleave = () => {
+      hoverX = undefined;
+      if (button.matches(":focus-visible")) previewKeyboardTarget();
+      else this.clearTimelineCreatePreview(button);
+    };
+    button.onfocus = previewKeyboardTarget;
     button.onblur = () => this.clearTimelineCreatePreview(button);
     button.onclick = (mouseEvent) => {
       if (!model.startDateKey) return;
       mouseEvent.preventDefault();
       mouseEvent.stopPropagation();
-      const target = this.getTimelineCreateTargetFromPoint(button, mouseEvent.clientX, config, model);
+      // Native keyboard/assistive clicks do not carry pointer coordinates.
+      const target = this.getTimelineCreateTargetFromPoint(button, mouseEvent.detail === 0 ? keyboardX() : mouseEvent.clientX, config, model);
       this.applyTimelineCreatePreview(button, target);
       const options: CalendarTimelineCreateOptions = { ...target.options };
       if (config.timelineGroupField && groupKey !== UNCATEGORIZED_TIMELINE_LANE) {
@@ -654,12 +985,16 @@ export class CalendarTimelineRenderer {
       }
       this.actions.createEntryForDate?.(config, target.dateKey, options);
     };
+    return () => {
+      if (hoverX !== undefined) this.updateTimelineCreatePreview(button, config, model, hoverX);
+      else if (button.matches(":focus-visible")) previewKeyboardTarget();
+    };
   }
 
   private updateTimelineCreatePreview(
     button: HTMLElement,
     config: ViewConfig,
-    model: { startDateKey?: string; endDateKey?: string; totalUnits: number; scale: TimelineScale },
+    model: { startDateKey?: string; endDateKey?: string; startMinutes?: number; totalUnits: number; scale: TimelineScale },
     clientX: number,
   ): void {
     this.applyTimelineCreatePreview(button, this.getTimelineCreateTargetFromPoint(button, clientX, config, model));
@@ -702,6 +1037,9 @@ export class CalendarTimelineRenderer {
     this.renderTimelineNavButton(controls, "timeline.nextLong", () => this.shiftTimeline(config, scale, 1, model, "long"), "chevrons-right");
     this.renderTimelineMiniCalendarButton(controls, header, config);
     this.renderTimelineInvalidWarning(controls, config);
+    controls.querySelectorAll("button").forEach((button, index) => {
+      button.setAttribute("data-timeline-focus-key", JSON.stringify(["header", index]));
+    });
   }
 
   private getModelVisibleRange(model: { startDateKey?: string; endDateKey?: string; unit: TimelineUnit; totalUnits: number; startMinutes?: number }): CalendarTimelineSearchVisibleRange | null {
@@ -773,6 +1111,7 @@ export class CalendarTimelineRenderer {
       await this.actions.updateTimelineScale(scale, t("undo.timelineScaleConfig"));
       return;
     }
+    this.preserveTimelineScalePosition(config, scale);
     config.timelineScale = scale;
     this.actions.onConfigChange?.(t("undo.timelineScaleConfig"));
   }
@@ -983,7 +1322,7 @@ export class CalendarTimelineRenderer {
 
   private navigateTimelineViaMini(config: ViewConfig, dateKey: string): void {
     this.requestTimelineDateFlash(dateKey);
-    this.updateTimelineAnchor(dateKey, (config.timelineScale || "week") === "day" ? this.getDefaultTimelineStartMinutes(config) : undefined);
+    this.navigateToTimelineDate(dateKey, (config.timelineScale || "week") === "day" ? this.getDefaultTimelineStartMinutes(config) : undefined);
     this.closeTimelineMiniCalendar();
   }
 
@@ -1039,24 +1378,31 @@ export class CalendarTimelineRenderer {
   }
 
   private resolveTimelineMiniMonthKey(config: ViewConfig): string {
-    return getTimelineAnchor(config).slice(0, 7);
+    return getTimelineAnchor(this.getPannedConfig(config)).slice(0, 7);
   }
 
   private resolveTimelineMiniSelectedKeys(config: ViewConfig): Set<string> {
-    return new Set([getTimelineAnchor(config)]);
+    return new Set([getTimelineAnchor(this.getPannedConfig(config))]);
   }
 
   private shiftTimeline(config: ViewConfig, scale: TimelineScale, delta: number, model?: { totalUnits: number }, distance: "short" | "long" = "long"): void {
+    config = this.getPannedConfig(config);
     const anchor = getTimelineAnchor(config);
+    // The model includes off-screen pan buffers; navigation must use the actual viewport.
+    const viewportUnits = this.timelineObservedUnitCount ?? model?.totalUnits ?? 1;
     const shiftUnits = distance === "short"
       ? getTimelineShortNavigationShiftUnits(scale)
-      : getTimelineNavigationShiftUnits(model?.totalUnits || 1);
+      : getTimelineNavigationShiftUnits(viewportUnits);
     if (scale === "day") {
       const shifted = this.shiftTimelineAnchorTime(anchor, this.getTimelineAnchorTimeMinutes(config), delta * shiftUnits * MINUTES_PER_HOUR);
-      this.updateTimelineAnchor(shifted.dateKey, shifted.minutes);
+      this.navigateToTimelineDate(shifted.dateKey, shifted.minutes);
       return;
     }
-    this.updateTimelineAnchor(addDateKeyDays(anchor, delta * shiftUnits));
+    const nextLeft = addDateKeyDays(anchor, delta * shiftUnits);
+    const nextAnchor = config.timelineContinuous
+      ? getTimelineViewportStartAnchor(config, nextLeft, this.timelineObservedUnitCount ?? 1).dateKey
+      : nextLeft;
+    this.navigateToTimelineDate(nextAnchor);
   }
 
   private goToTimelineToday(config: ViewConfig, model?: { totalUnits: number; scale: TimelineScale }): void {
@@ -1065,15 +1411,19 @@ export class CalendarTimelineRenderer {
     if ((config.timelineScale || model?.scale || "week") === "day") {
       const now = new Date();
       const currentMinutes = now.getHours() * MINUTES_PER_HOUR + now.getMinutes();
-      const centeredStart = currentMinutes - Math.floor(Math.max(1, model?.totalUnits || 1) / 2) * MINUTES_PER_HOUR;
+      const viewportUnits = this.timelineObservedUnitCount ?? model?.totalUnits ?? 1;
+      const centeredStart = currentMinutes - Math.floor(Math.max(1, viewportUnits) / 2) * MINUTES_PER_HOUR;
       const shifted = this.shiftTimelineAnchorTime(today, 0, centeredStart);
-      this.updateTimelineAnchor(shifted.dateKey, shifted.minutes);
+      this.navigateToTimelineDate(shifted.dateKey, shifted.minutes);
       return;
     }
-    this.updateTimelineAnchor(today);
+    this.navigateToTimelineDate(today);
   }
 
-  private updateTimelineAnchor(dateKey: string, timeMinutes?: number): void {
+  /** Every explicit jump, including search, supersedes the remembered horizontal pan. */
+  navigateToTimelineDate(dateKey: string, timeMinutes?: number): void {
+    this.panPositionStore?.clear();
+    this.panState = undefined;
     this.actions.updateTimelineAnchor?.(dateKey, t("undo.timelineAnchorConfig"), timeMinutes);
   }
 
@@ -1136,7 +1486,7 @@ export class CalendarTimelineRenderer {
     laneEvents: readonly CalendarTimelineEvent[]
   ): { targetPath: string; placeBefore: boolean; beforePath?: string; afterPath?: string } | null {
     const buttons = Array.from(eventsEl.querySelectorAll<HTMLElement>(".db-timeline-event, .db-timeline-window-jump"))
-      .filter((btn) => btn.getAttribute("data-note-database-row-path") !== draggedPath);
+      .filter((btn) => !btn.hidden && btn.getAttribute("data-note-database-row-path") !== draggedPath);
     if (buttons.length === 0) return null;
     let closest = buttons[0];
     let closestDist = Infinity;
@@ -1990,6 +2340,12 @@ export class CalendarTimelineRenderer {
       const nextUnitCount = this.getTimelineViewportUnitCount(container, config, unitWidth);
       const nextUnitSpan = this.getTimelineViewportUnitSpan(container, unitWidth);
       if (nextUnitCount !== this.timelineObservedUnitCount || this.hasTimelineViewportUnitSpanChanged(nextUnitSpan)) {
+        if (config.timelineContinuous) {
+          const top = container.scrollTop;
+          this.renderTimeline(container, config, rows, false, true);
+          container.scrollTop = top;
+          return;
+        }
         const leftAnchor = this.getTimelineViewportLeftAnchor(config, nextUnitCount);
         const renderConfig = leftAnchor
           ? { ...config, timelineAnchor: leftAnchor.dateKey, ...(leftAnchor.timeMinutes != null ? { timelineAnchorTimeMinutes: leftAnchor.timeMinutes } : {}) }

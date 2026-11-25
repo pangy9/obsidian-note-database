@@ -4,6 +4,7 @@ import { NoteRecord } from "./DataSource";
 import { QueryEngine } from "./QueryEngine";
 import { ColumnDef, RowData, ViewConfig } from "./types";
 import { DatabaseViewState } from "../views/ViewStateStore";
+import { getTypedQueryColumns } from "./QueryColumns";
 import { getEffectiveFilterRules } from "./FilterRules";
 import { sortByManualRank } from "./ManualOrder";
 import { stringifyValue } from "./Stringify";
@@ -26,7 +27,7 @@ export class RowPipeline {
     derivedValues?: ReadonlyMap<string, Record<string, unknown>>,
   ): RowData[] {
     let rows = this.buildRows(records, config, app, derivedValues);
-    const queryColumns = this.withComputedResultTypes(config);
+    const queryColumns = getTypedQueryColumns(config);
 
     if (state.sortRules.length > 0) {
       rows = this.queryEngine.sortByRules(rows, queryColumns, state.sortRules);
@@ -91,9 +92,11 @@ export class RowPipeline {
       rows = rows.filter((row) => row.frontmatter["status"] === state.statusFilter);
     }
 
-    const validFields = new Set(config.schema.columns.filter((col) => col.type !== "button").map((col) => col.key));
+    const validFields = new Set(queryColumns.map((col) => col.key));
     const effectiveFilters = getEffectiveFilterRules(state.filters, validFields);
     if (effectiveFilters.length > 0) {
+      // Stored rules preserve the old comparator; ordinary views have always
+      // resolved formula and rollup result types before applying their filters.
       rows = this.queryEngine.applyFilters(rows, effectiveFilters, state.filterLogic, queryColumns);
     }
 
@@ -138,12 +141,7 @@ export class RowPipeline {
     });
   }
 
-  private withComputedResultTypes(config: ViewConfig): ColumnDef[] {
-    return config.schema.columns.filter((col) => col.type !== "button").map((col) => {
-      if (col.type !== "computed" && col.type !== "rollup") return col;
-      return { ...col, type: getColumnDisplayType(col, config.schema.computedFields) };
-    });
-  }
+
 
   private getSearchDisplayType(config: ViewConfig, col: ColumnDef): ColumnDef["type"] {
     if (isFileFieldKey(col.key)) return getFileFieldFixedType(col.key);

@@ -4,6 +4,8 @@ export type HistoryDirection = "forward" | "reverse";
 /** Each step must reject before mutation, or resolve after persistence. */
 export interface ReversibleDataStep {
   description: string;
+  /** Encloses the whole command, including any compensation. */
+  holdReads?: () => () => void;
   apply(direction: HistoryDirection, compensating: boolean): Promise<void>;
 }
 
@@ -16,6 +18,7 @@ export class DataHistoryFailure extends Error {
 export async function executeDataSteps(steps: readonly ReversibleDataStep[], direction: HistoryDirection): Promise<void> {
   const ordered = direction === "forward" ? [...steps] : [...steps].reverse();
   const applied: ReversibleDataStep[] = [];
+  const release = steps.find(step => step.holdReads)?.holdReads?.();
   try {
     for (const step of ordered) {
       await step.apply(direction, false);
@@ -28,7 +31,7 @@ export async function executeDataSteps(steps: readonly ReversibleDataStep[], dir
       catch (error) { compensationErrors.push({ step: step.description, error }); }
     }
     throw new DataHistoryFailure(primaryError, compensationErrors);
-  }
+  } finally { release?.(); }
 }
 
 interface Entry { label: string; steps: ReversibleDataStep[] }

@@ -1,4 +1,4 @@
-import { getIconIds, setIcon, setTooltip } from "obsidian";
+import { getIconIds, setIcon, setTooltip, type TFile } from "obsidian";
 import { parseRecordIconToken } from "../data/RecordIcon";
 import type { DatabaseConfig } from "../data/types";
 
@@ -48,6 +48,23 @@ export function renderRecordIcon(
     };
   }
   return button;
+}
+
+export interface RecordTitleIconDisplay {
+  visible: boolean;
+  tokenForFile?: (file: TFile) => unknown;
+}
+
+/** Viewless details use the shared file glyph; view-bound details can omit the slot entirely. */
+export function renderReadonlyRecordTitleIcon(
+  parent: HTMLElement,
+  file: TFile | null,
+  display?: RecordTitleIconDisplay,
+): HTMLElement | null {
+  if (display?.visible === false) return null;
+  const icon = renderRecordIcon(parent, file ? display?.tokenForFile?.(file) : undefined);
+  icon.setAttribute("aria-hidden", "true");
+  return icon;
 }
 
 export function getValidRecordIconIds(): string[] {

@@ -10,6 +10,16 @@ import { renderMobileOptionMoveControls } from "../MobileOptionReorder";
 export interface StatusOptionsSaveResult {
   options: StatusOptionDef[];
   presetId?: string;
+  renameValues: Array<{ from: string; to: string }>;
+}
+
+type StatusOptionDraft = StatusOptionDef & { originalValue?: string };
+
+export function collectStatusOptionRenames(options: readonly StatusOptionDraft[]): StatusOptionsSaveResult["renameValues"] {
+  return options.flatMap(option => {
+    const from = option.originalValue?.trim(), to = option.value.trim();
+    return from && to && from !== to ? [{ from, to }] : [];
+  });
 }
 
 interface StatusPresetSelectionState {
@@ -78,8 +88,9 @@ export function selectStatusOptionsPreset(
 }
 
 export class StatusOptionsModal extends Modal {
-  private options: StatusOptionDef[];
-  private customOptions: StatusOptionDef[];
+  private options: StatusOptionDraft[];
+  private originalValues: Set<string>;
+  private customOptions: StatusOptionDraft[];
   private listEl?: HTMLElement;
   private draggedIndex: number | null = null;
   private activePresetId?: string;
@@ -95,8 +106,9 @@ export class StatusOptionsModal extends Modal {
   ) {
     super(app);
     const defaults = col.type === "status" ? this.defaultOptions : [];
-    this.options = cloneStatusOptionDraft(col.statusOptions?.length ? col.statusOptions : defaults);
+    this.options = (col.statusOptions?.length ? col.statusOptions : defaults).map(option => ({ ...option, originalValue: option.value }));
     this.customOptions = cloneStatusOptionDraft(this.options);
+    this.originalValues = new Set(this.options.map(option => option.value.trim()));
     this.activePresetId = getValidStatusPresetId(col.statusPresetId, this.presets);
   }
 
@@ -128,7 +140,7 @@ export class StatusOptionsModal extends Modal {
         new Notice(t("modal.optionNameDuplicate"));
         return;
       }
-      await this.onSave({ options: normalized, presetId: this.activePresetId });
+      await this.onSave({ options: normalized, presetId: this.activePresetId, renameValues: collectStatusOptionRenames(this.options) });
       this.close();
     };
   }
@@ -145,13 +157,16 @@ export class StatusOptionsModal extends Modal {
   }
 
   private selectPreset(presetId: string | undefined): void {
+    if (presetId === this.activePresetId) return;
     const next = selectStatusOptionsPreset({
       activePresetId: this.activePresetId,
       options: this.options,
       customOptions: this.customOptions,
     }, presetId, this.presets);
     this.activePresetId = next.activePresetId;
-    this.options = next.options;
+    this.options = next.activePresetId === undefined ? next.options : next.options.map(option => ({
+      ...option, originalValue: this.originalValues.has(option.value.trim()) ? option.value : undefined,
+    }));
     this.customOptions = next.customOptions;
     this.renderPresets();
     this.renderList();

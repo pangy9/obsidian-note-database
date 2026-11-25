@@ -25,11 +25,12 @@ export function installNoteHoverPreview(
   container: HTMLElement,
   app: App,
   hoverParent: HoverParent,
+  canPreview?: (target: HTMLElement) => boolean,
 ): void {
   component.registerDomEvent(container, "mouseover", (event: MouseEvent) => {
     if (!isElement(event.target)) return;
     const targetEl = event.target.closest(HOVER_LINK_SELECTOR);
-    if (!isHTMLElement(targetEl) || !container.contains(targetEl)) return;
+    if (!isHTMLElement(targetEl) || !container.contains(targetEl) || canPreview?.(targetEl) === false) return;
 
     if (isElement(event.relatedTarget) && targetEl.contains(event.relatedTarget)) return;
 

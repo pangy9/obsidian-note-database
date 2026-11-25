@@ -143,7 +143,7 @@ describe("button editor ordering", () => {
     renderButtonCardSummary(parent as unknown as HTMLElement, "Create", ["Status", "Project", "Due", "Count"].map(text => ({ text, kind: "property" })));
     expect(parent.children[1].children).toHaveLength(3);
     expect(parent.children[1].children[2].text).toBe("+2");
-    expect(parent.title).toBe("Create · Status · Project · Due · Count");
+    expect(parent.title).toBe("Create\nStatus\nProject\nDue\nCount");
   });
   it.each(["escape", "pointercancel", "blur", "drop", "document-release", "mouse-release"])("compacts only the dragged sub-action list and restores its reserved height on %s", (ending) => {
     const root = new ElementStub();
@@ -189,11 +189,11 @@ describe("button editor ordering", () => {
     expect(parent.children[1].classes.has("is-target")).toBe(true);
     expect(parent.children[2].classes.has("is-property")).toBe(true);
     expect(parent.children[1].children[0].children.at(-1)!.text).toBe("1.3.3 · Tasks");
-    expect(parent.title).toBe("Create · 1.3.3 · Tasks · Status");
+    expect(parent.title).toBe("Create\n1.3.3 · Tasks\nStatus");
     expect(parent.children[2].children[0].children).toHaveLength(1);
     renderButtonCardSummary(parent as unknown as HTMLElement, "Create", [{ kind: "target", text: "Changed" }]);
     expect(parent.children).toHaveLength(2);
-    expect(parent.title).toBe("Create · Changed");
+    expect(parent.title).toBe("Create\nChanged");
   });
   it("lets the modal consume Escape while cancelling a compact drag", () => {
     const items = [{ id: 1 }, { id: 2 }]; const { result, render } = cards(items);

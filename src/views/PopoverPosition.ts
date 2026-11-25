@@ -6,6 +6,7 @@ export interface ToolbarPopoverPositionOptions {
   maxWidth?: number;
   maxHeight?: number;
   getAnchorRect?: () => DOMRect;
+  bottomBoundary?: HTMLElement;
   margin?: number;
   gap?: number;
   align?: "left" | "center" | "right";
@@ -43,7 +44,12 @@ export function positionToolbarPopover(
     // 保存 popover 内部滚动位置，reposition 后恢复
     const savedPanelScroll = panel.scrollTop;
 
-    const bounds = getVisiblePopoverBounds(container);
+    const viewport = getVisiblePopoverBounds(container, panel.ownerDocument);
+    const boundary = options.bottomBoundary;
+    const bottom = boundary?.isConnected ? boundary.getBoundingClientRect().top : viewport.bottom;
+    const bounds = bottom > viewport.top && bottom < viewport.bottom
+      ? new DOMRect(viewport.left, viewport.top, viewport.width, bottom - viewport.top)
+      : viewport;
     const containerRect = container?.getBoundingClientRect();
     const scrollLeft = container?.scrollLeft || 0;
     const scrollTop = container?.scrollTop || 0;
@@ -117,7 +123,7 @@ export function positionToolbarPopover(
   };
 
   place();
-  window.requestAnimationFrame(place);
+  (panel.ownerDocument?.defaultView ?? window).requestAnimationFrame(place);
 }
 
 export function setPosition(
@@ -138,9 +144,10 @@ export function setPosition(
   });
 }
 
-export function getVisiblePopoverBounds(container: HTMLElement | null): DOMRect {
-  const viewport = getVisualViewportBounds();
-  const app = window.activeDocument.querySelector(".app-container") || window.activeDocument.querySelector(".workspace");
+export function getVisiblePopoverBounds(container: HTMLElement | null, doc = container?.ownerDocument ?? window.activeDocument): DOMRect {
+  const win = doc.defaultView ?? window;
+  const viewport = getVisualViewportBounds(win);
+  const app = doc.querySelector(".app-container") || doc.querySelector(".workspace");
   const appRect = isHTMLElement(app) ? app.getBoundingClientRect() : viewport;
   const containerRect = container?.getBoundingClientRect() || viewport;
   const left = Math.max(viewport.left, appRect.left, containerRect.left);
@@ -148,19 +155,19 @@ export function getVisiblePopoverBounds(container: HTMLElement | null): DOMRect 
   const right = Math.min(viewport.right, appRect.right, containerRect.right);
   let bottom = Math.min(viewport.bottom, appRect.bottom, containerRect.bottom);
   // 移动端底部导航栏留空：手机 Obsidian 有固定底部 tab bar，popover 底部按钮需避让
-  if (window.activeDocument.body.classList.contains("is-phone")) {
-    const navbar = window.activeDocument.querySelector(".mobile-navbar");
+  if (doc.body.classList.contains("is-phone")) {
+    const navbar = doc.querySelector(".mobile-navbar");
     const navbarHeight = isHTMLElement(navbar) ? navbar.getBoundingClientRect().height : 50;
-    const safeBottom = parseFloat(getComputedStyle(window.activeDocument.body).getPropertyValue("--safe-area-inset-bottom") || "0");
+    const safeBottom = parseFloat(win.getComputedStyle(doc.body).getPropertyValue("--safe-area-inset-bottom") || "0");
     bottom = Math.min(bottom, viewport.bottom - navbarHeight - safeBottom);
   }
   if (right <= left || bottom <= top) return viewport;
   return new DOMRect(left, top, right - left, bottom - top);
 }
 
-function getVisualViewportBounds(): DOMRect {
-  const visual = window.visualViewport;
-  if (!visual) return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+function getVisualViewportBounds(win: Window): DOMRect {
+  const visual = win.visualViewport;
+  if (!visual) return new DOMRect(0, 0, win.innerWidth, win.innerHeight);
   return new DOMRect(visual.offsetLeft, visual.offsetTop, visual.width, visual.height);
 }
 

@@ -14,14 +14,14 @@ export function buttonTokenOptions(columns: ButtonValueFields, variables: string
   for (const scope of ["trigger", "target", "created"] as const) {
     if (!columns[scope]) continue;
     for (const field of ["file.basename", "file.body", "file.link", "file.path"]) {
-      options.push({ value: `${scope}.${field}`, text: `${t(`button.workflow.target.${scope}`)} · ${t(`button.workflow.${field}`)}`, icon: BUTTON_FILE_VALUE_ICONS[field] });
+      options.push({ value: `${scope}.${field}`, text: t("button.workflow.scopedValue", { scope: t(`button.workflow.target.${scope}`), value: t(`button.workflow.${field}`) }), icon: BUTTON_FILE_VALUE_ICONS[field] });
     }
     for (const column of columns[scope]) {
-      if (!["button", "computed", "rollup"].includes(column.type) && !column.key.startsWith("file.")) options.push({ value: `${scope}.${column.key}`, text: `${t(`button.workflow.target.${scope}`)} · ${column.label}`, icon: getPropertyDropdownIcon(column.type) });
+      if (!["button", "computed", "rollup"].includes(column.type) && !column.key.startsWith("file.")) options.push({ value: `${scope}.${column.key}`, text: t("button.workflow.scopedValue", { scope: t(`button.workflow.target.${scope}`), value: column.label }), icon: getPropertyDropdownIcon(column.type) });
     }
   }
   for (const value of ["today", "now"]) options.push({ value, text: t(`button.workflow.${value}`), icon: getPropertyDropdownIcon(value === "today" ? "date" : "datetime") });
-  for (const name of variables) options.push({ value: `var.${name}`, text: `${t("button.workflow.variable")} · ${name}`, icon: BUTTON_STEP_ICONS.variable });
+  for (const name of variables) options.push({ value: `var.${name}`, text: t("button.workflow.scopedValue", { scope: t("button.workflow.variable"), value: name }), icon: BUTTON_STEP_ICONS.variable });
   return options;
 }
 
@@ -122,8 +122,8 @@ export function renderButtonComposition(parent: HTMLElement, label: string, init
       } else {
         const date = buttonTokenValue(part.key);
         const missing = date && ["trigger", "target", "created"].includes(date.source)
-          ? `${t(`button.workflow.target.${date.source}`)} · ${String(date.value).startsWith("file.") ? t(`button.workflow.${String(date.value)}`) : String(date.value)}`
-          : date?.source === "variable" ? `${t("button.workflow.variable")} · ${String(date.value)}` : part.key;
+          ? t("button.workflow.scopedValue", { scope: t(`button.workflow.target.${date.source}`), value: String(date.value).startsWith("file.") ? t(`button.workflow.${String(date.value)}`) : String(date.value) })
+          : date?.source === "variable" ? t("button.workflow.scopedValue", { scope: t("button.workflow.variable"), value: String(date.value) }) : part.key;
         const title = options.find(option => option.value === part.key)?.text || (date?.source === "date" ? t("button.workflow.relativeDate", { date: t(`button.workflow.${String(date.value)}`), days: String(date.offsetDays) }) : t("button.workflow.unavailableToken", { value: missing }));
         const chip = line.createSpan({ cls: "db-button-value-chip", attr: { title } });
         renderButtonMenuIcon(chip.createSpan({ cls: "db-button-value-chip-icon", attr: { "aria-hidden": "true" } }), BUTTON_STEP_ICONS.variable);

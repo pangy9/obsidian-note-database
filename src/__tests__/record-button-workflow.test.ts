@@ -250,3 +250,15 @@ describe("production content CAS for workflow transactions", () => {
     expect(content).toBe(after + "External"); expect(publish).toHaveBeenCalledTimes(1);
   });
 });
+
+it("replays the same saved batch condition: done equals false", async () => {
+  const f = fixture();
+  f.contents.set("Followups/One.md", '---\n{"done":false,"count":1}\n---\n');
+  f.contents.set("Followups/Two.md", '---\n{"count":5}\n---\n');
+  const saved = config({ ...batch, filters: [{ field: "done", op: "eq", value: { source: "literal", value: "false" } }], actions: [act("count", 99)] });
+  const plan = await f.prepare(saved);
+  await plan.verify();
+  await executeDataSteps(plan.steps, "forward");
+  expect(f.fm("Followups/One.md").count).toBe(99);
+  expect(f.fm("Followups/Two.md").count).toBe(5);
+});

@@ -30,6 +30,7 @@ import { ColumnDef, ComputedFieldDef, RowData, StatusOptionDef } from "../data/t
 import { getEffectiveLocale, t } from "../i18n";
 import { clamp, getVisiblePopoverBounds, resolveAnchoredPopoverTop, setPosition } from "./PopoverPosition";
 import { openDropdownMenu } from "./DropdownField";
+import { renderCellOptionCheck, renderCellOptionLabel } from "./CellOptionPresentation";
 import { setFieldTooltip } from "./FieldTooltip";
 import { FileTitleDisplay, getFileTitleDisplay, renderInlineFileTitle } from "./FileTitleDisplay";
 import { isHTMLElement } from "./DomGuards";
@@ -47,6 +48,7 @@ import { SerialTaskQueue } from "../data/SerialTaskQueue";
 import type { TableCellNavigationIntent } from "../data/TableKeyboardNavigation";
 import { markNoteHoverLink } from "./HoverLinkPreview";
 import { renderMobileOptionMoveControls } from "./MobileOptionReorder";
+import { createTimeSegments, readTimeSegmentInput } from "./TimeSegments";
 
 export interface CellOptionTransaction {
   previousOptions?: StatusOptionDef[];
@@ -1117,11 +1119,7 @@ export class CellRenderer {
         }, isFileTags || isTransient);
 
         // Color dot — opens color picker
-        const dot = item.createSpan({ cls: "db-option-color-dot" });
-        const updateDot = () => {
-          dot.className = `db-option-color-dot db-option-color-${opt.color}`;
-        };
-        updateDot();
+        const { dot, label, updateDot } = renderCellOptionLabel(item, opt);
         dot.onclick = (e) => {
           if (isTransient) return;
           e.stopPropagation();
@@ -1130,7 +1128,6 @@ export class CellRenderer {
         };
 
         // Label — double-click to rename
-        const label = item.createSpan({ text: opt.value, cls: "db-option-label" });
         label.ondblclick = (e) => {
           if (isFileTags || isTransient) return;
           e.stopPropagation();
@@ -1170,7 +1167,7 @@ export class CellRenderer {
         };
 
         // Check mark
-        const mark = item.createSpan({ text: selected.has(opt.value) ? "✓" : "", cls: "db-option-check" });
+        const mark = renderCellOptionCheck(item, selected.has(opt.value));
         const deleteButton = item.createEl("button", {
           cls: "db-option-delete",
           attr: {
@@ -1602,10 +1599,7 @@ export class CellRenderer {
     let minuteInp: HTMLInputElement | undefined;
     if (includeTime) {
       segments.createSpan({ cls: "db-date-sep db-time-sep", text: " " });
-      hourInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-hour-seg", attr: { maxlength: "2", placeholder: "HH" } });
-      segments.createSpan({ cls: "db-date-sep db-time-colon", text: ":" });
-      const minutePlaceholder = "m" + "m";
-      minuteInp = segments.createEl("input", { cls: "db-date-seg db-time-seg db-minute-seg", attr: { maxlength: "2", placeholder: minutePlaceholder } });
+      ({ hour: hourInp, minute: minuteInp } = createTimeSegments(segments));
     }
 
     const inputs = [yearInp, monthInp, dayInp, hourInp, minuteInp].filter((input): input is HTMLInputElement => Boolean(input));
@@ -1890,13 +1884,9 @@ export class CellRenderer {
       hourInp.value = initHour;
       hourInp.onkeydown = (e) => handleSegmentKey(e, hourInp, dayInp);
       hourInp.oninput = () => {
-        hourInp.value = hourInp.value.replace(/\D/g, "");
-        const v = hourInp.value;
-        if (v.length === 1 && /^[3-9]$/.test(v)) {
-          hourInp.value = `0${v}`;
-          minuteInp.focus();
-          minuteInp.select();
-        } else if (v.length === 2) {
+        const { text, complete } = readTimeSegmentInput(hourInp.value, "hour");
+        hourInp.value = text;
+        if (complete) {
           minuteInp.focus();
           minuteInp.select();
         }
@@ -1906,14 +1896,9 @@ export class CellRenderer {
       minuteInp.value = initMinute;
       minuteInp.onkeydown = (e) => handleSegmentKey(e, minuteInp, hourInp);
       minuteInp.oninput = () => {
-        minuteInp.value = minuteInp.value.replace(/\D/g, "");
-        const v = minuteInp.value;
-        if (v.length === 1 && /^[6-9]$/.test(v)) {
-          minuteInp.value = `0${v}`;
-          void commit();
-        } else if (v.length === 2) {
-          void commit();
-        }
+        const { text, complete } = readTimeSegmentInput(minuteInp.value, "minute");
+        minuteInp.value = text;
+        if (complete) void commit();
       };
       minuteInp.onblur = (e) => { if (!committed && !isMovingWithinDatePopover(e)) void commit(); };
     }

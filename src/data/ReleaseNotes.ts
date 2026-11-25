@@ -11,6 +11,14 @@ export const RELEASE_NOTES: ReadonlyArray<{
   notes: Record<Exclude<ReleaseNotesLocale, "system">, string>;
 }> = [
   {
+    version: "1.3.4",
+    notes: {
+      "en": "## What's new in 1.3.4\n\n- **Task reminders:** Set multiple reminder times using a date and a completion property. Preview matching records before saving; reschedule, update completion, or snooze from the inbox. Desktop system notifications are optional.\n- **Continuous timeline:** Enable continuous horizontal browsing in a timeline to scroll without paging. Reopen it on the same device to pick up where you left off.\n- **View settings:** Tuck less-used options under More and set defaults for new databases and views, including view width. Existing views stay unchanged.\n- **Fixes and improvements:** Formula and rollup filters match their result types. Checkbox filtering, sorting, and frozen columns behave more consistently. After opening a note from a calendar, timeline, or board card, you can return to the original view.\n\nEverything remains local Markdown in your vault.",
+      "zh-CN": "## 1.3.4 更新内容\n\n- **任务提醒：** 按日期和完成状态配置多个提醒时间，保存前先预览会提醒哪些记录。在收件箱可改期、更新完成状态或延后提醒；桌面可选系统通知。\n- **连续时间线：** 在单个时间线视图中开启连续左右浏览，无需逐页翻动；重新打开时，在同一设备恢复上次浏览的位置。\n- **视图设置：** 把不常用的选项收进「更多」，为新建数据库和视图预设选项（包括新视图的显示宽度），不改动已有视图。\n- **修复与改进：** 公式和汇总按结果类型提供筛选条件，修正复选框筛选、排序及冻结列显示；从日历、时间线或看板卡片打开笔记后，可以返回原视图。\n\n所有记录仍保存在 vault 内的本地 Markdown 文件中。",
+      "zh-TW": "## 1.3.4 更新內容\n\n- **任務提醒：** 依日期和完成狀態設定多個提醒時間，儲存前先預覽會提醒哪些記錄。在收件匣可改期、更新完成狀態或延後提醒；桌面版可選用系統通知。\n- **連續時間軸：** 在個別時間軸檢視開啟連續左右瀏覽，不必逐頁翻動；重新開啟時，可在同一裝置恢復上次瀏覽的位置。\n- **檢視設定：** 將不常用的選項收進「更多」，為新建資料庫和檢視預設選項（包括新檢視的顯示寬度），不變更既有檢視。\n- **修正與改進：** 公式與彙總依結果類型提供篩選條件，修正核取方塊篩選、排序及凍結欄顯示；從行事曆、時間軸或看板卡片開啟筆記後，可以返回原檢視。\n\n所有記錄仍儲存在 vault 內的本機 Markdown 檔案中。",
+    },
+  },
+  {
     version: "1.3.3",
     notes: {
       "en": "## What's new in 1.3.3\n\n- **Button workflows:** add a Button property to edit records, create or duplicate notes, update filtered records in another database, show confirmation, and open the result. Configure actions visually and combine dynamic values with text without writing code; built-in starters include example buttons. All changes made by a single button execution can be undone together.\n- **Collapsible descriptions:** collapse a database description to a one-line preview and expand it when needed.\n- **Fixes:** fix calendar events not using the selected status property’s colors (GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)); align date-valued computed fields across summaries, filters, sorting, and charts; show update notes in the plugin interface language.\n\nEverything remains local Markdown in your vault.",

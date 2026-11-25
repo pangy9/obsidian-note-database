@@ -175,11 +175,15 @@ export interface FilterRule {
   field: string;
   op: FilterOperator;
   value?: string;
+  /** Preserve legacy rules or match a chart’s normalized group label. */
+  comparison?: "legacy" | "typed" | "chart-label";
 }
 
 export interface ConditionalFormatRule {
   id: string;
   condition: FilterRule;
+  /** Existing formula/rollup rules retain their original text comparisons. */
+  comparison?: "typed";
   /** Resolve the comparison value dynamically at render time. */
   valueSource?: "literal" | "today";
   target: "record" | "field";
@@ -579,6 +583,8 @@ export interface ViewConfig {
   timelineColorField?: string;
   /** Timeline scale / window span: day=hourly single day, week/month/quarter=daily columns (quarter uses weekly ticks). Week is the default. */
   timelineScale?: TimelineScale;
+  /** Preserve a bounded three-screen buffer while panning dates horizontally. */
+  timelineContinuous?: boolean;
   /** Anchor date (YYYY-MM-DD) the visible window is centered on; defaults to today. */
   timelineAnchor?: string;
   /** Start minute of the active day-scale timeline window. Only used when timelineScale is "day". */
@@ -597,6 +603,10 @@ export interface SummaryRuleDef {
 }
 
 export interface PluginSettings {
+  newViewDefaults?: import("./NewViewDefaults").NewViewDefaults;
+  settingsFolding?: import("./SettingsFolding").SettingsFoldingPreferences;
+  recordReminders?: import("./RecordReminders").RecordReminderSettings;
+  recordReminderPreferences?: import("./RecordReminders").RecordReminderPreferences;
   /** @deprecated Always empty after migration to file-based storage. Kept for migration read-back. */
   databases: DatabaseConfig[];
   databaseFolder: string;

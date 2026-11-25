@@ -1,9 +1,8 @@
 import { setIcon } from "obsidian";
-import { getEffectiveFilterRules } from "../data/FilterRules";
+import { getEffectiveFilterRules, getFilterEditorOperators, getPresentedFilterOperator } from "../data/FilterRules";
 import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
 import { getViewRuleColumns } from "./ViewRuleOperations";
 import { t } from "../i18n";
-import { getFilterOperatorsForColumn } from "./FilterPanelRenderer";
 import { DatabaseViewState } from "./ViewStateStore";
 
 export interface ActiveViewControlsActions {
@@ -69,7 +68,7 @@ export class ActiveViewControlsRenderer {
         chip.querySelector<HTMLElement>(".db-active-control-field")?.setText(column?.label || rule.field);
         const detail = rule.direction === "desc" ? t("common.desc") : t("common.asc");
         chip.querySelector<HTMLElement>(".db-active-control-detail")?.setText(detail);
-        this.setEditLabel(chip, `${column?.label || rule.field} · ${detail}`);
+        this.setEditLabel(chip, `${column?.label || rule.field}: ${detail}`);
         this.appendRemoveButton(chip, t("toolbar.sort"), () => actions.removeSort(index));
       }
     }
@@ -89,7 +88,7 @@ export class ActiveViewControlsRenderer {
         logic.onclick = () => actions.toggleFilterLogic();
       }
       for (const { rule, index } of filters) {
-        this.renderFilterChip(filterGroup, rule, index, columns, actions);
+        this.renderFilterChip(filterGroup, rule, index, columns, actions, config);
       }
     }
     scroller.scrollLeft = previousScrollLeft;
@@ -100,7 +99,8 @@ export class ActiveViewControlsRenderer {
     rule: FilterRule,
     index: number,
     columns: ColumnDef[],
-    actions: ActiveViewControlsActions
+    actions: ActiveViewControlsActions,
+    config: ViewConfig
   ): void {
     const column = columns.find((candidate) => candidate.key === rule.field);
     const chip = this.createChip(parent, "filter");
@@ -109,12 +109,13 @@ export class ActiveViewControlsRenderer {
     const icon = chip.querySelector<HTMLElement>(".db-active-control-icon");
     if (icon) setIcon(icon, "list-filter");
     chip.querySelector<HTMLElement>(".db-active-control-field")?.setText(column?.label || rule.field);
-    const operator = getFilterOperatorsForColumn(column).find(([value]) => value === rule.op)?.[1] || rule.op;
-    const detail = rule.op === "empty" || rule.op === "notempty"
+    const op = getPresentedFilterOperator(rule, column, config.schema.computedFields);
+    const operator = getFilterEditorOperators(column, config.schema.computedFields, op).find(([value]) => value === op)?.[1] || op;
+    const detail = op === "empty" || op === "notempty"
       ? operator
-      : `${operator} · ${String(rule.value ?? "")}`;
+      : [operator, String(rule.value ?? "")].filter(Boolean).join(" ");
     chip.querySelector<HTMLElement>(".db-active-control-detail")?.setText(detail);
-    this.setEditLabel(chip, `${column?.label || rule.field} · ${detail}`);
+    this.setEditLabel(chip, `${column?.label || rule.field}: ${detail}`);
     this.appendRemoveButton(chip, t("toolbar.filter"), () => actions.removeFilter(index));
   }
 

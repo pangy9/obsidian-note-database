@@ -1,3 +1,7 @@
+import { getTypedQueryColumns } from "../data/QueryColumns";
+import { defaultSetting, markDefaultSetting } from "./DefaultSettingControl";
+import { createSettingsFoldSection, readSettingsFoldOpen, type SettingsFoldSection } from "./MoreDisplayOptions";
+import { selectedSettingFolds, type SettingsFoldingPreferences } from "../data/SettingsFolding";
 import { App, Notice, setIcon, setTooltip } from "obsidian";
 import { ColumnDef, ComputedSyncMode, ConditionalFormatRule, DatabaseConfig, DatabaseViewType, FilterOperator, NO_TITLE_FIELD, SourceRule, SourceRuleGroup, SourceRuleNode, SourceRuleOperator, StatusColor, StatusPresetDef, ViewConfig, generateId } from "../data/types";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
@@ -16,7 +20,7 @@ import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIcon
 import { ImageFileSuggestModal } from "./ImageFileSuggestModal";
 import { openOptionColorPicker } from "./OptionColorPicker";
 import { MarkdownFileSuggestModal } from "./MarkdownFileSuggestModal";
-import { getFilterOperatorsForColumn } from "./FilterPanelRenderer";
+import { getFilterEditorOperators, getFilterOperatorsForColumn } from "../data/FilterRules";
 import { closeActiveDateValuePicker, renderDateValuePicker } from "./DateValuePicker";
 
 const CUSTOM_SOURCE_RULE_FIELD = "__custom__";
@@ -211,6 +215,8 @@ function isPropertyPresenceRuleField(field: string): boolean {
 
 export interface ViewConfigPanelActions {
   app: App;
+  settingsFolding?: SettingsFoldingPreferences;
+  creationDefaultsScope?: "database" | "view";
   onChange(label?: string): void;
   onViewTypeChange?(viewType: DatabaseViewType): void;
   onDatabaseChange?(label?: string): void;
@@ -243,42 +249,55 @@ export class ViewConfigPanelRenderer {
     config: ViewConfig | undefined,
     actions: ViewConfigPanelActions,
     anchorEl?: HTMLElement
-  ): void {
-    const existingPanel = containerEl.querySelector(".db-view-config-panel");
-    const savedScroll = (existingPanel as HTMLElement | null)?.scrollTop ?? 0;
+  ): HTMLElement | undefined {
+    const existingPanel = containerEl.querySelector<HTMLElement>(".db-view-config-panel");
+    const dbId = actions.database?.id ?? "";
+    const viewKey = JSON.stringify([dbId, config?.id ?? config?.name, config?.viewType]);
+    const databaseOpen = existingPanel?.dataset.foldDatabase === dbId && readSettingsFoldOpen(existingPanel, "database");
+    const viewOpen = existingPanel?.dataset.foldView === viewKey && readSettingsFoldOpen(existingPanel, "view");
+    const savedScroll = existingPanel?.scrollTop ?? 0;
     containerEl.querySelectorAll(".db-view-config-panel").forEach((el) => el.remove());
     if (!visible || !config) return;
 
     const panel = containerEl.createDiv({ cls: "db-view-config-panel" });
+    panel.dataset.foldDatabase = dbId;
+    panel.dataset.foldView = viewKey;
+    const selected = selectedSettingFolds(actions.settingsFolding);
+    const reposition = () => positionToolbarPopover(panel, anchorEl);
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("toolbar.settings") });
 
-    if (actions.database) {
+    if (actions.database && actions.creationDefaultsScope !== "view") {
       this.renderSectionTitle(panel, t("viewConfig.databaseSection"));
       if (actions.isDatabaseReadOnly) {
         panel.createDiv({ cls: "db-view-config-readonly-note", text: t("viewConfig.databaseReadonly") });
       }
-      this.renderDatabaseSettings(panel, actions.database, actions);
+      const databaseFold = createSettingsFoldSection(panel, selected, "database", databaseOpen, reposition);
+      this.renderDatabaseSettings(panel, actions.database, actions, databaseFold);
+      databaseFold.finish();
     }
+    if (actions.creationDefaultsScope === "database") return panel;
 
-    this.renderSectionTitle(panel, t("viewConfig.viewSection"));
+    this.renderSectionTitle(panel, t("viewConfig.viewSection")).dataset.settingsViewSection = "";
+    const viewFold = createSettingsFoldSection(panel, selected, "view", viewOpen, reposition);
     this.renderViewType(panel, config, actions);
-    this.renderViewSourceRulesSection(panel, config, actions);
+    this.renderViewSourceRulesSection(viewFold.target("viewSourceRules"), config, actions);
     if (["table", "board", "gallery", "list", "calendar", "timeline"].includes(config.viewType || "table") && actions.database) {
-      this.renderRecordIconSettings(panel, actions.database, config, actions);
+      this.renderRecordIconSettings(viewFold.target("recordIcon"), actions.database, config, actions);
     }
     if (config.viewType !== "chart" && config.viewType !== "form" && actions.database) {
-      this.renderConditionalFormatting(panel, config, actions.database, actions, actions.isDatabaseReadOnly);
+      this.renderConditionalFormatting(viewFold.target("conditionalFormatting"), config, actions.database, actions, actions.isDatabaseReadOnly);
     }
     if (config.viewType === "form") {
-      this.renderFormSettings(panel, config, actions);
+      this.renderFormSettings(panel, config, actions, viewFold);
+      viewFold.finish();
       positionToolbarPopover(panel, anchorEl);
       if (savedScroll) panel.scrollTop = savedScroll;
-      return;
+      return panel;
     }
     const showViewStatusPresets = config.viewType !== "chart" && config.viewType !== "calendar" && config.viewType !== "timeline";
     if (showViewStatusPresets) {
-      this.renderStatusPresetSettings(panel, {
+      this.renderStatusPresetSettings(viewFold.target("viewStatusPresets"), {
         presets: actions.viewStatusPresets || [],
         defaultPresetId: actions.defaultViewStatusPresetId,
         helpText: actions.viewStatusPresetHelpText,
@@ -289,61 +308,45 @@ export class ViewConfigPanelRenderer {
     }
     const isCalendarTimelineView = config.viewType === "calendar" || config.viewType === "timeline";
     if (config.viewType !== "chart" && !isCalendarTimelineView) {
-      this.renderDefaultColumnWidth(panel, config, actions);
-      this.renderSelect(panel, t("viewConfig.yearDisplayMode"), [
+      this.renderDefaultColumnWidth(viewFold.target("defaultColumnWidth"), config, actions);
+      this.renderSelect(viewFold.target("yearDisplay"), t("viewConfig.yearDisplayMode"), [
         { value: "always", text: t("viewConfig.yearDisplayMode.always") },
         { value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
         { value: "never", text: t("viewConfig.yearDisplayMode.never") },
-      ], config.yearDisplayMode || "always", (value) => {
+      ], config.yearDisplayMode || "always", defaultSetting("yearDisplayMode", (value) => {
         config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
         actions.onChange(t("undo.yearDisplayModeConfig"));
-      });
+      }));
     }
     if (config.viewType !== "table" && config.viewType !== "chart" && !isCalendarTimelineView) {
-      this.renderTitleField(panel, config, actions);
-      this.renderSwitch(panel, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
-        config.showEmptyFields = value || undefined;
-        actions.onChange(t("undo.showEmptyFieldsConfig"));
-      });
+      this.renderTitleField(viewFold.target("titleField"), config, actions);
       if (config.viewType === "list") {
-        this.renderSwitch(panel, t("viewConfig.listCompactFields"), config.listCompactFields === true, (value) => {
-          config.listCompactFields = value || undefined;
+        this.renderSwitch(viewFold.target("listCompactFields"), t("viewConfig.listCompactFields"), config.listCompactFields === true, defaultSetting("listCompactFields", (value) => {
+          config.listCompactFields = value;
           actions.onChange(t("undo.listCompactFieldsConfig"));
-        });
+        }));
       }
     }
-    if (config.viewType === "gallery") {
-      this.renderGallerySettings(panel, config, actions);
-      positionToolbarPopover(panel, anchorEl);
-      if (savedScroll) panel.scrollTop = savedScroll;
-      return;
+    if (config.viewType === "gallery") this.renderGallerySettings(panel, config, actions, viewFold);
+    if (config.viewType === "board") this.renderBoardSettings(panel, config, actions, viewFold);
+    if (config.viewType === "list" || config.viewType === "gallery" || config.viewType === "board") {
+      this.renderSwitch(viewFold.target("showEmptyFields"), t("viewConfig.showEmptyFields"), config.showEmptyFields === true, defaultSetting("showEmptyFields", (value) => {
+        config.showEmptyFields = value;
+        actions.onChange(t("undo.showEmptyFieldsConfig"));
+      }));
     }
-    if (config.viewType === "board") {
-      this.renderBoardSettings(panel, config, actions);
-      positionToolbarPopover(panel, anchorEl);
-      if (savedScroll) panel.scrollTop = savedScroll;
-      return;
-    }
-    if (config.viewType === "calendar") {
-      positionToolbarPopover(panel, anchorEl);
-      if (savedScroll) panel.scrollTop = savedScroll;
-      return;
-    }
-    if (config.viewType === "timeline") {
-      positionToolbarPopover(panel, anchorEl);
-      if (savedScroll) panel.scrollTop = savedScroll;
-      return;
-    }
+    viewFold.finish();
     positionToolbarPopover(panel, anchorEl);
     if (savedScroll) panel.scrollTop = savedScroll;
+    return panel;
   }
 
-  private renderSectionTitle(panel: HTMLElement, text: string): void {
-    panel.createDiv({ cls: "db-view-config-section-title", text });
+  private renderSectionTitle(panel: HTMLElement, text: string): HTMLElement {
+    return panel.createDiv({ cls: "db-view-config-section-title", text });
   }
 
   /** 表单视图专属设置：封面（必填标记入口在列管理器行首星标）。 */
-  private renderFormSettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
+  private renderFormSettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions, fold: SettingsFoldSection): void {
     this.renderSectionTitle(panel, t("form.settingsTitle"));
     const titleRow = panel.createDiv({ cls: "db-view-config-row" });
     titleRow.createDiv({ cls: "db-view-config-label", text: t("form.titleLabel") });
@@ -354,7 +357,8 @@ export class ViewConfigPanelRenderer {
       config.formTitle = titleInput.value.trim() || undefined;
       actions.onChange(t("undo.formConfig"));
     };
-    const coverRow = panel.createDiv({ cls: "db-view-config-row" });
+    const cover = fold.target("formCover");
+    const coverRow = cover.createDiv({ cls: "db-view-config-row" });
     coverRow.createDiv({ cls: "db-view-config-label", text: t("form.coverLabel") });
     const coverField = coverRow.createDiv({ cls: "db-view-config-field db-database-cover-setting" });
     coverField.createDiv({
@@ -386,7 +390,7 @@ export class ViewConfigPanelRenderer {
         actions.onChange(t("undo.formConfig"));
       };
     }
-    this.renderSelect(panel, t("form.coverMode"), [
+    this.renderSelect(cover, t("form.coverMode"), [
       { value: "banner", text: t("form.coverMode.banner"), icon: "panel-top" },
       { value: "half", text: t("form.coverMode.half"), icon: "panel-top" },
       { value: "wallpaper", text: t("form.coverMode.wallpaper"), icon: "image" },
@@ -446,7 +450,7 @@ export class ViewConfigPanelRenderer {
    *  no-op before any formula column exists. `actions.onDatabaseChange` persists in the
    *  popover and is a no-op in the creation modal, where changes accumulate in the temp
    *  config until "Create". */
-  renderDatabaseGlobals(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
+  renderDatabaseGlobals(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions, fold?: SettingsFoldSection): void {
     const readOnly = actions.isDatabaseReadOnly;
     const syncSourceFolder = (value: string) => {
       database.sourceFolder = value;
@@ -463,7 +467,7 @@ export class ViewConfigPanelRenderer {
     }, readOnly, (value) => {
       database.description = value || undefined;
     });
-    this.renderDatabaseCoverSetting(panel, database, actions, readOnly);
+    this.renderDatabaseCoverSetting(fold?.target("databaseCover") ?? panel, database, actions, readOnly);
     this.renderText(panel, t("viewConfig.sourceFolder"), database.sourceFolder || "", t("settings.sourceFolder.placeholder"), (value) => {
       syncSourceFolder(value);
       actions.onDatabaseChange?.(t("undo.sourceFolderConfig"));
@@ -471,8 +475,8 @@ export class ViewConfigPanelRenderer {
       syncSourceFolder(value);
     });
     this.renderSourceRules(panel, database, actions, readOnly);
-    this.renderNewRecordFolderSetting(panel, database, actions, readOnly);
-    this.renderNewRecordTemplateSetting(panel, database, actions, readOnly);
+    this.renderNewRecordFolderSetting(fold?.target("newRecordFolder") ?? panel, database, actions, readOnly);
+    this.renderNewRecordTemplateSetting(fold?.target("newRecordTemplate") ?? panel, database, actions, readOnly);
   }
 
   private renderNewRecordTemplateSetting(
@@ -584,20 +588,21 @@ export class ViewConfigPanelRenderer {
     }
   }
 
-  private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions): void {
-    this.renderDatabaseGlobals(panel, database, actions);
+  private renderDatabaseSettings(panel: HTMLElement, database: DatabaseConfig, actions: ViewConfigPanelActions, fold: SettingsFoldSection): void {
+    this.renderDatabaseGlobals(panel, database, actions, fold);
     if (!actions.isDatabaseReadOnly) {
-      this.renderSwitch(panel, t("form.quickFormEnabled.name"), database.quickFormEnabled === true, (value) => {
-        database.quickFormEnabled = value || undefined;
+      this.renderSwitch(fold.target("quickForm"), t("form.quickFormEnabled.name"), database.quickFormEnabled === true, defaultSetting("quickFormEnabled", (value) => {
+        database.quickFormEnabled = value;
         actions.onDatabaseChange?.(t("undo.formConfig"));
-      }, false, t("form.quickFormEnabled.desc"));
+      }), false, t("form.quickFormEnabled.desc"));
     }
+    const iconRow = fold.target("databaseRecordIcon");
     const iconFields = getOrderedRecordIconColumns(database.views[0] || { ...database, name: database.name }, database.recordIconField);
     if (actions.isDatabaseReadOnly) {
       const column = database.schema.columns.find((candidate) => candidate.key === database.recordIconField);
-      this.renderText(panel, t("recordIcon.field"), column?.label || column?.key || "", "", () => {}, true);
+      this.renderText(iconRow, t("recordIcon.field"), column?.label || column?.key || "", "", () => {}, true);
     } else {
-      this.renderSelect(panel, t("recordIcon.field"), [
+      this.renderSelect(iconRow, t("recordIcon.field"), [
         { value: "", text: t("common.notSet") },
         ...iconFields.map((column) => ({ value: column.key, text: column.label || column.key, icon: getPropertyDropdownIcon(getColumnDisplayType(column, database.views[0]?.schema.computedFields ?? [])) })),
         ...(actions.createRecordIconField ? [{ value: "__create_record_icon_field__", text: t("recordIcon.createField"), icon: "plus", preserveValueOnSelect: true }] : []),
@@ -607,8 +612,10 @@ export class ViewConfigPanelRenderer {
         actions.onDatabaseChange?.(t("recordIcon.field"));
       }, true);
     }
-    this.renderComputedSyncMode(panel, database, actions, actions.isDatabaseReadOnly);
-    this.renderStatusPresetSettings(panel, {
+    // Write-back is not a creation default. Render a value, not a group of selectable cards.
+    this.renderComputedSyncMode(fold.target("computedSync"), database, actions,
+      actions.isDatabaseReadOnly || actions.creationDefaultsScope === "database");
+    this.renderStatusPresetSettings(fold.target("databaseStatusPresets"), {
       presets: actions.statusPresets || [],
       defaultPresetId: actions.defaultStatusPresetId,
       helpText: actions.statusPresetHelpText,
@@ -631,6 +638,7 @@ export class ViewConfigPanelRenderer {
       section.empty();
       const heading = section.createDiv({ cls: "db-conditional-format-heading" });
       heading.createSpan({ text: t("conditionalFormat.title") });
+      const typedColumns = getTypedQueryColumns({ ...config, schema: database.schema });
       if (!readOnly) {
         const add = heading.createEl("button", {
           cls: "db-conditional-format-add db-icon-only-button",
@@ -638,10 +646,11 @@ export class ViewConfigPanelRenderer {
         });
         setIcon(add, "plus");
         add.onclick = () => {
-          const firstField = database.schema.columns[0]?.key || "file.name";
+          const first = typedColumns.find(col => col.key !== "file.name") ?? typedColumns[0];
           const rule: ConditionalFormatRule = {
             id: generateId(),
-            condition: { field: firstField, op: "eq", value: "" },
+            comparison: "typed",
+            condition: { field: first.key, op: first.type === "checkbox" ? "notempty" : "eq", value: "" },
             valueSource: "literal",
             target: "record",
             color: "red",
@@ -658,15 +667,13 @@ export class ViewConfigPanelRenderer {
       }
       rules.forEach((rule, index) => {
         const row = section.createDiv({ cls: "db-conditional-format-rule" });
-        const currentColumn = database.schema.columns.find((col) => col.key === rule.condition.field);
-        const operators = getFilterOperatorsForColumn(currentColumn);
-        if (!operators.some(([op]) => op === rule.condition.op)) {
-          rule.condition.op = operators[0]?.[0] || "eq";
-          rule.condition.value = "";
-        }
-        if (!isDateLikeColumnType(currentColumn?.type) && rule.valueSource === "today") {
-          rule.valueSource = "literal";
-        }
+        const columns = rule.comparison === "typed" ? typedColumns : database.schema.columns;
+        const currentColumn = columns.find((col) => col.key === rule.condition.field);
+        const operators = getFilterEditorOperators(currentColumn, undefined, rule.condition.op);
+        const textOperator = rule.condition.op === "contains" || rule.condition.op === "hasTag";
+        const canPickOption = currentColumn && ["select", "status", "multi-select"].includes(currentColumn.type)
+          && getColumnOptions(currentColumn).length > 0;
+        const inputColumn = !textOperator || canPickOption ? currentColumn : undefined;
         const persist = (rerender = false) => {
           config.conditionalFormats = [...rules];
           actions.onChange(t("undo.conditionalFormatConfig"));
@@ -676,7 +683,7 @@ export class ViewConfigPanelRenderer {
           parent: row,
           label: t("filter.field"),
           value: rule.condition.field,
-          options: database.schema.columns.filter((col) => col.type !== "button").map((col) => ({
+          options: typedColumns.map((col) => ({
             value: col.key,
             text: col.label || col.key,
             icon: getPropertyDropdownIcon(getColumnDisplayType(col, database.schema.computedFields)),
@@ -687,7 +694,8 @@ export class ViewConfigPanelRenderer {
           renderIcon: renderDropdownPropertyTypeIcon,
           onChange: (next) => {
             rule.condition.field = next;
-            const nextColumn = database.schema.columns.find((col) => col.key === next);
+            rule.comparison = "typed";
+            const nextColumn = typedColumns.find((col) => col.key === next);
             rule.condition.op = getFilterOperatorsForColumn(nextColumn)[0]?.[0] || "eq";
             rule.condition.value = "";
             if (!isDateLikeColumnType(nextColumn?.type)) rule.valueSource = "literal";
@@ -712,14 +720,14 @@ export class ViewConfigPanelRenderer {
           rule.condition.op === "empty" || rule.condition.op === "notempty";
         if (valueDisabled) {
           row.createSpan({ cls: "db-conditional-format-empty-value", text: "—" });
-        } else if (currentColumn && ["select", "status", "multi-select"].includes(currentColumn.type)) {
+        } else if (inputColumn && ["select", "status", "multi-select"].includes(inputColumn.type)) {
           createDropdownField({
             parent: row,
             label: t("filter.value"),
             value: rule.condition.value || "",
             options: [
               { value: "", text: t("filter.value") },
-              ...getColumnOptions(currentColumn).map((option) => ({ value: option.value, text: option.value })),
+              ...getColumnOptions(inputColumn).map((option) => ({ value: option.value, text: option.value })),
             ],
             hideLabel: true,
             disabled: Boolean(readOnly),
@@ -729,13 +737,13 @@ export class ViewConfigPanelRenderer {
               persist();
             },
           });
-        } else if (isDateLikeColumnType(currentColumn?.type)) {
+        } else if (isDateLikeColumnType(inputColumn?.type)) {
           renderDateValuePicker({
             parent: row,
             value: rule.condition.value || "",
             placeholder: t("filter.value"),
             disabled: Boolean(readOnly),
-            includeTime: currentColumn?.type === "datetime",
+            includeTime: inputColumn?.type === "datetime",
             displayText: rule.valueSource === "today" ? t("conditionalFormat.dynamicToday") : undefined,
             className: "db-conditional-format-value db-conditional-format-date-field",
             onChange: (next) => {
@@ -746,6 +754,9 @@ export class ViewConfigPanelRenderer {
             footerAction: {
               label: t("conditionalFormat.dynamicToday"),
               onSelect: () => {
+                // Selecting the relative date again is an explicit opt-in to
+                // current date semantics. Opening a saved rule alone does not migrate it.
+                rule.comparison = "typed";
                 rule.valueSource = "today";
                 rule.condition.value = "";
                 persist(true);
@@ -756,7 +767,7 @@ export class ViewConfigPanelRenderer {
           const value = row.createEl("input", {
             cls: "db-view-config-text db-conditional-format-value",
             attr: {
-              type: currentColumn?.type === "number" || currentColumn?.type === "currency"
+              type: inputColumn?.type === "number" || inputColumn?.type === "currency"
                 ? "number"
                 : "text",
               placeholder: t("filter.value"),
@@ -840,13 +851,13 @@ export class ViewConfigPanelRenderer {
     config: ViewConfig,
     actions: ViewConfigPanelActions,
   ): void {
-    this.renderSwitch(panel, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
-      config.showRecordIcon = value || undefined;
+    this.renderSwitch(panel, t("recordIcon.show"), config.showRecordIcon === true, defaultSetting("showRecordIcon", (value) => {
+      config.showRecordIcon = value;
       if (value && !resolveRecordIconField(database, config) && !database.recordIconField) {
         config.recordIconFieldOverrideEnabled = true;
       }
       actions.onChange(t("recordIcon.show"));
-    });
+    }));
     if (config.showRecordIcon !== true) return;
     this.renderSwitch(panel, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
       config.recordIconFieldOverrideEnabled = value || undefined;
@@ -1528,6 +1539,7 @@ export class ViewConfigPanelRenderer {
     undoField: string,
     undoFit: string,
     undoRatio: string,
+    sizing: HTMLElement,
   ): void {
     this.renderSelect(
       panel,
@@ -1555,17 +1567,17 @@ export class ViewConfigPanelRenderer {
     );
 
     this.renderSelect(
-      panel,
+      sizing,
       t("viewConfig.imageFit"),
       [
         { value: "cover", text: t("viewConfig.cover") },
         { value: "contain", text: t("viewConfig.contain") },
       ],
       config[fitKey] || "cover",
-      (value) => {
+      defaultSetting(fitKey, (value) => {
         config[fitKey] = value === "contain" ? "contain" : "cover";
         actions.onChange(undoFit);
-      }
+      })
     );
 
     const ratioOptions = [
@@ -1579,25 +1591,25 @@ export class ViewConfigPanelRenderer {
     if (!ratioOptions.some((item) => item.value === ratio)) {
       ratioOptions.push({ value: ratio, text: t("viewConfig.ratioCurrent", { ratio }) });
     }
-    this.renderSelect(panel, t("viewConfig.coverRatio"), ratioOptions, ratio, (value) => {
+    this.renderSelect(sizing, t("viewConfig.coverRatio"), ratioOptions, ratio, defaultSetting(ratioKey, (value) => {
       const next = Number(value);
       if (Number.isFinite(next)) {
         config[ratioKey] = next;
         actions.onChange(undoRatio);
       }
-    });
+    }));
   }
 
-  private renderGallerySettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
-    this.renderCoverSettings(panel, config, actions, "galleryImageField", "galleryImageFit", "galleryImageAspectRatio", t("undo.galleryCoverFieldConfig"), t("undo.galleryImageFitConfig"), t("undo.galleryCoverRatioConfig"));
+  private renderGallerySettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions, fold: SettingsFoldSection): void {
+    this.renderCoverSettings(panel, config, actions, "galleryImageField", "galleryImageFit", "galleryImageAspectRatio", t("undo.galleryCoverFieldConfig"), t("undo.galleryImageFitConfig"), t("undo.galleryCoverRatioConfig"), fold.target("galleryCoverSizing"));
 
     const setGalleryCardSize = (value: number) => {
       config.galleryCardSize = value;
     };
-    this.renderRange(panel, t("viewConfig.cardSize"), config.galleryCardSize || 250, 160, 420, 10, (value) => {
+    this.renderRange(fold.target("galleryCardSize"), t("viewConfig.cardSize"), config.galleryCardSize || 250, 160, 420, 10, defaultSetting("galleryCardSize", (value) => {
       setGalleryCardSize(value);
       actions.onChange(t("undo.cardSizeConfig"));
-    }, setGalleryCardSize);
+    }), setGalleryCardSize);
   }
 
   private renderTitleField(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
@@ -1627,10 +1639,10 @@ export class ViewConfigPanelRenderer {
     );
   }
 
-  private renderBoardSettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions): void {
+  private renderBoardSettings(panel: HTMLElement, config: ViewConfig, actions: ViewConfigPanelActions, fold: SettingsFoldSection): void {
     const groupField = config.boardGroupField || config.groupByField || "";
     this.renderSelect(
-      panel,
+      fold.target("boardSubgroup"),
       t("viewConfig.boardSubgroupField"),
       [
         { value: "", text: t("viewConfig.noSubgroup") },
@@ -1658,12 +1670,12 @@ export class ViewConfigPanelRenderer {
     const setBoardColumnWidth = (value: number) => {
       config.boardColumnWidth = value;
     };
-    this.renderRange(panel, t("viewConfig.boardColumnWidth"), config.boardColumnWidth || 280, 220, 520, 10, (value) => {
+    this.renderRange(fold.target("boardColumnWidth"), t("viewConfig.boardColumnWidth"), config.boardColumnWidth || 280, 220, 520, 10, defaultSetting("boardColumnWidth", (value) => {
       setBoardColumnWidth(value);
       actions.onChange(t("undo.boardColumnWidthConfig"));
-    }, setBoardColumnWidth);
+    }), setBoardColumnWidth);
 
-    this.renderCoverSettings(panel, config, actions, "boardImageField", "boardImageFit", "boardImageAspectRatio", t("undo.boardCoverFieldConfig"), t("undo.boardImageFitConfig"), t("undo.boardCoverRatioConfig"));
+    this.renderCoverSettings(panel, config, actions, "boardImageField", "boardImageFit", "boardImageAspectRatio", t("undo.boardCoverFieldConfig"), t("undo.boardImageFitConfig"), t("undo.boardCoverRatioConfig"), fold.target("boardCoverSizing"));
   }
 
   private renderReadonlyField(panel: HTMLElement, label: string, value: string): void {
@@ -1695,10 +1707,10 @@ export class ViewConfigPanelRenderer {
       config.columnWidths = columnWidths;
     };
     const current = Math.min(this.getDefaultColumnWidth(config), maxWidth);
-    this.renderRange(panel, t("viewConfig.defaultColumnWidth"), current, 80, maxWidth, 10, (value) => {
+    this.renderRange(panel, t("viewConfig.defaultColumnWidth"), current, 80, maxWidth, 10, defaultSetting("defaultColumnWidth", (value) => {
       setDefaultColumnWidth(value);
       actions.onChange(t("undo.defaultColumnWidthConfig"));
-    }, setDefaultColumnWidth);
+    }), setDefaultColumnWidth);
   }
 
   private getDefaultColumnWidth(config: ViewConfig): number {
@@ -1719,6 +1731,7 @@ export class ViewConfigPanelRenderer {
     disabled = false
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
+    markDefaultSetting(row, onChange);
     row.createDiv({ cls: "db-view-config-label", text: label });
     const field = row.createDiv({ cls: "db-view-config-field" });
     const hasPropertyIcons = options.some((option) => isPropertyDropdownIcon(option.icon));
@@ -1831,6 +1844,7 @@ export class ViewConfigPanelRenderer {
     helpText?: string
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
+    markDefaultSetting(row, onChange);
     row.createDiv({ cls: "db-view-config-label", text: label });
     const field = row.createDiv({ cls: "db-view-config-field" });
     if (disabled) {
@@ -1855,6 +1869,7 @@ export class ViewConfigPanelRenderer {
     onInput?: (value: number) => void
   ): void {
     const row = panel.createDiv({ cls: "db-view-config-row" });
+    markDefaultSetting(row, onChange);
     row.createDiv({ cls: "db-view-config-label", text: label });
     const controls = row.createDiv({ cls: "db-view-config-range" });
     const range = controls.createEl("input", {

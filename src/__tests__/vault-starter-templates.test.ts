@@ -47,7 +47,7 @@ describe("vault-local starter templates", () => {
     expect(first.views[0].chartType).toBe("donut");
     expect(first.views[1].formRequiredFields).toEqual(["status"]);
     expect(first.views[0].manualOrder).toBeUndefined();
-    expect(first.views[0].filters).toEqual([{ field: "status", op: "eq", value: "Todo" }]);
+    expect(first.views[0].filters).toEqual([{ field: "status", op: "eq", value: "Todo", comparison: "typed" }]);
     expect(first.views[0].viewStates?.table?.filters).toEqual([]);
     expect(first.views[0].schema).toBe(first.schema);
     expect(first.coverImage).toBe("assets/cover.png");
@@ -103,4 +103,16 @@ describe("vault-local starter templates", () => {
     const app = { vault: { getAbstractFileByPath: () => null }, metadataCache: { getFirstLinkpathDest: () => null } } as unknown as App;
     expect(getMissingStarterAssets(app, template)).toEqual(["Templates/record.md"]);
   });
+});
+
+it("preserves comparison semantics for a legacy template with mode-specific rules", () => {
+  const db = database();
+  const rule = { field: "status", op: "eq", value: "01" } as const;
+  db.views[0].filters = [rule];
+  db.views[0].viewStates = { chart: { filters: [rule, { ...rule, comparison: "typed" }] } };
+  const template = parseVaultStarter(JSON.stringify({ kind: "note-database-starter", version: 1, id: "old",
+    name: "Old template", description: "", config: db, samples: [] }));
+  const restored = instantiateVaultStarter(template, "Restored", "records");
+  expect(restored.views[0].filters?.[0].comparison).toBe("legacy");
+  expect(restored.views[0].viewStates?.chart?.filters?.map(rule => rule.comparison)).toEqual(["legacy", "typed"]);
 });

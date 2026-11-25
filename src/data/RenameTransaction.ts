@@ -71,8 +71,11 @@ export interface ConfigWriteStep {
   mutation?: unknown;
 }
 
+export interface ColumnKeyRename { databaseId: string; oldKey: string; newKey: string; }
+
 /** rename 事务计划（纯数据）。 */
 export interface RenamePlan {
+  columnKeyRename?: ColumnKeyRename;
   frontmatter: FrontmatterWriteStep[];
   primaryConfig: ConfigWriteStep;
   externalConfigs: ConfigWriteStep[];
@@ -88,6 +91,10 @@ export type JournalEntry =
 export interface TransactionWriter {
   /** Rollback retains CAS checks but must not inherit forward-only cancellation guards. */
   forCompensation?(): TransactionWriter;
+  /** Keep dependent readers on the last complete state during transactions. */
+  holdReads?(): () => void;
+  /** Optional vault-local references, committed last after the affected files. */
+  patchColumnKeyReferences?(rename: ColumnKeyRename): Promise<void>;
   /** 单文件队列内 read-modify-write：读取当前 frontmatter → 校验涉及 key 仍符合 expect →
    *  apply writes（set/delete）→ 写回。涉及 key 已被并发改动时抛 conflict 错误，不得覆盖。 */
   patchFrontmatter(
@@ -116,7 +123,7 @@ export interface TransactionFailure {
   /** 触发回滚（或 plan 校验失败）的原始错误。 */
   primaryError: unknown;
   /** 失败位置；kind="plan" 表示零写入前的 plan 校验失败。 */
-  failedStep: { kind: "plan" | "frontmatter" | "primaryConfig" | "externalConfig"; path?: string; index?: number };
+  failedStep: { kind: "plan" | "frontmatter" | "primaryConfig" | "externalConfig" | "references"; path?: string; index?: number };
   /** 补偿过程中再次失败的步骤（plan 失败或补偿全程成功则为空）。 */
   compensationErrors: Array<{ kind: "frontmatter" | "config"; path: string; error: unknown }>;
 }
@@ -140,42 +147,49 @@ export async function executeRenameTransaction(
     return { ok: false, primaryError: planError, failedStep: { kind: "plan" }, compensationErrors: [] };
   }
 
-  const journal: JournalEntry[] = [];
-  const compensationErrors: TransactionFailure["compensationErrors"] = [];
-
-  const fail = async (primaryError: unknown, failedStep: TransactionFailure["failedStep"]): Promise<TransactionFailure> => {
-    await compensate(journal, writer.forCompensation?.() ?? writer, compensationErrors);
-    return { ok: false, primaryError, failedStep, compensationErrors };
-  };
-
-  // 1. frontmatter（逐文件，每成功即刻 journal）
-  for (let i = 0; i < plan.frontmatter.length; i += 1) {
-    const step = plan.frontmatter[i];
-    try {
-      await writer.patchFrontmatter(step.path, snapshotExpect(step.changes), commitOps(step.changes));
-      journal.push({ kind: "frontmatter", path: step.path, changes: step.changes });
-    } catch (err) {
-      return await fail(err, { kind: "frontmatter", path: step.path, index: i });
-    }
-  }
-  // 2. 当前数据库配置（CAS：casBefore→casAfter；typed after 用于 override/notify）
+  const release = plan.columnKeyRename ? writer.holdReads?.() : undefined;
   try {
-    await writer.patchConfig(plan.primaryConfig.path, plan.primaryConfig.casBefore, plan.primaryConfig.casAfter, plan.primaryConfig.after, plan.primaryConfig.mutation);
-    journal.push({ kind: "config", path: plan.primaryConfig.path, before: plan.primaryConfig.before, after: plan.primaryConfig.after, casBefore: plan.primaryConfig.casBefore, casAfter: plan.primaryConfig.casAfter, mutation: plan.primaryConfig.mutation });
-  } catch (err) {
-    return await fail(err, { kind: "primaryConfig", path: plan.primaryConfig.path });
-  }
-  // 3. 外部数据库配置（逐个 CAS）
-  for (let i = 0; i < plan.externalConfigs.length; i += 1) {
-    const step = plan.externalConfigs[i];
-    try {
-      await writer.patchConfig(step.path, step.casBefore, step.casAfter, step.after, step.mutation);
-      journal.push({ kind: "config", path: step.path, before: step.before, after: step.after, casBefore: step.casBefore, casAfter: step.casAfter, mutation: step.mutation });
-    } catch (err) {
-      return await fail(err, { kind: "externalConfig", path: step.path, index: i });
+    const journal: JournalEntry[] = [];
+    const compensationErrors: TransactionFailure["compensationErrors"] = [];
+
+    const fail = async (primaryError: unknown, failedStep: TransactionFailure["failedStep"]): Promise<TransactionFailure> => {
+      await compensate(journal, writer.forCompensation?.() ?? writer, compensationErrors);
+      return { ok: false, primaryError, failedStep, compensationErrors };
+    };
+
+    // 1. frontmatter（逐文件，每成功即刻 journal）
+    for (let i = 0; i < plan.frontmatter.length; i += 1) {
+      const step = plan.frontmatter[i];
+      try {
+        await writer.patchFrontmatter(step.path, snapshotExpect(step.changes), commitOps(step.changes));
+        journal.push({ kind: "frontmatter", path: step.path, changes: step.changes });
+      } catch (err) {
+        return await fail(err, { kind: "frontmatter", path: step.path, index: i });
+      }
     }
-  }
-  return { ok: true, journal };
+    // 2. 当前数据库配置（CAS：casBefore→casAfter；typed after 用于 override/notify）
+    try {
+      await writer.patchConfig(plan.primaryConfig.path, plan.primaryConfig.casBefore, plan.primaryConfig.casAfter, plan.primaryConfig.after, plan.primaryConfig.mutation);
+      journal.push({ kind: "config", path: plan.primaryConfig.path, before: plan.primaryConfig.before, after: plan.primaryConfig.after, casBefore: plan.primaryConfig.casBefore, casAfter: plan.primaryConfig.casAfter, mutation: plan.primaryConfig.mutation });
+    } catch (err) {
+      return await fail(err, { kind: "primaryConfig", path: plan.primaryConfig.path });
+    }
+    // 3. 外部数据库配置（逐个 CAS）
+    for (let i = 0; i < plan.externalConfigs.length; i += 1) {
+      const step = plan.externalConfigs[i];
+      try {
+        await writer.patchConfig(step.path, step.casBefore, step.casAfter, step.after, step.mutation);
+        journal.push({ kind: "config", path: step.path, before: step.before, after: step.after, casBefore: step.casBefore, casAfter: step.casAfter, mutation: step.mutation });
+      } catch (err) {
+        return await fail(err, { kind: "externalConfig", path: step.path, index: i });
+      }
+    }
+    if (plan.columnKeyRename && writer.patchColumnKeyReferences) {
+      try { await writer.patchColumnKeyReferences(plan.columnKeyRename); }
+      catch (error) { return await fail(error, { kind: "references", path: plan.primaryConfig.path }); }
+    }
+    return { ok: true, journal };
+  } finally { release?.(); }
 }
 
 /**
@@ -306,6 +320,10 @@ export function reverseRenamePlan(forward: RenamePlan): RenamePlan {
     primaryConfig: reverseConfigStep(forward.primaryConfig),
     externalConfigs: forward.externalConfigs.map(reverseConfigStep),
     undoLabel: forward.undoLabel,
+    ...(forward.columnKeyRename ? { columnKeyRename: {
+      databaseId: forward.columnKeyRename.databaseId,
+      oldKey: forward.columnKeyRename.newKey, newKey: forward.columnKeyRename.oldKey,
+    } } : {}),
   };
 }
 

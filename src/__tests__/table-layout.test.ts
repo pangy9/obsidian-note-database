@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getFrozenColumnOffsets, normalizeFrozenColumnCount } from "../views/TableLayout";
+import { getFrozenColumnOffsets, getFrozenTableLayout, normalizeFrozenColumnCount } from "../views/TableLayout";
 
 describe("frozen table layout", () => {
   it("clamps the persisted freeze count to five visible columns", () => {
@@ -41,6 +41,20 @@ describe("frozen table layout", () => {
     expect(css).toContain(".note-database-container table.db-table thead th.db-frozen-cell");
     // 纯类选择器（0,3,0，会被上述两条规则平手或压过）不得再单独承担 sticky。
     expect(css).not.toMatch(/\.db-table \.db-frozen-cell \{\s*\n\s*position: sticky/);
+  });
+
+  it("paints the frozen body cell underneath its translucent divider", () => {
+    const css = readFileSync(join(__dirname, "..", "..", "styles.css"), "utf8");
+    const frozen = css.match(/tbody td\.db-frozen-cell,\s*[^{}]*thead th\.db-frozen-cell\s*\{([^}]*)\}/)?.[1];
+    expect(frozen).toContain("background-clip: border-box");
+    expect(frozen).not.toContain("background-clip: padding-box");
+  });
+
+  it("pins the icon before the first data column only when data columns are frozen", () => {
+    expect(getFrozenTableLayout(48, 28, [120, 100], 2)).toEqual({frozenCount: 2, iconOffset: 48, dataOffsets: [76, 196]});
+    expect(getFrozenTableLayout(48, 28, [120, 100], 0)).toEqual({frozenCount: 0, iconOffset: undefined, dataOffsets: [48, 48]});
+    expect(getFrozenTableLayout(0, 28, [120, 100], 1)).toEqual({frozenCount: 1, iconOffset: 0, dataOffsets: [28, 148]});
+    expect(getFrozenTableLayout(48, 0, [120, 100], 1)).toEqual({frozenCount: 1, iconOffset: undefined, dataOffsets: [48, 168]});
   });
 
   /**

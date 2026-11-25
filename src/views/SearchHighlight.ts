@@ -45,7 +45,7 @@ export function highlightSearchMatches(root: HTMLElement, query: string): void {
   const doc = root.ownerDocument || window.activeDocument;
 
   // Collect result containers — only these hold searchable cell/card text.
-  const containers = root.querySelectorAll<HTMLElement>(SEARCHABLE_CONTAINERS);
+  const containers = root.matches(SEARCHABLE_CONTAINERS) ? [root] : root.querySelectorAll<HTMLElement>(SEARCHABLE_CONTAINERS);
   if (containers.length === 0) return;
 
   const targets: Text[] = [];

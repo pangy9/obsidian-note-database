@@ -159,7 +159,9 @@ export async function prepareButtonWorkflow(
       for (const draft of targets) {
         ctx.target = draft; ctx.schemas!.target = targetDb.schema.columns;
         const filters = step.target === "database" ? (step.filters || []).map(f => ({ field: f.field, op: f.op, value: ["empty", "notempty"].includes(f.op) ? "" : stringifyValue(resolveButtonValue(f.value, ctx)) })) : [];
-        if (!query.applyFilters([{ app, file: draft.file || fakeFile(draft.path), frontmatter: draft.frontmatter, computed: {} }], filters, "and", targetDb.schema.columns).length) continue;
+        // A saved button is a write plan, not a view filter. Preserve its
+        // original target set when query comparisons change in a new release.
+        if (!query.applyFilters([{ app, file: draft.file || fakeFile(draft.path), frontmatter: draft.frontmatter, computed: {} }], filters, "and", targetDb.schema.columns, true).length) continue;
         applyButtonActions(step.actions, targetDb.schema.columns, ctx);
         touched(draft, targetDb.schema.columns.filter(column => step.actions.some(action => action.field === column.key)));
       }

@@ -1,5 +1,6 @@
+import { copyPersistedFilters, copyPersistedViewStates } from "./FilterRules";
 import { TFile, Vault, MetadataCache, App, Notice, normalizePath, parseYaml, stringifyYaml, EventRef, getAllTags } from "obsidian";
-import { ChartReferenceLine, ColumnDef, ConditionalFormatRule, DatabaseConfig, DateGroupMode, FilterRule, NewRecordTemplateConfig, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
+import { ChartReferenceLine, ColumnDef, ConditionalFormatRule, DatabaseConfig, DateGroupMode, NewRecordTemplateConfig, RecordSchema, SortRule, SourceRule, ViewConfig } from "./types";
 import { generateId } from "./types";
 import { evaluateBaseFilterExpression } from "./BaseExpression";
 import { evaluateComputedFields } from "./ComputedEvaluator";
@@ -47,6 +48,7 @@ export interface DataChangeBatch {
   changes: DataChange[];
 }
 export type DataChangeCallback = (batch: DataChangeBatch) => void;
+export type RecordIdentityChange = { kind: "deleted"; path: string } | { kind: "renamed"; path: string; oldPath: string };
 export type FrontmatterMutator = (frontmatter: Record<string, unknown>) => void;
 export interface DataWriteContext {
   sourceInstanceId?: string;
@@ -87,6 +89,7 @@ export class DataSource {
   private vault: Vault;
   private metadataCache: MetadataCache;
   private listeners: DataChangeCallback[] = [];
+  private recordIdentityListeners = new Set<(change: RecordIdentityChange) => void>();
   private viewConfigListeners: ViewConfigMutationCallback[] = [];
   private eventRefs: { offref: () => void }[] = [];
   private notifyTimer: number | null = null;
@@ -171,6 +174,19 @@ export class DataSource {
     };
   }
 
+  /** Notify path-keyed state owners synchronously; normal view redraw stays debounced. */
+  onRecordIdentityChange(listener: (change: RecordIdentityChange) => void): () => void {
+    this.recordIdentityListeners.add(listener);
+    return () => { this.recordIdentityListeners.delete(listener); };
+  }
+
+  private notifyRecordIdentityChange(change: RecordIdentityChange): void {
+    for (const listener of this.recordIdentityListeners) {
+      try { listener(change); }
+      catch (error) { console.error("Note Database: record identity listener threw", error); }
+    }
+  }
+
   onViewConfigChanged(cb: ViewConfigMutationCallback): () => void {
     this.viewConfigListeners.push(cb);
     return () => {
@@ -239,6 +255,7 @@ export class DataSource {
       this.reconcileScheduler.invalidate(file.path);
       // 同路径重建会产生新 TFile 实例：推进代数使在途读取（基于旧实例捕获）失去发布权限。
       this.bumpPathGeneration(file.path);
+      this.notifyRecordIdentityChange({ kind: "deleted", path: file.path });
       this.scheduleNotify("deleted", file.path, undefined, "vault");
     }));
     track(this.vault.on("rename", (file, oldPath) => {
@@ -262,6 +279,7 @@ export class DataSource {
         this.viewDefOverrides.delete(oldPath);
         this.viewDefOverrides.set(file.path, vdOverride);
       }
+      this.notifyRecordIdentityChange({ kind: "renamed", path: file.path, oldPath });
       this.scheduleNotify("renamed", file.path, oldPath, "vault");
     }));
   }
@@ -281,6 +299,7 @@ export class DataSource {
     }
     this.eventRefs = [];
     this.listeners = [];
+    this.recordIdentityListeners.clear();
     this.viewConfigListeners = [];
     this.pendingChanges.clear();
     this.ownedPathUntil.clear();
@@ -827,7 +846,7 @@ export class DataSource {
           sourceRules: Array.isArray(source["sourceRules"]) ? source["sourceRules"] as SourceRule[] : undefined,
           sourceLogic: source["sourceLogic"] === "or" ? "or" : "and",
           sourceRuleTree: parseSourceRuleTree(source["sourceRuleTree"]),
-          showRecordIcon: source["showRecordIcon"] === true,
+          showRecordIcon: typeof source["showRecordIcon"] === "boolean" ? source["showRecordIcon"] : undefined,
           recordIconFieldOverrideEnabled: source["recordIconFieldOverrideEnabled"] === true,
           recordIconField: safeString(source["recordIconField"]) || undefined,
           newRecordFolder: safeString(source["newRecordFolder"]) || undefined,
@@ -854,8 +873,9 @@ export class DataSource {
           boardImageField: safeString(source["boardImageField"]) || undefined,
           boardImageAspectRatio: typeof source["boardImageAspectRatio"] === "number" ? source["boardImageAspectRatio"] : undefined,
           boardImageFit: source["boardImageFit"] === "contain" ? "contain" : source["boardImageFit"] === "cover" ? "cover" : undefined,
-          showEmptyFields: source["showEmptyFields"] === true || (Array.isArray(source["alwaysShowEmptyFields"]) && (source["alwaysShowEmptyFields"] as unknown[]).length > 0),
-          listCompactFields: source["listCompactFields"] === true,
+          showEmptyFields: Array.isArray(source["alwaysShowEmptyFields"]) && source["alwaysShowEmptyFields"].length > 0
+            ? true : typeof source["showEmptyFields"] === "boolean" ? source["showEmptyFields"] : undefined,
+          listCompactFields: typeof source["listCompactFields"] === "boolean" ? source["listCompactFields"] : undefined,
           columnOrder: Array.isArray(source["columnOrder"]) ? source["columnOrder"] as string[] : undefined,
           columnWidths: this.parseNumberMap(source["columnWidths"]),
           frozenColumnCount: this.parsePositiveNumber(source["frozenColumnCount"]),
@@ -877,7 +897,7 @@ export class DataSource {
             ? source["manualOrder"]
             : undefined,
           filterLogic: source["filterLogic"] === "or" ? "or" : "and",
-          filters: Array.isArray(source["filters"]) ? source["filters"] as FilterRule[] : undefined,
+          filters: copyPersistedFilters(source["filters"]),
           resultLimit: this.parseResultLimit(source["resultLimit"]),
           summaryRules: this.parseSummaryRules(source["summaryRules"]),
           conditionalFormats: this.parseConditionalFormats(source["conditionalFormats"]),
@@ -899,9 +919,9 @@ export class DataSource {
           chartHeight: this.parseChartHeight(source["chartHeight"]),
           chartGridLines: this.parseChartGridLines(source["chartGridLines"]),
           chartAxisNames: this.parseChartAxisNames(source["chartAxisNames"]),
-          chartShowTitle: source["chartShowTitle"] === false ? false : undefined,
+          chartShowTitle: typeof source["chartShowTitle"] === "boolean" ? source["chartShowTitle"] : undefined,
           chartTitle: safeString(source["chartTitle"]) || undefined,
-          chartShowDataLabels: source["chartShowDataLabels"] === true,
+          chartShowDataLabels: typeof source["chartShowDataLabels"] === "boolean" ? source["chartShowDataLabels"] : undefined,
           chartDataLabelMode: this.parseChartDataLabelMode(source["chartDataLabelMode"]),
           chartDataLabelColor: this.parseChartDataLabelColor(source["chartDataLabelColor"]),
           chartSmoothLine: source["chartSmoothLine"] === true,
@@ -931,9 +951,7 @@ export class DataSource {
           sortColumn: safeString(source["sortColumn"]) || undefined,
           sortDirection: source["sortDirection"] === "desc" ? "desc" : "asc" as const,
           sortRules: Array.isArray(source["sortRules"]) ? source["sortRules"] as SortRule[] : undefined,
-          viewStates: source["viewStates"] && typeof source["viewStates"] === "object"
-            ? source["viewStates"]
-            : undefined,
+          viewStates: copyPersistedViewStates(source["viewStates"], "legacy"),
         }];
       }
       const legacyConditionalFormats = this.parseConditionalFormats(source["conditionalFormats"]);
@@ -953,7 +971,7 @@ export class DataSource {
         name: safeString(source["name"] || fm["name"]),
         icon: safeString(source["icon"]) || undefined,
         coverImage: safeString(source["coverImage"]) || undefined,
-        quickFormEnabled: source["quickFormEnabled"] === true,
+        quickFormEnabled: typeof source["quickFormEnabled"] === "boolean" ? source["quickFormEnabled"] : undefined,
         coverImagePositionY: this.parseCoverPosition(source["coverImagePositionY"]),
         description: safeString(source["description"]) || undefined,
         sourceFolder: safeString(source["sourceFolder"]),
@@ -1050,6 +1068,7 @@ export class DataSource {
           op: op as ConditionalFormatRule["condition"]["op"],
           value: safeString(conditionSource["value"]) || undefined,
         },
+        comparison: source["comparison"] === "typed" ? "typed" : undefined,
         valueSource: source["valueSource"] === "today" ? "today" : "literal",
         target,
         color: color as ConditionalFormatRule["color"],
@@ -1084,7 +1103,7 @@ export class DataSource {
       sourceRules: Array.isArray(v["sourceRules"]) ? v["sourceRules"] as SourceRule[] : undefined,
       sourceLogic: v["sourceLogic"] === "or" ? "or" : "and",
       sourceRuleTree: parsedSourceRuleTree,
-      showRecordIcon: v["showRecordIcon"] === true,
+      showRecordIcon: typeof v["showRecordIcon"] === "boolean" ? v["showRecordIcon"] : undefined,
       recordIconFieldOverrideEnabled: v["recordIconFieldOverrideEnabled"] === true,
       recordIconField: safeString(v["recordIconField"]) || undefined,
       newRecordFolder: safeString(v["newRecordFolder"]) || undefined,
@@ -1114,8 +1133,9 @@ export class DataSource {
       boardImageField: safeString(v["boardImageField"]) || undefined,
       boardImageAspectRatio: typeof v["boardImageAspectRatio"] === "number" ? v["boardImageAspectRatio"] : undefined,
       boardImageFit: v["boardImageFit"] === "contain" ? "contain" : v["boardImageFit"] === "cover" ? "cover" : undefined,
-      showEmptyFields: v["showEmptyFields"] === true || (Array.isArray(v["alwaysShowEmptyFields"]) && (v["alwaysShowEmptyFields"] as unknown[]).length > 0),
-      listCompactFields: v["listCompactFields"] === true,
+      showEmptyFields: Array.isArray(v["alwaysShowEmptyFields"]) && v["alwaysShowEmptyFields"].length > 0
+          ? true : typeof v["showEmptyFields"] === "boolean" ? v["showEmptyFields"] : undefined,
+      listCompactFields: typeof v["listCompactFields"] === "boolean" ? v["listCompactFields"] : undefined,
       columnOrder: Array.isArray(v["columnOrder"]) ? v["columnOrder"] as string[] : undefined,
       columnWidths: this.parseNumberMap(v["columnWidths"]),
       frozenColumnCount: this.parsePositiveNumber(v["frozenColumnCount"]),
@@ -1146,7 +1166,7 @@ export class DataSource {
         ? v["manualOrder"]
         : undefined,
       filterLogic: v["filterLogic"] === "or" ? "or" : "and",
-      filters: Array.isArray(v["filters"]) ? v["filters"] as FilterRule[] : undefined,
+      filters: copyPersistedFilters(v["filters"]),
       resultLimit: this.parseResultLimit(v["resultLimit"]),
       summaryRules: this.parseSummaryRules(v["summaryRules"]),
       conditionalFormats: this.parseConditionalFormats(v["conditionalFormats"]),
@@ -1168,9 +1188,9 @@ export class DataSource {
       chartHeight: this.parseChartHeight(v["chartHeight"]),
       chartGridLines: this.parseChartGridLines(v["chartGridLines"]),
       chartAxisNames: this.parseChartAxisNames(v["chartAxisNames"]),
-      chartShowTitle: v["chartShowTitle"] === false ? false : undefined,
+      chartShowTitle: typeof v["chartShowTitle"] === "boolean" ? v["chartShowTitle"] : undefined,
       chartTitle: safeString(v["chartTitle"]) || undefined,
-      chartShowDataLabels: v["chartShowDataLabels"] === true,
+      chartShowDataLabels: typeof v["chartShowDataLabels"] === "boolean" ? v["chartShowDataLabels"] : undefined,
       chartDataLabelMode: this.parseChartDataLabelMode(v["chartDataLabelMode"]),
       chartDataLabelColor: this.parseChartDataLabelColor(v["chartDataLabelColor"]),
       chartSmoothLine: v["chartSmoothLine"] === true,
@@ -1213,6 +1233,7 @@ export class DataSource {
       timelineTitleField: safeString(v["timelineTitleField"]) || undefined,
       timelineColorField: safeString(v["timelineColorField"]) || undefined,
       timelineScale: this.parseTimelineScale(v["timelineScale"]),
+      timelineContinuous: typeof v["timelineContinuous"] === "boolean" ? v["timelineContinuous"] : undefined,
       timelineAnchor: safeString(v["timelineAnchor"]) || undefined,
       timelineAnchorTimeMinutes: this.parseCalendarMinute(v["timelineAnchorTimeMinutes"]),
       timelineColumnSizeMode: v["timelineColumnSizeMode"] === "custom" ? "custom" : undefined,
@@ -1220,9 +1241,7 @@ export class DataSource {
       sortColumn: safeString(v["sortColumn"]) || undefined,
       sortDirection: v["sortDirection"] === "desc" ? "desc" : "asc" as const,
       sortRules: Array.isArray(v["sortRules"]) ? v["sortRules"] as SortRule[] : undefined,
-      viewStates: v["viewStates"] && typeof v["viewStates"] === "object"
-        ? v["viewStates"]
-        : undefined,
+      viewStates: copyPersistedViewStates(v["viewStates"], "legacy"),
     };
   }
 
@@ -1396,7 +1415,7 @@ export class DataSource {
       sourceRuleTree: dbConfig.sourceRuleTree,
       newRecordFolder: dbConfig.newRecordFolder || "",
       recordIconField: dbConfig.recordIconField || "",
-      quickFormEnabled: dbConfig.quickFormEnabled === true,
+      quickFormEnabled: dbConfig.quickFormEnabled,
       newRecordTemplate: dbConfig.newRecordTemplate,
       computedSyncMode: normalizeComputedSyncMode(dbConfig.computedSyncMode),
       summaryFormulas: dbConfig.summaryFormulas || {},
@@ -1423,7 +1442,7 @@ export class DataSource {
       sourceRules: view.sourceRules || [],
       sourceLogic: view.sourceLogic || "and",
       sourceRuleTree: view.sourceRuleTree,
-      showRecordIcon: view.showRecordIcon === true,
+      showRecordIcon: view.showRecordIcon,
       recordIconFieldOverrideEnabled: view.recordIconFieldOverrideEnabled === true,
       recordIconField: view.recordIconField || "",
       newRecordFolder: view.newRecordFolder || "",
@@ -1447,26 +1466,28 @@ export class DataSource {
       boardGroupField: view.boardGroupField || "",
       boardSubgroupEnabled: view.boardSubgroupEnabled ?? Boolean(view.boardSubgroupField),
       boardSubgroupField: view.boardSubgroupField || "",
-      boardColumnWidth: view.boardColumnWidth || 280,
-      defaultColumnWidth: view.defaultColumnWidth || 150,
+      boardColumnWidth: view.boardColumnWidth,
+      defaultColumnWidth: view.defaultColumnWidth,
       titleField: view.titleField || "",
       boardCardOrders: view.boardCardOrders || {},
       manualOrder: view.manualOrder && view.manualOrder.ranks && Object.keys(view.manualOrder.ranks).length > 0
         ? view.manualOrder
         : undefined,
       galleryImageField: view.galleryImageField || "",
-      galleryImageAspectRatio: view.galleryImageAspectRatio || 0.75,
-      galleryCardSize: view.galleryCardSize || 250,
-      galleryImageFit: view.galleryImageFit || "cover",
+      galleryImageAspectRatio: view.galleryImageAspectRatio,
+      galleryCardSize: view.galleryCardSize,
+      galleryImageFit: view.galleryImageFit,
       boardImageField: view.boardImageField || "",
-      boardImageAspectRatio: view.boardImageAspectRatio || 0.75,
-      boardImageFit: view.boardImageFit || "cover",
-      showEmptyFields: view.showEmptyFields === true,
-      listCompactFields: view.listCompactFields === true,
+      boardImageAspectRatio: view.boardImageAspectRatio,
+      boardImageFit: view.boardImageFit,
+      showEmptyFields: view.showEmptyFields,
+      listCompactFields: view.listCompactFields,
       statusPresets: view.statusPresets || [],
       defaultStatusPresetId: view.defaultStatusPresetId || "",
       filterLogic: view.filterLogic || "and",
-      filters: view.filters || [],
+      // A missing comparison marker is a pre-1.3.4 rule. UI-authored rules
+      // opt into the new semantics explicitly; legacy migrations need no special path.
+      filters: copyPersistedFilters(view.filters) || [],
       resultLimit: view.resultLimit,
       summaryRules: view.summaryRules || [],
       conditionalFormats: view.conditionalFormats || [],
@@ -1488,9 +1509,9 @@ export class DataSource {
       chartHeight: view.chartHeight || "",
       chartGridLines: view.chartGridLines || "",
       chartAxisNames: view.chartAxisNames || "",
-      chartShowTitle: view.chartShowTitle === false ? false : true,
+      chartShowTitle: view.chartShowTitle,
       chartTitle: view.chartTitle || "",
-      chartShowDataLabels: view.chartShowDataLabels === true,
+      chartShowDataLabels: view.chartShowDataLabels,
       chartDataLabelMode: view.chartDataLabelMode || "",
       chartDataLabelColor: view.chartDataLabelColor || "",
       chartSmoothLine: view.chartSmoothLine === true,
@@ -1533,6 +1554,7 @@ export class DataSource {
       timelineTitleField: view.timelineTitleField || "",
       timelineColorField: view.timelineColorField || "",
       timelineScale: view.timelineScale || "",
+      timelineContinuous: view.timelineContinuous,
       timelineAnchor: view.timelineAnchor || "",
       timelineAnchorTimeMinutes: view.timelineAnchorTimeMinutes,
       timelineColumnSizeMode: view.timelineColumnSizeMode || "",
@@ -1543,7 +1565,7 @@ export class DataSource {
       formCoverPositionY: typeof view.formCoverPositionY === "number" ? view.formCoverPositionY : undefined,
       formCoverHeight: typeof view.formCoverHeight === "number" ? view.formCoverHeight : undefined,
       formRequiredFields: view.formRequiredFields || [],
-      viewStates: view.viewStates || {},
+      viewStates: copyPersistedViewStates(view.viewStates, "legacy") || {},
     };
   }
 
@@ -1651,6 +1673,7 @@ export class DataSource {
       "timelineTitleField",
       "timelineColorField",
       "timelineScale",
+      "timelineContinuous",
       "timelineAnchor",
       "timelineAnchorTimeMinutes",
       "timelineColumnSizeMode",

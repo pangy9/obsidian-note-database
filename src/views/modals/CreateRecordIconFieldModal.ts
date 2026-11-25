@@ -14,6 +14,7 @@ export class CreateRecordIconFieldModal extends Modal {
     const conflict = this.columns.some((column) => column.key === "icon");
     const suggested = conflict ? "record_icon" : "icon";
     this.contentEl.empty();
+    this.contentEl.addClass("note-database-modal");
     this.contentEl.createEl("h3", { text: t("recordIcon.createField") });
     makeModalDraggable(this);
     const keyInput = this.createInput(t("modal.propertyKey"), suggested);

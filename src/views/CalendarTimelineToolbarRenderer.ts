@@ -1,3 +1,6 @@
+import { defaultSetting, markDefaultSetting } from "./DefaultSettingControl";
+import { createSettingsFoldSection, readSettingsFoldOpen } from "./MoreDisplayOptions";
+import { selectedSettingFolds, type SettingsFoldingPreferences } from "../data/SettingsFolding";
 import { setIcon } from "obsidian";
 import { getTimelineColumnWidthSpec, normalizeTimelineDayScale } from "../data/CalendarTimelineModel";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
@@ -12,6 +15,7 @@ import { getOrderedRecordIconColumns, getRecordIconFieldLabel, resolveRecordIcon
 import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 
 export interface CalendarTimelineToolbarActions {
+  getSettingsFolding?(): SettingsFoldingPreferences | undefined;
   onChange(label?: string): void;
   database?: DatabaseConfig;
   createRecordIconField?(): void;
@@ -26,6 +30,7 @@ export class CalendarTimelineToolbarRenderer {
   private cleanupPopover?: () => void;
   private popover?: HTMLElement;
   private popoverContent?: HTMLElement;
+  private repositionPopover?: () => void;
 
   togglePopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig | undefined, actions: CalendarTimelineToolbarActions): void {
     if (!config || config.viewType !== "timeline") return;
@@ -47,16 +52,28 @@ export class CalendarTimelineToolbarRenderer {
     this.cleanupPopover = undefined;
   }
 
-  private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
-    this.closePopover();
-    const panel = containerEl.createDiv({ cls: "db-calendar-timeline-options-popover db-chart-options-popover" });
-    this.popover = panel;
+  renderPreview(host: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): HTMLElement {
+    const { panel, content } = this.createPopoverFrame(host);
+    this.renderTimelineOptions(content, config, actions);
+    return panel;
+  }
+
+  private createPopoverFrame(host: HTMLElement) {
+    const panel = host.createDiv({ cls: "db-calendar-timeline-options-popover db-chart-options-popover" });
     const header = panel.createDiv({ cls: "db-panel-header" });
     header.createDiv({ cls: "db-panel-title", text: t("timeline.options") });
     const content = panel.createDiv({ cls: "db-calendar-timeline-options-content" });
+    return { panel, content };
+  }
+
+  private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
+    this.closePopover();
+    const { panel, content } = this.createPopoverFrame(containerEl);
+    this.popover = panel;
     this.popoverContent = content;
+    this.repositionPopover = () => positionToolbarPopover(panel, anchor, { preferredWidth: 420, maxWidth: 480 });
     this.renderTimelineOptions(content, config, actions);
-    positionToolbarPopover(panel, anchor, { preferredWidth: 420, maxWidth: 480 });
+    this.repositionPopover();
 
     const onOutside = (event: MouseEvent) => {
       const target = event.target as Node | null;
@@ -85,11 +102,14 @@ export class CalendarTimelineToolbarRenderer {
       panel.remove();
       this.popover = undefined;
       this.popoverContent = undefined;
+      this.repositionPopover = undefined;
     };
   }
 
   private renderTimelineOptions(panel: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
+    const open = readSettingsFoldOpen(panel, "timeline");
     panel.empty();
+    const fold = createSettingsFoldSection(panel, selectedSettingFolds(actions.getSettingsFolding?.()), "timeline", open, this.repositionPopover);
     const data = this.createSection(panel, t("chart.optionsData"));
     this.renderSelect(data, t("viewConfig.eventStartDateField"), this.getDateFieldOptions(config), config.timelineStartDateField || "", (value) => {
       config.timelineStartDateField = value || undefined;
@@ -114,7 +134,7 @@ export class CalendarTimelineToolbarRenderer {
       { value: "week", text: t("viewConfig.timelineScale.week") },
       { value: "month", text: t("viewConfig.timelineScale.month") },
       { value: "quarter", text: t("viewConfig.timelineScale.quarter") },
-    ], config.timelineScale || "week", (value) => {
+    ], config.timelineScale || "week", defaultSetting("timelineScale", (value) => {
       const nextScale = this.normalizeTimelineScale(value);
       if (actions.updateTimelineScale) {
         void Promise.resolve(actions.updateTimelineScale(nextScale, t("undo.timelineScaleConfig"))).then((changed) => {
@@ -125,42 +145,52 @@ export class CalendarTimelineToolbarRenderer {
       config.timelineScale = nextScale;
       actions.onChange(t("undo.timelineScaleConfig"));
       this.refreshTimelineScaleDependentOptions(config, actions);
-    }, "ruler");
+    }), "ruler");
 
-    this.renderSelect(data, t("viewConfig.yearDisplayMode"), [
+    this.renderSelect(fold.target("yearDisplay", data), t("viewConfig.yearDisplayMode"), [
       { value: "always", text: t("viewConfig.yearDisplayMode.always") },
       { value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
       { value: "never", text: t("viewConfig.yearDisplayMode.never") },
-    ], config.yearDisplayMode || "always", (value) => {
+    ], config.yearDisplayMode || "always", defaultSetting("yearDisplayMode", (value) => {
       config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
       actions.onChange(t("undo.yearDisplayModeConfig"));
-    }, "calendar");
+    }), "calendar");
 
-    this.renderSwitch(data, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
-      config.showEmptyFields = value || undefined;
+    this.renderSwitch(fold.target("showEmptyFields", data), t("viewConfig.showEmptyFields"), config.showEmptyFields === true, defaultSetting("showEmptyFields", (value) => {
+      config.showEmptyFields = value;
       actions.onChange(t("undo.showEmptyFieldsConfig"));
-    }, "rows-3");
+    }), "rows-3");
 
     const layout = this.createSection(panel, t("timeline.layoutSection"));
-    this.renderLayoutContent(layout, config, actions);
+    this.renderSwitch(fold.target("timelineContinuous", layout), t("timeline.continuous"), config.timelineContinuous === true, defaultSetting("timelineContinuous", (value) => {
+      config.timelineContinuous = value;
+      actions.onChange(t("timeline.continuous"));
+    }), "move-horizontal");
+    const layoutTarget = fold.target("timelineLayout", layout);
+    const layoutSection = layoutTarget === layout ? layout : this.createSection(layoutTarget, t("timeline.layoutSection"));
+    // Toggling width rebuilds only these dependent rows, not the continuous switch.
+    this.renderLayoutContent(layoutSection.createDiv(), config, actions);
+    if (layout.childElementCount === 1) layout.remove();
 
     const style = this.createSection(panel, t("chart.optionsStyle"));
-    this.renderSelect(style, t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.timelineColorField || "", (value) => {
+    this.renderSelect(fold.target("timelineEventColor", style), t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.timelineColorField || "", (value) => {
       config.timelineColorField = value || undefined;
       actions.onChange(t("undo.timelineColorFieldConfig"));
     }, "palette");
-    this.renderRecordIconSettings(style, config, actions);
+    if (actions.database) this.renderRecordIconSettings(fold.target("recordIcon", style), config, actions);
+    if (style.childElementCount === 1) style.remove();
+    fold.finish();
   }
 
   private renderRecordIconSettings(parent: HTMLElement, config: ViewConfig, actions: CalendarTimelineToolbarActions): void {
     const database = actions.database;
     if (!database) return;
-    this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
-      config.showRecordIcon = value || undefined;
+    this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, defaultSetting("showRecordIcon", (value) => {
+      config.showRecordIcon = value;
       if (value && !resolveRecordIconField(database, config) && !database.recordIconField) config.recordIconFieldOverrideEnabled = true;
       actions.onChange(t("recordIcon.show"));
       if (this.popoverContent) this.renderTimelineOptions(this.popoverContent, config, actions);
-    }, "smile-plus");
+    }), "smile-plus");
     if (config.showRecordIcon !== true) return;
     this.renderSwitch(parent, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
       config.recordIconFieldOverrideEnabled = value || undefined;
@@ -271,7 +301,7 @@ export class CalendarTimelineToolbarRenderer {
     searchable = options.length > 8,
     disabled = false,
   ): void {
-    createDropdownField({
+    const { button } = createDropdownField({
       parent,
       label,
       options,
@@ -286,10 +316,12 @@ export class CalendarTimelineToolbarRenderer {
         if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
       },
     });
+    markDefaultSetting(button, onChange);
   }
 
 	private renderSwitch(parent: HTMLElement, label: string, value: boolean, onChange: (value: boolean) => void, icon: string): void {
 		const row = parent.createEl("label", { cls: "db-chart-options-row db-chart-options-switch-row" });
+		markDefaultSetting(row, onChange);
 		setIcon(row.createSpan({ cls: "db-chart-options-row-icon" }), icon);
 		row.createDiv({ cls: "db-chart-options-row-text" }).createSpan({ cls: "db-chart-options-label", text: label });
 		const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });

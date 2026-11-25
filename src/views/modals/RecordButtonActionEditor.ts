@@ -57,7 +57,7 @@ export function buttonActionSummary(action: RecordButtonAction, columns: ButtonV
     const options = buttonTokenOptions(columns, variables);
     value = parts.map(part => part.kind === "text" ? part.text : options.find(option => option.value === part.key)?.text || (dynamic.source === "date" ? t("button.workflow.relativeDate", { date: t(`button.workflow.${String(dynamic.value)}`), days: String(dynamic.offsetDays || 0) }) : part.key)).join("");
   } else value = typeof action.value === "boolean" ? t(action.value ? "button.checked" : "button.unchecked") : Array.isArray(action.value) ? action.value.join(", ") : String(action.value ?? "");
-  return value ? `${operation} · ${value}` : operation;
+  return value ? t("button.workflow.operationSummary", { operation, value }) : operation;
 }
 
 export function renderButtonActions(parent: HTMLElement, actions: RecordButtonAction[], columns: ColumnDef[], rerender: () => void, valueColumns: ButtonValueFields, variables: string[], editing?: ButtonCardEditState): void {
@@ -72,7 +72,7 @@ export function renderButtonActions(parent: HTMLElement, actions: RecordButtonAc
       renderButtonCardSummary(summary, t("button.editProperty"), [{ text: col?.label || action.field, kind: "property" }]);
       const detail = buttonActionSummary(action, valueColumns, variables);
       summary.createSpan({ cls: "db-button-property-summary-detail", text: detail });
-      summary.title += ` · ${detail}`;
+      summary.title += `\n${detail}`;
     };
     refreshSummary();
     const options = candidates.map(c => toPropertyDropdownOption(c));

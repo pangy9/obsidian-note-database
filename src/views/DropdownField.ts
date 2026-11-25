@@ -21,6 +21,8 @@ export interface DropdownOption {
 
 export interface DropdownFieldOptions {
   parent: HTMLElement;
+  /** Optional sticky/footer boundary; menus may flip above the anchor to avoid it. */
+  bottomBoundary?: HTMLElement;
   label: string;
   options: DropdownOption[];
   value: string;
@@ -36,6 +38,8 @@ export interface DropdownFieldOptions {
   searchPlaceholder?: string;
   closeOnSelect?: boolean;
   followCaret?: boolean;
+  /** Move focus into a menu opened from a button (not a caret suggestion list). */
+  focusOptions?: boolean;
   caretLineAnchor?: HTMLElement;
   renderIcon?(parent: HTMLElement, icon: string): void;
 }
@@ -48,6 +52,7 @@ export interface DropdownFieldHandle {
 
 export interface DropdownMenuOptions {
   anchor: HTMLElement;
+  bottomBoundary?: HTMLElement;
   label: string;
   options: DropdownOption[];
   value: string;
@@ -57,6 +62,8 @@ export interface DropdownMenuOptions {
   searchPlaceholder?: string;
   closeOnSelect?: boolean;
   followCaret?: boolean;
+  /** Move focus into a menu opened from a button (not a caret suggestion list). */
+  focusOptions?: boolean;
   caretLineAnchor?: HTMLElement;
   renderIcon?(parent: HTMLElement, icon: string): void;
   onClose?: () => void;
@@ -134,6 +141,7 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
   };
   cleanup = openDropdownPopover(options.anchor, {
     parent: options.anchor,
+    bottomBoundary: options.bottomBoundary,
     label: options.label,
     options: options.options,
     value: options.value,
@@ -143,6 +151,7 @@ export function openDropdownMenu(options: DropdownMenuOptions): () => void {
     searchPlaceholder: options.searchPlaceholder,
     closeOnSelect: options.closeOnSelect,
     followCaret: options.followCaret,
+    focusOptions: options.focusOptions,
     caretLineAnchor: options.caretLineAnchor,
     renderIcon: options.renderIcon ? (parent, icon) => options.renderIcon?.(parent, icon) : undefined,
   }, valueEl, close);
@@ -173,6 +182,7 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
   // 拖选选项文字可复制；拖选后的 click 不触发选择项。
   suppressClickWhileTextSelected(panel);
   panel.setAttr("role", "listbox");
+  if (options.focusOptions) panel.setAttr("aria-label", options.label);
   let searchInput: HTMLInputElement | undefined;
   if (searchable) {
     const searchWrap = panel.createDiv({ cls: "db-dropdown-search" });
@@ -237,6 +247,7 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
   }
   const place = () => positionToolbarPopover(panel, anchor, {
     preferredWidth: 280, maxWidth: 360, minWidth: 180, maxHeight: options.followCaret ? 240 : 360, gap: 6,
+    bottomBoundary: options.bottomBoundary,
     ...(options.followCaret ? { align: "left" as const, getAnchorRect: () => {
       const caret = getTextInputCaretRect(anchor as HTMLInputElement | HTMLTextAreaElement);
       return options.caretLineAnchor ? new DOMRect(options.caretLineAnchor.getBoundingClientRect().left, caret.y, 1, caret.height) : caret;
@@ -275,17 +286,39 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     if (target && (panel.contains(target) || anchor.contains(target))) return;
     close();
   };
+  const focusOptions = options.focusOptions === true && !options.followCaret;
+  const enabledRows = () => sectionRows.filter(({ row }) => !row.disabled && !row.hasClass("is-hidden")).map(({ row }) => row);
   const onKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      if (anchor.isConnected) anchor.focus({ preventScroll: true });
+      return;
+    }
+    if (!focusOptions || !["ArrowDown", "ArrowUp", "Home", "End", "Tab"].includes(event.key)) return;
+    if (event.target === searchInput && (event.key === "Home" || event.key === "End")) return;
+    const rows: HTMLElement[] = enabledRows();
+    if (searchInput && event.key === "Tab") rows.unshift(searchInput);
+    if (!rows.length) return;
+    const index = rows.indexOf(anchor.ownerDocument.activeElement as HTMLElement);
+    const step = event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey) ? -1 : 1;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 :
+      index < 0 ? (step > 0 ? 0 : rows.length - 1) : (index + step + rows.length) % rows.length;
     event.preventDefault();
     event.stopPropagation();
-    close();
-    anchor.focus();
+    rows[next].focus();
   };
   const outsideTimer = window.setTimeout(() => window.activeDocument.addEventListener("mousedown", onOutside, true), 0);
   panel.addEventListener("keydown", onKeydown);
   const removeAutoClose = installPopoverAutoClose({ panel, anchorEl: anchor, close });
+  if (focusOptions && !searchInput) {
+    const rows = enabledRows();
+    (rows.find(row => row.getAttribute("aria-selected") === "true") ?? rows[0])?.focus({ preventScroll: true });
+  }
   return () => {
+    const restoreFocus = focusOptions && panel.contains(anchor.ownerDocument.activeElement);
     window.clearTimeout(outsideTimer);
     window.activeDocument.removeEventListener("mousedown", onOutside, true);
     if (options.followCaret) {
@@ -299,6 +332,7 @@ function openDropdownPopover(anchor: HTMLElement, options: DropdownFieldOptions,
     panel.removeEventListener("keydown", onKeydown);
     removeAutoClose();
     panel.remove();
+    if (restoreFocus && anchor.isConnected) anchor.focus({ preventScroll: true });
   };
 }
 

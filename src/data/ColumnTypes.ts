@@ -337,7 +337,7 @@ export function toBooleanValue(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
   const normalized = stringifyValue(value).trim().toLowerCase();
-  return ["true", "yes", "y", "1", "on", "checked", "是", "已勾选"].includes(normalized);
+  return ["true", "yes", "y", "1", "on", "checked", "✓", "是", "已勾选"].includes(normalized);
 }
 
 export function createOptionsFromValues(values: unknown[]): StatusOptionDef[] {

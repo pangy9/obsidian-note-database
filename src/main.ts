@@ -1,11 +1,24 @@
-import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, TFile, normalizePath, parseYaml, stringifyYaml } from "obsidian";
+import { copyPersistedFilters, copyPersistedViewStates } from "./data/FilterRules";
+import { RecordReminderService } from "./data/RecordReminderService";
+import { buildRecordReminderTestNotice, type ReminderInboxTarget } from "./data/RecordReminderNotice";
+import { DesktopReminderNotification, type DesktopReminderPermission, type DesktopReminderTest } from "./data/DesktopReminderNotification";
+import { createReminderSettings, normalizeRecordReminderPreferences, normalizeReminderSettings, persistRecordReminderRules, prepareReminderCompletionRename, renameRecordReminderField, type RecordReminderPreferences, type ReminderCompletionRename } from "./data/RecordReminders";
+import type { ColumnKeyRename } from "./data/RenameTransaction";
+import { RecordReminderSettingsModal, type ReminderRuleModalTarget } from "./views/modals/RecordReminderModal";
+import { RecordReminderInbox } from "./views/modals/RecordReminderInbox";
+import { clearDatabaseNoteReturn } from "./views/DatabaseNoteReturn";
+import type { RecordTitleIconDisplay } from "./views/RecordIconRenderer";
+import { App, Component, FuzzySuggestModal, loadMathJax, MarkdownRenderer, MarkdownView, Modal, Plugin, WorkspaceLeaf, Notice, Platform, TFile, normalizePath, parseYaml, setTooltip, stringifyYaml } from "obsidian";
 import { makeModalDraggable } from "./views/modals/ModalDrag";
 import { buildChangelogMarkdown } from "./data/ReleaseNotes";
 import { DataSource } from "./data/DataSource";
+import { resolveRecordIconField } from "./data/RecordIcon";
 import { appendUntrackedDatabasePaths, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { DatabaseView, DATABASE_VIEW_TYPE } from "./views/DatabaseView";
 import { DatabaseFileDashboardView, DATABASE_FILE_VIEW_TYPE } from "./views/DatabaseFileView";
 import { SettingsTab, DEFAULT_SETTINGS, createDefaultSettings } from "./settings";
+import { applyNewDatabaseDefaults, applyNewViewDisplayWidth, normalizeNewViewDefaults, type NewViewDefaults, type NewViewDisplayWidth } from "./data/NewViewDefaults";
+import { normalizeSettingsFolding, persistSettingsFolding, type SettingsFoldingChange } from "./data/SettingsFolding";
 import { ColumnDef, ComputedFieldDef, DatabaseConfig, PluginSettings, SortRule, SourceRuleNode, StatusOptionDef, ViewConfig, generateId } from "./data/types";
 import {
   createOptionsFromValues,
@@ -61,9 +74,16 @@ interface BaseFileViewData {
   [key: string]: unknown;
 }
 
+
 export default class NoteDatabasePlugin extends Plugin {
   settings!: PluginSettings;
+  private settingsWriteTail = Promise.resolve();
   dataSource!: DataSource;
+  private recordReminderService?: RecordReminderService;
+  private desktopReminderNotification?: DesktopReminderNotification;
+  private reminderRibbon?: HTMLElement;
+  private reminderInbox?: RecordReminderInbox;
+  private reminderRules?: RecordReminderSettingsModal;
   private computedSyncService?: DatabaseComputedSyncService;
   private readonly instanceId = generateId();
   private getActiveDbView(): DatabaseView | null {
@@ -80,9 +100,12 @@ export default class NoteDatabasePlugin extends Plugin {
   private pendingDatabaseFileOpenLeaf?: WorkspaceLeaf;
   private pendingVaultPropertyRefresh: number | null = null;
   private readonly commandNameKeys: Record<string, string> = {
+    "show-record-reminders": "reminder.inbox",
+    "configure-record-reminders": "reminder.configureDatabase",
     "open-dashboard": "command.openDashboard",
     "convert-active-base-to-database": "command.convertBase",
     "show-database-files": "command.showDatabaseFiles",
+    "open-quick-form": "command.openQuickForm",
     "import-csv-markdown": "command.importCsvMarkdown",
     "export-current-view-as-csv-markdown-zip": "command.exportCsvMarkdown",
     "undo-last-database-edit": "command.undoDatabaseEdit",
@@ -206,6 +229,10 @@ export default class NoteDatabasePlugin extends Plugin {
       console.error("Failed to load settings, using defaults:", e);
       this.settings = createDefaultSettings();
     }
+    this.settings.settingsFolding = normalizeSettingsFolding(this.settings.settingsFolding);
+    this.settings.newViewDefaults = normalizeNewViewDefaults(this.settings.newViewDefaults);
+    this.settings.recordReminders = normalizeReminderSettings(this.settings.recordReminders);
+    this.settings.recordReminderPreferences = normalizeRecordReminderPreferences(this.settings.recordReminderPreferences);
     setLocale(this.settings.language);
 
     // Build our source-rule property picker cache from Obsidian's public metadata cache.
@@ -218,6 +245,49 @@ export default class NoteDatabasePlugin extends Plugin {
     // Initialize data source
     this.dataSource = new DataSource(this.app);
     this.dataSource.startListening((eventRef) => this.registerEvent(eventRef));
+    if (Platform.isDesktopApp) {
+      this.desktopReminderNotification = new DesktopReminderNotification(
+        () => this.app.workspace.containerEl.ownerDocument.defaultView,
+        () => this.getRecordReminderPreferences().enabled && this.getRecordReminderPreferences().desktopSystemNotifications,
+        () => {
+          let focused = this.app.workspace.containerEl.ownerDocument.hasFocus();
+          if (!focused) this.app.workspace.iterateAllLeaves((leaf) => {
+            if (leaf.view.containerEl.ownerDocument.hasFocus()) focused = true;
+          });
+          return focused;
+        },
+        target => this.showRecordReminders(target),
+        {
+          getInboxWindow: () => this.reminderInbox?.containerEl.isConnected
+            ? this.reminderInbox.containerEl.ownerDocument.defaultView : undefined,
+          isActiveWindow: candidate => window.activeWindow === candidate,
+          onStatusChange: () => this.app.workspace.trigger("record-reminder-desktop-status-change"),
+        },
+      );
+    }
+    this.recordReminderService = new RecordReminderService(this.app, this.dataSource,
+      () => this.settings.recordReminders || (this.settings.recordReminders = createReminderSettings()),
+      () => this.saveData(this.settings), target => this.showRecordReminders(target), () => this.getRecordReminderPreferences().enabled,
+      write => this.enqueueSettingsWrite(write), this.desktopReminderNotification,
+      () => this.getRecordReminderPreferences().desktopNotificationPreview);
+    this.registerInterval(window.setInterval(() => this.recordReminderService?.tick(), 30000));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => this.recordReminderService?.refresh()));
+    this.addCommand({
+      id: "show-record-reminders", name: t("reminder.inbox"), checkCallback: checking => {
+        if (!this.getRecordReminderPreferences().enabled) return false;
+        if (!checking) this.showRecordReminders();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "configure-record-reminders", name: t("reminder.configureDatabase"), checkCallback: checking => {
+        if (!this.getRecordReminderPreferences().enabled) return false;
+        const database = this.getActiveReminderDatabase();
+        if (!database) return false;
+        if (!checking) this.configureRecordReminders(database.id);
+        return true;
+      },
+    });
     this.computedSyncService = new DatabaseComputedSyncService(this.app, this.dataSource);
     this.registerEvent(this.app.metadataCache.on("resolved", () => this.scheduleVaultPropertyCacheRefresh()));
     this.registerEvent(this.app.metadataCache.on("resolved", () => this.migrateDatabaseFileOrderOnce()));
@@ -261,6 +331,7 @@ export default class NoteDatabasePlugin extends Plugin {
     }, { capture: true });
     this.app.workspace.onLayoutReady(() => {
       this.computedSyncService?.requestAll();
+      this.recordReminderService?.tick();
       void this.maybeShowChangelog();
       if (this.isDatabasePluginLeaf(this.currentWorkspaceLeaf)) {
         this.markDatabaseFilesInExplorer();
@@ -319,7 +390,9 @@ export default class NoteDatabasePlugin extends Plugin {
     // Add ribbon icon to open the view as a tab (like Kanban plugin)
     this.addRibbonIcon("database", t("app.name"), async () => {
       await this.openDashboard();
-    });
+    }).addClass("note-database-ribbon-action");
+
+    this.syncRecordReminderRibbon();
 
     // Add command to open view
     this.addCommand({
@@ -383,7 +456,9 @@ export default class NoteDatabasePlugin extends Plugin {
         "codeblock",
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
         this.settings.embeddedDatabaseReadOnly !== false,
-        () => this.settings.showDatabaseIcon !== false
+        () => this.settings.showDatabaseIcon !== false,
+        () => this.settings.settingsFolding,
+        (databaseId, change, reverse) => this.renameReminderCompletionOptions(databaseId, change, reverse)
       ));
     });
     this.registerMarkdownCodeBlockProcessor("database-view", (source, el, ctx) => {
@@ -399,7 +474,9 @@ export default class NoteDatabasePlugin extends Plugin {
         "codeblock",
         this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
         this.settings.embeddedDatabaseReadOnly !== false,
-        () => this.settings.showDatabaseIcon !== false
+        () => this.settings.showDatabaseIcon !== false,
+        () => this.settings.settingsFolding,
+        (databaseId, change, reverse) => this.renameReminderCompletionOptions(databaseId, change, reverse)
       ));
     });
     window.setTimeout(() => this.markDatabaseFileTabs(), 1000);
@@ -735,18 +812,188 @@ export default class NoteDatabasePlugin extends Plugin {
   }
 
   refreshCommandNames(): void {
+    this.syncRecordReminderRibbon();
     type AppCommands = { commands?: Record<string, { name?: string }> };
     const appInternal = this.app as unknown as { commands?: AppCommands };
     const commands = appInternal.commands?.commands;
     if (!commands) return;
     for (const [commandId, key] of Object.entries(this.commandNameKeys)) {
       const command = commands[`${this.manifest.id}:${commandId}`];
-      if (command) command.name = t(key);
+      // Registration adds the prefix automatically; these are the already-registered names.
+      if (command) command.name = `${this.manifest.name}: ${t(key)}`;
     }
   }
 
+  getRecordReminderPreferences(): RecordReminderPreferences {
+    return normalizeRecordReminderPreferences(this.settings.recordReminderPreferences);
+  }
+
+  getDesktopReminderPermission(): DesktopReminderPermission {
+    return this.desktopReminderNotification?.permission() ?? "unavailable";
+  }
+
+  hasVerifiedDesktopReminder(): boolean {
+    return this.desktopReminderNotification?.hasVerifiedDelivery() ?? false;
+  }
+
+  async sendDesktopReminderTest(onError: () => void, onVerified: () => void): Promise<DesktopReminderTest> {
+    const message = buildRecordReminderTestNotice(this.getRecordReminderPreferences().desktopNotificationPreview);
+    return await this.desktopReminderNotification?.sendTest(message.title, message.body, onError, onVerified) ?? "unavailable";
+  }
+
+  async setRecordReminderPreference(key: keyof RecordReminderPreferences, value: boolean): Promise<void> {
+    if (key === "desktopSystemNotifications" && value) void this.desktopReminderNotification?.requestPermission();
+    let changed = false;
+    await this.enqueueSettingsWrite(async () => {
+      const previous = this.getRecordReminderPreferences();
+      if (previous[key] === value) return;
+      const next = { ...previous, [key]: value };
+      await this.saveData({ ...this.settings, recordReminderPreferences: next });
+      this.settings.recordReminderPreferences = next;
+      changed = true;
+    });
+    if (!changed) return;
+    if (key === "desktopNotificationPreview" && !value) this.desktopReminderNotification?.close(true);
+    this.syncRecordReminderRibbon();
+    this.app.workspace.trigger("record-reminder-preferences-change");
+    if (key === "enabled" && !this.getRecordReminderPreferences().enabled) this.closeReminderWindows();
+    if (key === "enabled" || key === "desktopSystemNotifications") this.recordReminderService?.tick();
+  }
+
+  private syncRecordReminderRibbon(): void {
+    const prefs = this.getRecordReminderPreferences();
+    const show = prefs.enabled && prefs.showInboxRibbon;
+    if (show && !this.reminderRibbon) {
+      this.reminderRibbon = this.addRibbonIcon("bell", t("reminder.inbox"), () => this.showRecordReminders());
+      this.reminderRibbon.addClass("note-database-ribbon-action");
+    }
+    if (!this.reminderRibbon) return;
+    this.reminderRibbon.hidden = !show;
+    this.reminderRibbon.style.display = show ? "" : "none";
+    this.reminderRibbon.setAttribute("aria-label", t("reminder.inbox"));
+    setTooltip(this.reminderRibbon, t("reminder.inbox"), { placement: "right" });
+  }
+
+  private getActiveReminderDatabase(): DatabaseConfig | undefined {
+    const path = this.app.workspace.getActiveViewOfType(DatabaseView)?.getCurrentEntryPath();
+    return path ? this.dataSource.getViewDefFiles().find(entry => entry.file.path === path)?.config : undefined;
+  }
+
+  getReminderConfigurationAction(database: DatabaseConfig, view?: ViewConfig): { label: string; open: () => void } | undefined {
+    const { enabled, showDatabaseToolbar } = this.getRecordReminderPreferences();
+    if (!enabled || !showDatabaseToolbar) return;
+    return { label: t("reminder.configureDatabase"), open: () =>
+      this.configureRecordReminders(database.id, undefined, this.getReminderRecordIcons(database, view)) };
+  }
+
+  private getReminderRecordIcons(database: DatabaseConfig, view?: ViewConfig): RecordTitleIconDisplay | undefined {
+    if (!view) return;
+    const field = resolveRecordIconField(database, view);
+    return {
+      visible: view.showRecordIcon === true,
+      tokenForFile: (file: TFile): unknown => field ? this.app.metadataCache.getFileCache(file)?.frontmatter?.[field] : undefined,
+    };
+  }
+
+  showRecordReminders(target?: ReminderInboxTarget): void {
+    if (!this.recordReminderService || !this.getRecordReminderPreferences().enabled) return;
+    if (this.reminderInbox?.containerEl.isConnected) {
+      if (!this.reminderInbox.present(target)) this.reminderRules?.close();
+      return;
+    }
+    this.reminderInbox = new RecordReminderInbox(this.app, this.recordReminderService,
+      (databaseId, ruleId, onClose) => this.configureRecordReminders(databaseId, { ruleId, onClose }), target);
+    this.reminderInbox.open();
+  }
+
+  private configureRecordReminders(databaseId: string, target?: ReminderRuleModalTarget, icons?: RecordTitleIconDisplay): boolean {
+    if (!this.getRecordReminderPreferences().enabled) return false;
+    const settings = this.settings.recordReminders || (this.settings.recordReminders = createReminderSettings());
+    if (target && (!settings.rules.some(rule => rule.id === target.ruleId && rule.databaseId === databaseId)
+      || !this.dataSource.getViewDefFiles().some(entry => entry.config.id === databaseId))) return false;
+    if (this.reminderRules?.containerEl.isConnected) this.reminderRules.close();
+    this.reminderRules = new RecordReminderSettingsModal(this.app, this.dataSource, databaseId, settings,
+      (draft, expected) => this.enqueueSettingsWrite(() => persistRecordReminderRules(settings, databaseId, draft,
+        next => this.saveData({ ...this.settings, recordReminders: next }), Date.now(), expected)),
+      () => this.recordReminderService?.tick(), target, icons);
+    this.reminderRules.open();
+    return true;
+  }
+
+  async renameReminderField({ databaseId, oldKey, newKey }: ColumnKeyRename): Promise<void> {
+    await this.enqueueSettingsWrite(async () => {
+      const settings = this.settings.recordReminders;
+      if (!settings) return;
+      const shifted = new Set(settings.rules.filter(rule => rule.databaseId === databaseId && rule.dateField === oldKey).map(rule => rule.id));
+      const rollback = renameRecordReminderField(settings, databaseId, oldKey, newKey);
+      if (!rollback) return;
+      try { await this.saveData(this.settings); }
+      catch (error) { rollback(); throw error; }
+      this.recordReminderService?.remapAnnouncedDateField(databaseId, oldKey, newKey, shifted);
+    });
+    try { this.recordReminderService?.refresh(); }
+    catch (error) { console.error("Note Database: could not refresh reminders after a property rename", error); }
+  }
+
+  async renameReminderCompletionOptions(databaseId: string, change: ReminderCompletionRename, reverse = false): Promise<void> {
+    await this.enqueueSettingsWrite(async () => {
+      const settings = this.settings.recordReminders;
+      if (!settings) return;
+      const { rules, history } = prepareReminderCompletionRename(settings.rules, databaseId, change, reverse);
+      if (rules !== settings.rules) {
+        await this.saveData({ ...this.settings, recordReminders: { ...settings, rules } });
+        settings.rules = rules;
+      }
+      change.history = history;
+    });
+    try { this.recordReminderService?.refresh(); }
+    catch (error) { console.error("Note Database: could not refresh reminders after an option rename", error); }
+  }
+
+  private closeReminderWindows(): void {
+    if (this.reminderInbox?.containerEl.isConnected) this.reminderInbox.close();
+    if (this.reminderRules?.containerEl.isConnected) this.reminderRules.close();
+    this.reminderInbox = undefined;
+    this.reminderRules = undefined;
+  }
+
+  private enqueueSettingsWrite<T>(write: () => Promise<T>): Promise<T> {
+    const next = this.settingsWriteTail.then(write);
+    // A failed write must not prevent a retry or saves from other features.
+    this.settingsWriteTail = next.then(() => {}, () => {});
+    return next;
+  }
+
+  saveSettingsFolding(change: SettingsFoldingChange): Promise<void> {
+    return this.enqueueSettingsWrite(async () => {
+      await persistSettingsFolding(this.settings, change, next => this.saveData(next));
+    });
+  }
+
+  saveNewViewDefaults(draft: NewViewDefaults): Promise<void> {
+    return this.enqueueSettingsWrite(async () => {
+      const next = normalizeNewViewDefaults(draft);
+      // The popover cannot edit or reset the toolbar preference, even from a stale draft.
+      const width = this.settings.newViewDefaults?.shared.displayWidth;
+      if (width === undefined) delete next.shared.displayWidth;
+      else next.shared.displayWidth = width;
+      await this.saveData({ ...this.settings, newViewDefaults: next });
+      this.settings.newViewDefaults = next;
+    });
+  }
+
+  saveNewViewDisplayWidth(width: NewViewDisplayWidth): Promise<void> {
+    return this.enqueueSettingsWrite(async () => {
+      const next = normalizeNewViewDefaults(this.settings.newViewDefaults);
+      if (next.shared.displayWidth === width) return;
+      next.shared.displayWidth = width;
+      await this.saveData({ ...this.settings, newViewDefaults: next });
+      this.settings.newViewDefaults = next;
+    });
+  }
+
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await this.enqueueSettingsWrite(() => this.saveData(this.settings));
     this.notifyViewSettingsChanged();
   }
 
@@ -970,6 +1217,8 @@ private findOpenDatabaseFileView(sourcePath: string): DatabaseView | null {
     const uniqueName = this.getUniqueDatabaseName(file.basename);
     config.name = uniqueName;
     if (!await this.confirmNewDatabasePropertyTypeConflicts(config)) return;
+    // A Base defines columns and views, but has no Note Database toolbar width.
+    for (const view of config.views) applyNewViewDisplayWidth(view, this.settings.newViewDefaults);
     const created = await this.dataSource.createViewDefFile(
       this.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
       uniqueName,
@@ -1229,6 +1478,9 @@ private findOpenDatabaseFileView(sourcePath: string): DatabaseView | null {
         }],
       };
     if (!await this.confirmNewDatabasePropertyTypeConflicts(config)) return;
+    // Plain CSV creates fresh views with no settings to preserve. An exported
+    // database, in contrast, is restored with its own recorded configuration.
+    if (!metadata?.database) applyNewDatabaseDefaults(config, this.settings.newViewDefaults);
 
     const colByKey = new Map(columns.map((col) => [col.key, col]));
     let imported = 0;
@@ -1373,6 +1625,8 @@ private findOpenDatabaseFileView(sourcePath: string): DatabaseView | null {
       cloned.sourceLogic = undefined;
       cloned.sourceRuleTree = undefined;
       cloned.schema = schema;
+      cloned.filters = copyPersistedFilters(cloned.filters);
+      cloned.viewStates = copyPersistedViewStates(cloned.viewStates, "legacy");
       cloned.manualOrder = undefined;
       cloned.boardCardOrders = undefined;
       return cloned;
@@ -2883,6 +3137,10 @@ private findOpenDatabaseFileView(sourcePath: string): DatabaseView | null {
   }
 
   onunload(): void {
+    clearDatabaseNoteReturn(this.app);
+    this.closeReminderWindows();
+    this.recordReminderService?.destroy();
+    this.recordReminderService = undefined;
     if (this.pendingVaultPropertyRefresh !== null) {
       window.clearTimeout(this.pendingVaultPropertyRefresh);
       this.pendingVaultPropertyRefresh = null;

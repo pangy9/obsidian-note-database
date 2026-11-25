@@ -1,3 +1,6 @@
+import { withDatabaseSourceScope } from "../data/SourceRules";
+import { holdReminderReads } from "../data/ReminderReadBarrier";
+import type { ReminderCompletionRename } from "../data/RecordReminders";
 import { prepareButtonWorkflow, type ButtonWorkflowPlan } from "../data/RecordButtonWorkflow";
 import { prepareRecordButton } from "../data/RecordButtonExecution";
 import type { RecordButtonConfig } from "../data/types";
@@ -10,7 +13,9 @@ import { configsDeepEqual } from "../data/FrontmatterPatch";
 import type { FrontmatterKeySnapshot, FrontmatterWrite } from "../data/RenameTransaction";
 import type { ColumnDef, DatabaseConfig, ViewConfig } from "../data/types";
 import { remapRecordPathsInConfig } from "../data/RecordPathRemap";
+import { remapOptionValueReferences } from "../data/OptionValueReferences";
 import { buildBulkEditPlan, resolveBulkEditorRequest } from "../data/BulkEdit";
+import { normalizeOptionValueForKey } from "../data/ColumnTypes";
 import { planOptionRegistration } from "../data/OptionRegistration";
 import { planEmbeddedGroupWrite } from "../data/EmbeddedEditing";
 import { generateRanks, rankBetween, rebalanceRanks } from "../data/ManualOrder";
@@ -35,6 +40,7 @@ export class EmbeddedDataOperations {
     private refresh: () => void,
     private beforePrepare: () => Promise<void> = async () => {},
     private busyChanged: (busy: boolean) => void = () => {},
+    private renameReminderCompletion?: (databaseId: string, change: ReminderCompletionRename, reverse: boolean) => Promise<void>,
   ) {}
   get busy(): boolean { return this.active > 0; }
   private history(path: string): EmbeddedDataHistory {
@@ -260,6 +266,25 @@ export class EmbeddedDataOperations {
           [key]: request.mode === "clear" ? { exists: false } : { exists: true, value: change.newValue },
         }));
       }
+      const optionRenames = (optionChange?.renameValues ?? []).map(({ from, to }) => ({
+        from: normalizeOptionValueForKey(key, from), to: normalizeOptionValueForKey(key, to),
+      })).filter(({ from, to }) => from && to && from !== to);
+      if (optionRenames.length && (col.type === "status" || col.type === "select")) {
+        const explicit = new Set(plan.changes.map(change => change.path));
+        const rename = new Map(optionRenames.map(({ from, to }) => [from, to]));
+        const { typedConfig } = await this.data.readViewDefSnapshot(ctx.path);
+        for (const record of this.data.getRecordsForDatabase(withDatabaseSourceScope({ ...typedConfig, baseThisFilePath: ctx.path }))) {
+          const path = record.file.path;
+          if (explicit.has(path) || !rename.has(normalizeOptionValueForKey(key, record.frontmatter[key]))) continue;
+          const ref = this.getRef(path);
+          const before = await this.data.readFrontmatterKeySnapshots(path, [key]);
+          const next = rename.get(normalizeOptionValueForKey(key, before[key]?.value));
+          if (before[key]?.exists && next) steps.push(this.snapshotsStep(ctx, path, ref, before, {
+            [key]: { exists: true, value: next },
+          }));
+        }
+      }
+      const changedRecordCount = steps.length;
       const config = await this.configStep(ctx, (db) => {
         const live = db.schema.columns.find((candidate) => candidate.key === col.key);
         if (!live || live.type !== col.type) throw new Error("Field definition changed");
@@ -267,6 +292,7 @@ export class EmbeddedDataOperations {
           if (!configsDeepEqual(live.statusOptions || [], optionChange.previousOptions || [])) throw new Error("Options changed");
           live.statusOptions = optionChange.nextOptions.map((option) => ({ ...option }));
           live.statusPresetId = undefined;
+          if (col.type === "select" || col.type === "status") remapOptionValueReferences(db, key, optionRenames);
         } else if (!optionChange || optionChange.setValue) {
           const registration = planOptionRegistration(live, plan.normalizedValue);
           if (registration.addedOptions.length) {
@@ -276,7 +302,14 @@ export class EmbeddedDataOperations {
         }
       });
       if (config) steps.push(config);
-      if (steps.length && confirm && !await confirm(plan.changes.length)) return [];
+      if (config && optionRenames.length && this.renameReminderCompletion && (col.type === "status" || col.type === "select")) {
+        const change: ReminderCompletionRename = { property: key, renames: optionRenames };
+        steps.push({ description: ctx.path, holdReads: () => holdReminderReads(this.data), apply: async (direction, compensating) => {
+          this.guard(ctx, compensating)();
+          await this.renameReminderCompletion?.(ctx.dbId, change, direction === "reverse");
+        } });
+      }
+      if (steps.length && confirm && !await confirm(changedRecordCount)) return [];
       return steps;
     });
   }

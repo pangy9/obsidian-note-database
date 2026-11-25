@@ -1,3 +1,4 @@
+import { copyPersistedFilters, copyPersistedViewStates } from "./FilterRules";
 import { App, TFile, TFolder, normalizePath } from "obsidian";
 import { DatabaseConfig, StatusPresetDef, generateId } from "./types";
 import type { StarterSampleRecord } from "./DatabaseStarterTemplates";
@@ -18,7 +19,7 @@ export interface VaultStarterTemplate {
 export interface SavedVaultStarter extends VaultStarterTemplate { path: string }
 
 /** Strip record identity and source scope while retaining reusable presentation. */
-export function sanitizeStarterConfig(source: DatabaseConfig): DatabaseConfig {
+export function sanitizeStarterConfig(source: DatabaseConfig, fallback: "legacy" | "typed" = "typed"): DatabaseConfig {
   const db = structuredClone(source);
   db.id = "";
   db.sourceFolder = "";
@@ -56,7 +57,8 @@ export function sanitizeStarterConfig(source: DatabaseConfig): DatabaseConfig {
     delete view.timelineAnchorTimeMinutes;
     const cleanFilters = (filters: typeof view.filters) => filters?.filter((filter) => !["file.path", "file.folder"].includes(filter.field)
       && !db.schema.columns.some((column) => column.key === filter.field && column.type === "relation"));
-    view.filters = cleanFilters(view.filters);
+    view.filters = cleanFilters(copyPersistedFilters(view.filters, fallback));
+    view.viewStates = copyPersistedViewStates(view.viewStates, fallback);
     for (const state of Object.values(view.viewStates || {})) state.filters = cleanFilters(state.filters);
   }
   return db;
@@ -126,7 +128,7 @@ export function parseVaultStarter(text: string): VaultStarterTemplate {
       typeof sample.body !== "string" || !object(sample.frontmatter)) throw new Error("Invalid sample record");
   }
   const template = value as unknown as VaultStarterTemplate;
-  template.config = sanitizeStarterConfig(template.config);
+  template.config = sanitizeStarterConfig(template.config, "legacy");
   template.samples = cleanStarterSamples(template.samples, template.config);
   return template;
 }

@@ -507,7 +507,7 @@ export class FormulaModal extends Modal {
       renderPropertyTypeIcon(button, item.col, "db-formula-field-icon");
       const text = button.createDiv({ cls: "db-formula-help-row-text" });
       text.createSpan({ text: item.col.label || item.col.key });
-      text.createSpan({ text: `${t("formula.referenceShort")}: ${this.getFormulaFieldReference(item.col)} · ${COLUMN_TYPE_LABELS()[item.col.type]}` });
+      text.createSpan({ text: t("formula.referenceAndType", { reference: this.getFormulaFieldReference(item.col), type: COLUMN_TYPE_LABELS()[item.col.type] }) });
       return;
     }
     if (item.kind === "example") {

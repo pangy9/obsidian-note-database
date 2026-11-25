@@ -39,16 +39,24 @@ describe("collectChangelogNotes", () => {
   });
 
   it("from 为空（首次安装无记录）：只弹当前版本；from 极旧：收录全部（需求场景）", () => {
-    expect(collectChangelogNotes(undefined, "1.3.3", "en")).toHaveLength(1);
-    expect(collectChangelogNotes("", "1.3.3", "en")).toHaveLength(1);
+    expect(collectChangelogNotes(undefined, "1.3.4", "en")).toHaveLength(1);
+    expect(collectChangelogNotes("", "1.3.4", "en")).toHaveLength(1);
     // 从 1.0.0 一路升上来：期间所有已收录版本全部展示。
-    expect(collectChangelogNotes("1.0.0", "1.3.3", "en")).toHaveLength(RELEASE_NOTES.length);
+    expect(collectChangelogNotes("1.0.0", "1.3.4", "en")).toHaveLength(RELEASE_NOTES.length);
   });
 
   it("to 尚无文案（开发版）：回落 <= to 的最近一条，保持弹窗总有内容", () => {
-    const notes = collectChangelogNotes("1.3.3", "1.3.4", "en");
+    const notes = collectChangelogNotes("1.3.4", "1.3.5", "en");
     expect(notes).toHaveLength(1);
-    expect(notes[0]).toContain("1.3.3");
+    expect(notes[0]).toContain("1.3.4");
+  });
+
+  it("1.3.3 升级只显示 1.3.4 的三语发布说明", () => {
+    for (const locale of ["en", "zh-CN", "zh-TW"] as const) {
+      const notes = collectChangelogNotes("1.3.3", "1.3.4", locale);
+      expect(notes).toEqual([RELEASE_NOTES[0].notes[locale]]);
+      expect(notes[0]).toContain("1.3.4");
+    }
   });
 
   it("三语言文案齐备且数据按版本倒序", () => {
@@ -61,7 +69,7 @@ describe("collectChangelogNotes", () => {
         expect(compareVersions(entry.version, RELEASE_NOTES[index - 1].version)).toBe(-1);
       }
     }
-    expect(RELEASE_NOTES[0].version).toBe("1.3.3");
+    expect(RELEASE_NOTES[0].version).toBe("1.3.4");
     expect(RELEASE_NOTES.some((entry) => entry.version === "1.3.0")).toBe(true);
   });
 

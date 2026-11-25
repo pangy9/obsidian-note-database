@@ -723,7 +723,8 @@ function assignTimelineRows(events: CalendarTimelineEvent[]): number {
   return events.length;
 }
 
-export function buildTimelineTicks(window: TimelineWindow, scale: TimelineScale, config: ViewConfig, locale: EffectiveLocale = "en"): TimelineTickModel[] {
+export function buildTimelineTicks(window: TimelineWindow, scale: TimelineScale, config: ViewConfig, locale: EffectiveLocale = "en",
+  visibleUnitSpan?: number): TimelineTickModel[] {
   if (scale === "day") {
     // Hourly ticks across the visible hour range. The viewport may cross midnight.
     const start = parseDateKey(window.startDateKey);
@@ -746,16 +747,22 @@ export function buildTimelineTicks(window: TimelineWindow, scale: TimelineScale,
   const end = parseDateKey(window.endDateKey);
   if (!start || !end || start.getTime() > end.getTime()) return [];
   // Event layout uses daily columns outside day-scale. Quarter only changes the visible tick step.
-  const stepDays = scale === "quarter" ? 7 : 1;
+  const sparse = scale === "quarter" && (!config.timelineContinuous || (visibleUnitSpan ?? Infinity) >= 8);
+  const stepDays = sparse ? 7 : 1;
   const ticks: TimelineTickModel[] = [];
-  for (let tick = start; tick.getTime() <= end.getTime(); tick = addUtcDays(tick, stepDays)) {
+  // The render buffer moves while panning. Anchor quarterly ticks to a
+  // stable weekday rather than to the left edge of that temporary buffer.
+  const first = sparse && config.timelineContinuous
+    ? addUtcDays(start, (1 - start.getUTCDay() + 7) % 7)
+    : start;
+  for (let tick = first; tick.getTime() <= end.getTime(); tick = addUtcDays(tick, stepDays)) {
     ticks.push({
       dateKey: dateKeyFromUtc(tick),
       label: formatTimelineTickLabel(tick, scale, locale),
       offsetUnits: daysBetweenDate(start, tick),
     });
   }
-  if (ticks.length === 0) {
+  if (ticks.length === 0 && !(sparse && config.timelineContinuous)) {
     ticks.push({ dateKey: window.startDateKey, label: formatTimelineTickLabel(start, scale, locale), offsetUnits: 0 });
   }
   return ticks;

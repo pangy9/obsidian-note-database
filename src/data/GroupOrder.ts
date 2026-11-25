@@ -43,3 +43,12 @@ export function mergeGroupOrder(...orders: string[][]): string[] {
   }
   return result;
 }
+
+/** Sort displayed number/currency buckets without corrupting scientific notation. */
+export function numericGroupSortValue(value: string): number {
+  const literal = value.trim();
+  const numeric = Number(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(literal)
+    ? literal
+    : literal.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(numeric) ? numeric : Number.POSITIVE_INFINITY;
+}

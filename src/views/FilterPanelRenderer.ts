@@ -1,4 +1,7 @@
-import { getColumnOptions, isObsidianTagsKey } from "../data/ColumnTypes";
+import { getFilterEditorOperators, getFilterOperatorsForColumn, getPresentedFilterOperator } from "../data/FilterRules";
+export { getFilterOperatorsForColumn } from "../data/FilterRules";
+import { getColumnDisplayType } from "../data/ColumnDisplay";
+import { getColumnOptions, toBooleanValue } from "../data/ColumnTypes";
 import { isImeComposing } from "../data/KeyboardUtils";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
 import { ColumnDef, FilterRule, ViewConfig } from "../data/types";
@@ -14,32 +17,6 @@ export interface FilterPanelActions {
   saveState(): void;
   refresh(): void;
   close(): void;
-}
-
-export function getFilterOperatorsForColumn(col?: ColumnDef): [FilterRule["op"], string][] {
-  const base: [FilterRule["op"], string][] = [
-    ["eq", t("filter.eq")],
-    ["neq", t("filter.neq")],
-  ];
-  const emptyOps: [FilterRule["op"], string][] = [
-    ["empty", t("filter.empty")],
-    ["notempty", t("filter.notempty")],
-  ];
-  if (!col) return [...base, ["contains", t("filter.contains")], ...emptyOps];
-  if (col.type === "number" || col.type === "currency" || isDateLikeColumnType(col.type)) {
-    return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
-  }
-  if (col.type === "select" || col.type === "status") {
-    return [...base, ["gt", t("filter.gt")], ["gte", t("filter.gte")], ["lt", t("filter.lt")], ["lte", t("filter.lte")], ...emptyOps];
-  }
-  if (col.type === "multi-select") {
-    if (col.key === "file.tags" || isObsidianTagsKey(col.key)) return [...base, ["hasTag", t("filter.hasTag")], ["contains", t("filter.contains")], ...emptyOps];
-    return [...base, ["contains", t("filter.contains")], ...emptyOps];
-  }
-  if (col.type === "checkbox") {
-    return [["notempty", t("filter.checkboxChecked")], ["empty", t("filter.checkboxUnchecked")]];
-  }
-  return [...base, ["contains", t("filter.contains")], ...emptyOps];
 }
 
 export class FilterPanelRenderer {
@@ -94,8 +71,10 @@ export class FilterPanelRenderer {
       text: `+ ${t("panel.addCondition")}`,
     });
     addBtn.onclick = () => {
-      const first = getViewRuleColumns(config)[0]?.key || "file.name";
-      state.filters.push({ field: first, op: "contains", value: "" });
+      const first = getViewRuleColumns(config)[0];
+      const operators = getFilterOperatorsForColumn(first, config.schema.computedFields);
+      const op = operators.some(([value]) => value === "contains") ? "contains" : operators[0]?.[0] || "eq";
+      state.filters.push({ field: first?.key || "file.name", op, value: "", comparison: "typed" });
       actions.saveState();
       this.render(containerEl, true, state, config, actions, this.anchorEl || undefined);
       actions.refresh();
@@ -180,8 +159,9 @@ export class FilterPanelRenderer {
       renderIcon: renderDropdownPropertyTypeIcon,
       onChange: (value) => {
         rule.field = value;
+        rule.comparison = "typed";
         const nextCol = allCols.find((col) => col.key === rule.field);
-        const nextOps = getFilterOperatorsForColumn(nextCol);
+        const nextOps = getFilterOperatorsForColumn(nextCol, config.schema.computedFields);
         if (!nextOps.some(([op]) => op === rule.op)) rule.op = nextOps[0]?.[0] || "eq";
         rule.value = "";
         actions.saveState();
@@ -190,33 +170,33 @@ export class FilterPanelRenderer {
       },
     });
 
-    // Migrate legacy checkbox eq/neq filters to empty/notempty, preserving intent
-    // (eq "true" → checked/notempty, eq "false" → unchecked/empty; neq inverts). Idempotent:
-    // once the op is empty/notempty this no longer triggers; it persists on the next save.
-    if (currentCol?.type === "checkbox" && (rule.op === "eq" || rule.op === "neq")) {
-      const wantChecked = rule.op === "eq" ? rule.value === "true" : rule.value !== "true";
-      rule.op = wantChecked ? "notempty" : "empty";
-      rule.value = "";
-    }
-    const ops = getFilterOperatorsForColumn(currentCol);
-    if (!ops.some(([op]) => op === rule.op)) rule.op = ops[0]?.[0] || "eq";
+    const valueColumn = currentCol
+      ? { ...currentCol, type: getColumnDisplayType(currentCol, config.schema.computedFields) }
+      : undefined;
+
+    const operator = getPresentedFilterOperator(rule, currentCol, config.schema.computedFields);
+    const ops = getFilterEditorOperators(currentCol, config.schema.computedFields, operator);
     createDropdownField({
       parent: row,
       label: t("panel.operator"),
       options: ops.map(([value, label]) => ({ value, text: label })),
-      value: rule.op,
+      value: operator,
       className: "db-panel-dropdown db-filter-operator-dropdown",
       hideLabel: true,
       onChange: (value) => {
         rule.op = value as FilterRule["op"];
+        rule.comparison = "typed";
+        if (rule.op === "empty" || rule.op === "notempty") rule.value = "";
         actions.saveState();
         rerender();
         actions.refresh();
       },
     });
 
-    if (rule.op !== "empty" && rule.op !== "notempty") {
-      this.renderValueInput(row, rule, currentCol, actions);
+    if (operator !== "empty" && operator !== "notempty") {
+      // Legacy substring/tag values remain editable as text, independent of their column type.
+      const inputColumn = operator === "contains" || operator === "hasTag" ? undefined : valueColumn;
+      this.renderValueInput(row, rule, inputColumn, actions);
     } else {
       row.createSpan({ text: "—", cls: "db-panel-empty-value" });
     }
@@ -242,6 +222,7 @@ export class FilterPanelRenderer {
         className: "db-panel-date-value db-filter-value-control",
         onChange: (value) => {
           rule.value = value;
+          rule.comparison = "typed";
           actions.saveState();
           actions.refresh();
         },
@@ -261,15 +242,17 @@ export class FilterPanelRenderer {
         hideLabel: true,
         onChange: (value) => {
           rule.value = value;
+          rule.comparison = "typed";
           actions.saveState();
           actions.refresh();
         },
       });
       return;
     }
-    if (col?.type === "checkbox") {
-      const value = rule.value === "false" ? "false" : "true";
-      if (!rule.value) rule.value = value;
+    // Older rules may deliberately use a different truth table. Display the
+    // saved literal until the user explicitly changes the operator or value.
+    if (col?.type === "checkbox" && rule.comparison !== "legacy") {
+      const value = String(toBooleanValue(rule.value));
       createDropdownField({
         parent: row,
         label: t("panel.value"),
@@ -282,37 +265,50 @@ export class FilterPanelRenderer {
         hideLabel: true,
         onChange: (nextValue) => {
           rule.value = nextValue;
+          rule.comparison = "typed";
           actions.saveState();
           actions.refresh();
         },
       });
       return;
     }
+    // A previously saved formula filter can contain a formatted numeric literal.
+    // Native number inputs discard values like "$12" before any user interaction.
+    const numeric = col?.type === "number" || col?.type === "currency";
+    const supportsNumberInput = !rule.value || /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(rule.value);
     const inp = row.createEl("input", {
       attr: {
-        type: col?.type === "number" || col?.type === "currency" ? "number" : "text",
+        type: numeric && supportsNumberInput ? "number" : "text",
         placeholder: t("panel.value"),
       },
     });
     let committedValue = rule.value || "";
+    let committedComparison = rule.comparison;
+    let edited = false;
     inp.value = committedValue;
     inp.oninput = () => {
+      edited = true;
       rule.value = inp.value;
+      rule.comparison = "typed";
       this.scheduleRefresh(actions);
     };
     inp.onkeydown = (event) => {
       if (isImeComposing(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
-        this.commitDraftValue(rule, inp.value, committedValue, actions, (value) => {
-          committedValue = value;
-        });
+        if (edited) {
+          this.commitDraftValue(rule, inp.value, committedValue, committedComparison, actions, (value) => {
+            committedValue = value; committedComparison = rule.comparison;
+          });
+          edited = false;
+        }
         inp.blur();
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        rule.value = committedValue;
+        if (edited) { rule.value = committedValue; rule.comparison = committedComparison; }
+        edited = false;
         inp.value = committedValue;
         this.clearPendingRefresh();
         actions.refresh();
@@ -320,9 +316,11 @@ export class FilterPanelRenderer {
       }
     };
     inp.onblur = () => {
-      this.commitDraftValue(rule, inp.value, committedValue, actions, (value) => {
-        committedValue = value;
+      if (!edited) return;
+      this.commitDraftValue(rule, inp.value, committedValue, committedComparison, actions, (value) => {
+        committedValue = value; committedComparison = rule.comparison;
       });
+      edited = false;
     };
   }
 
@@ -330,15 +328,17 @@ export class FilterPanelRenderer {
     rule: FilterRule,
     nextValue: string,
     committedValue: string,
+    committedComparison: FilterRule["comparison"],
     actions: FilterPanelActions,
     onCommitted: (value: string) => void
   ): void {
     this.clearPendingRefresh();
-    rule.value = nextValue;
     if (nextValue !== committedValue) {
+      rule.value = nextValue;
+      rule.comparison = "typed";
       actions.saveState();
       onCommitted(nextValue);
-    }
+    } else rule.comparison = committedComparison;
     actions.refresh();
   }
 

@@ -1,12 +1,11 @@
 import { ColumnDef, ViewConfig } from "../data/types";
 import { t } from "../i18n";
+import { getQueryColumns } from "../data/QueryColumns";
 import { DatabaseViewState } from "./ViewStateStore";
 
 /** Canonical property list shared by the filter panel, sort panel and active rail. */
 export function getViewRuleColumns(config: ViewConfig): ColumnDef[] {
-  const columns = (config.schema?.columns || []).filter((column) => column.type !== "button");
-  if (columns.some((column) => column.key === "file.name")) return columns;
-  return [{ key: "file.name", label: t("defaults.nameColumn"), type: "text" }, ...columns];
+  return getQueryColumns(config, t("defaults.nameColumn"));
 }
 
 export function removeFilterRuleAt(state: DatabaseViewState, index: number): boolean {

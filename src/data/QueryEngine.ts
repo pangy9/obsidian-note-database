@@ -76,52 +76,59 @@ export class QueryEngine {
     rows: RowData[],
     filters: FilterRule[],
     logic: "and" | "or" = "and",
-    columns: ColumnDef[] = []
+    columns: ColumnDef[] = [],
+    legacyComparisons = false,
   ): RowData[] {
-    if (filters.length === 0) return rows;
-    const columnMap = new Map(columns.map((col) => [col.key, col]));
-    return rows.filter((row) => {
-      if (logic === "or") {
-        return filters.some(rule => this.matchesFilter(row, rule, columnMap.get(rule.field)));
-      }
-      // AND logic: all rules must match
-      return filters.every(rule => this.matchesFilter(row, rule, columnMap.get(rule.field)));
+    if (!filters.length) return rows;
+    const columnMap = new Map(columns.map(col => [col.key, col]));
+    const predicates = filters.map(rule => {
+      const legacy = legacyComparisons || rule.comparison === "legacy";
+      const column = columnMap.get(rule.field);
+      return (row: RowData) => this.matchesFilter(row, rule, column, legacy);
     });
+    return rows.filter(row => logic === "or" ? predicates.some(match => match(row)) : predicates.every(match => match(row)));
   }
 
-  private matchesFilter(row: RowData, rule: FilterRule, column?: ColumnDef): boolean {
-    const val = normalizeDateColumnValue(this.getFieldValue(row, rule.field, column), column?.type);
-    const values = this.getComparableValues(val);
+  private matchesFilter(row: RowData, rule: FilterRule, column: ColumnDef | undefined, legacy: boolean): boolean {
+    const raw = normalizeDateColumnValue(this.getFieldValue(row, rule.field, column), column?.type);
+    const val = column?.type === "checkbox" && !legacy ? toBooleanValue(raw) : raw;
+    // Saved text operators can survive a property type change. They still
+    // match the original spelling, not the normalized checkbox boolean.
+    const values = this.getComparableValues(rule.op === "contains" || rule.op === "hasTag" ? raw : val);
     const comparableRuleValue = stringifyValue(normalizeDateColumnValue(rule.value || "", column?.type));
     const ruleValue = column && isObsidianTagsKey(column.key)
       ? normalizeObsidianTagValue(comparableRuleValue)
       : comparableRuleValue;
 
+    if (rule.comparison === "chart-label" && (rule.op === "eq" || rule.op === "neq")) {
+      const matches = values.some(value => value.trim() === ruleValue.trim());
+      return rule.op === "eq" ? matches : !matches;
+    }
     switch (rule.op) {
       case "eq":
-        return values.some((value) => this.compareFilterValue(value, ruleValue, column) === 0);
+        return values.some((value) => this.compareFilterValue(value, ruleValue, column, legacy) === 0);
       case "neq":
-        return values.every((value) => this.compareFilterValue(value, ruleValue, column) !== 0);
+        return values.every((value) => this.compareFilterValue(value, ruleValue, column, legacy) !== 0);
       case "contains":
         return values.some((value) => value.toLowerCase().includes(ruleValue.toLowerCase()));
       case "hasTag":
         return hasObsidianTagValue(values, ruleValue);
       case "gt":
-        return values.some((value) => this.compareFilterValue(value, ruleValue, column) > 0);
+        return values.some((value) => this.compareFilterValue(value, ruleValue, column, legacy, true) > 0);
       case "lt":
-        return values.some((value) => this.compareFilterValue(value, ruleValue, column) < 0);
+        return values.some((value) => this.compareFilterValue(value, ruleValue, column, legacy, true) < 0);
       case "gte":
-        return values.some((value) => this.compareFilterValue(value, ruleValue, column) >= 0);
+        return values.some((value) => this.compareFilterValue(value, ruleValue, column, legacy, true) >= 0);
       case "lte":
-        return values.some((value) => this.compareFilterValue(value, ruleValue, column) <= 0);
+        return values.some((value) => this.compareFilterValue(value, ruleValue, column, legacy, true) <= 0);
       case "empty":
         // checkbox: "empty" = unchecked. Boolean-aware so false / "" / null / missing key
         // all count as unchecked (previously `false` was stringified to "false" and counted
         // as not-empty, splitting two equally-unchecked notes into different buckets).
-        if (column?.type === "checkbox") return this.toBooleanRank(stringifyValue(val)) === 0;
+        if (column?.type === "checkbox") return this.getCheckboxRank(val, legacy) === 0;
         return values.length === 0;
       case "notempty":
-        if (column?.type === "checkbox") return this.toBooleanRank(stringifyValue(val)) === 1;
+        if (column?.type === "checkbox") return this.getCheckboxRank(val, legacy) === 1;
         return values.length > 0;
       default:
         return true;
@@ -177,7 +184,7 @@ export class QueryEngine {
       return toDateTimestamp(val) ?? "";
     }
     if (col.type === "checkbox") {
-      return val === true ? 1 : 0;
+      return toBooleanValue(val) ? 1 : 0;
     }
     if (Array.isArray(val)) {
       return val.map((item) => stringifyValue(item)).join(", ");
@@ -185,9 +192,9 @@ export class QueryEngine {
     return stringifyValue(val);
   }
 
-  private compareFilterValue(left: string, right: string, column?: ColumnDef): number {
+  private compareFilterValue(left: string, right: string, column: ColumnDef | undefined, legacyComparisons: boolean, legacyNumericFallback = false): number {
     if (column?.type === "number" || column?.type === "currency") {
-      return this.compareNumbers(left, right);
+      return this.compareNumbers(left, right, legacyComparisons);
     }
     if (isDateLikeColumnType(column?.type)) {
       return this.compareDates(left, right);
@@ -196,20 +203,34 @@ export class QueryEngine {
       return this.compareOptionValues(left, right, this.getComparableOptionValues(column));
     }
     if (column?.type === "checkbox") {
-      return this.toBooleanRank(left) - this.toBooleanRank(right);
+      return this.getCheckboxRank(left, legacyComparisons) - this.getCheckboxRank(right, legacyComparisons);
     }
 
-    const numCompare = this.compareNumbers(left, right);
-    if (!Number.isNaN(numCompare)) return numCompare;
+    // A saved ordering operator can survive converting a numeric property to text.
+    // New text equality stays literal, but keep the old ordering behavior in that case.
+    if (legacyComparisons || legacyNumericFallback) {
+      const numeric = this.compareNumbers(left, right, true);
+      if (!Number.isNaN(numeric)) return numeric;
+    }
     return left.localeCompare(right);
   }
 
-  private compareNumbers(left: string, right: string): number {
-    const leftText = stringifyValue(left).replace(/[^0-9.-]/g, "");
-    const rightText = stringifyValue(right).replace(/[^0-9.-]/g, "");
-    if (!/[0-9]/.test(leftText) || !/[0-9]/.test(rightText)) return Number.NaN;
-    const a = Number(leftText);
-    const b = Number(rightText);
+  private getCheckboxRank(value: unknown, legacy: boolean): number {
+    return Number(legacy
+      ? ["true", "1", "yes", "y", "✓", "checked"].includes(stringifyValue(value).trim().toLowerCase())
+      : toBooleanValue(value));
+  }
+
+  private compareNumbers(left: string, right: string, legacy = false): number {
+    const parse = (value: string): number => {
+      const text = value.trim();
+      // The filter input and computed values can both use scientific notation.
+      if (!legacy && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) return Number(text);
+      const plain = text.replace(/[^0-9.-]/g, "");
+      return /[0-9]/.test(plain) ? Number(plain) : Number.NaN;
+    };
+    const a = parse(left);
+    const b = parse(right);
     if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN;
     return a - b;
   }
@@ -235,10 +256,6 @@ export class QueryEngine {
     // 统一走 toDateTimestamp：纯日期/带时间都按本地墙上时间，毫秒 number（file.ctime）直通。
     const ts = toDateTimestamp(value);
     return ts == null ? Number.NaN : ts;
-  }
-
-  private toBooleanRank(value: string): number {
-    return ["true", "1", "yes", "y", "✓", "checked"].includes(stringifyValue(value).trim().toLowerCase()) ? 1 : 0;
   }
 
   private getComparableValues(value: unknown): string[] {

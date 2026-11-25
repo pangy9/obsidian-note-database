@@ -6,14 +6,17 @@ class Rect {
   get left() { return this.x; } get top() { return this.y; }
   get right() { return this.x + this.width; } get bottom() { return this.y + this.height; }
 }
-function position(anchorTop: number, viewportHeight: number, maxHeight?: number, placement?: "vertical" | "submenu", anchorLeft = 400) {
+function position(anchorTop: number, viewportHeight: number, maxHeight?: number, placement?: "vertical" | "submenu", anchorLeft = 400, ownerWidth?: number) {
   vi.stubGlobal("DOMRect", Rect);
   const frames: Array<() => void> = [];
   vi.stubGlobal("window", { innerWidth: 900, innerHeight: viewportHeight,
     activeDocument: { querySelector: () => null, body: { classList: { contains: () => false } } },
     requestAnimationFrame: (cb: () => void) => frames.push(cb),
   });
-  const panel = { isConnected: true, scrollTop: 17, scrollHeight: 1000, style: {} as Record<string, string>,
+  const ownerDocument = ownerWidth ? { ...window.activeDocument, defaultView: {
+    innerWidth: ownerWidth, innerHeight: viewportHeight, requestAnimationFrame: (cb: () => void) => frames.push(cb),
+  } } : undefined;
+  const panel = { ownerDocument, isConnected: true, scrollTop: 17, scrollHeight: 1000, style: {} as Record<string, string>,
     closest: () => null, addClass: vi.fn(),
     setCssProps(props: Record<string, string>) { Object.assign(this.style, props); },
     getBoundingClientRect: () => new Rect(0, 0, 280, 360),
@@ -25,6 +28,10 @@ function position(anchorTop: number, viewportHeight: number, maxHeight?: number,
 }
 afterEach(() => vi.unstubAllGlobals());
 describe("popover height limits", () => {
+  it("positions anchored popovers in the owning popup viewport, not the parent app window", () => {
+    expect(position(100, 1000, 360, "submenu", 950, 1200).style.left).toBe("664px");
+    expect(position(100, 1000, 360, "submenu", 950, 1600).style.left).toBe("1156px");
+  });
   it("places submenus beside the menu and flips left near the viewport edge", () => {
     const right = position(100, 1000, 360, "submenu");
     expect(right.style.left).toBe("606px"); expect(right.style.top).toBe("100px");

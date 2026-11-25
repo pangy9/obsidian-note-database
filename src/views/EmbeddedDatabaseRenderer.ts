@@ -1,3 +1,6 @@
+import { revealCalendarTimelineSearchResult } from "./CalendarTimelineSearchReveal";
+import type { ReminderCompletionRename } from "../data/RecordReminders";
+import { openDatabaseCardNote, type DatabaseReturnView } from "./DatabaseNoteReturn";
 import { RecordButtonModal } from "./modals/RecordButtonModal";
 import { withRecordButtonLock } from "./RecordButtonRenderer";
 import { validateRecordButton, updateRecordButtonStyle, updateRecordButtonIcon } from "../data/RecordButton";
@@ -29,7 +32,7 @@ import {
   toMultiSelectValuesForKey,
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
-import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
+import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder, numericGroupSortValue } from "../data/GroupOrder";
 import { formatGroupKeyDisplay } from "../data/GroupDisplay";
 import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { getEffectiveFilterRules } from "../data/FilterRules";
@@ -46,6 +49,7 @@ import { MAX_EMBED_HEIGHT, MIN_EMBED_HEIGHT, parseEmbeddedHeight, updateEmbedded
 import { ColumnHeaderController } from "./ColumnHeaderController";
 import { ColumnManagerRenderer } from "./ColumnManagerRenderer";
 import { DatabaseViewState, ViewStateStore } from "./ViewStateStore";
+import { configsSemanticEqual } from "../data/FrontmatterPatch";
 import { FilterPanelRenderer } from "./FilterPanelRenderer";
 import { RowMenu } from "./RowMenu";
 import { resolveRecordIconField } from "../data/RecordIcon";
@@ -111,11 +115,13 @@ import { RelationRollupConfigModal, RelationRollupConfigResult, RelationTargetCh
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { hasRelationValue, planRelationTargetChange } from "../data/RelationTargetChange";
 import { cloneFrontmatterValue } from "../data/FrontmatterOverride";
+import type { SettingsFoldingPreferences } from "../data/SettingsFolding";
 
 type HeaderPopoverKind = "filter" | "sort" | "columns" | "view";
 
 function filtersEqual(left: FilterRule, right: FilterRule): boolean {
-  return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "");
+  return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "")
+    && (left.comparison ?? "typed") === (right.comparison ?? "typed");
 }
 
 export interface EmbeddedDatabaseEntry {
@@ -183,6 +189,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     isGroupCollapsed: (field, key) => this.isGroupCollapsed(this.config, field, key),
     toggleGroupCollapsed: (field, key) => this.toggleGroupCollapsed(this.config, field, key),
     expandGroup: (field, key, count) => this.expandGroup(this.config, field, key, count),
+    onTimelineViewportChanged: (root, config, redrawn) => this.refreshTimelineSearchOnPan(root, config, redrawn),
+    getTimelinePositionSource: () => this.currentSourcePath || this.sourcePath,
     updateTimelineAnchor: (dateKey, _label, timeMinutes) => this.updateTimelineAnchor(dateKey, timeMinutes),
     updateTimelineScale: (scale) => this.updateTimelineScale(scale),
     onConfigChange: () => {
@@ -198,6 +206,25 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     applyConditionalFormat: (element, row, config) => applyConditionalFormat(element, row, config, this.currentDbConfig),
   }));
   /** 嵌入式展开预览。 */
+  private openNoteFromDatabaseCard(row: RowData, anchor: HTMLElement): void {
+    const host = this.containerEl;
+    const config = this.config;
+    const type = config?.viewType;
+    const openNormally = () => this.dataSource.openNote(row.file);
+    if (!host || !config || (type !== "calendar" && type !== "timeline" && type !== "board")) {
+      openNormally(); return;
+    }
+    const databaseId = this.currentDbConfig?.id;
+    const viewId = config.id ?? config.name;
+    void openDatabaseCardNote({
+      app: this.app, file: row.file, view: type satisfies DatabaseReturnView, anchor, host, openNormally,
+      sourceStillCurrent: () => {
+        const current = this.config;
+        return current?.viewType === type && (current.id ?? current.name) === viewId && this.currentDbConfig?.id === databaseId;
+      },
+    });
+  }
+
   private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
     const config = this.config;
     if (!config || !this.containerEl) return;
@@ -216,6 +243,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
           if (!this.isEmbedReadOnly()) this.cellRenderer.startEdit(target, record, column, event);
         },
         openRow: (r) => this.dataSource.openNote(r.file),
+        openNoteFromCard: (r, anchor) => this.openNoteFromDatabaseCard(r, anchor),
         renderRecordIcon: (parent, r, view, compact) => this.renderEmbeddedRecordIcon(parent, r, view, compact),
           applyConditionalFormat: (element, r, view, targetField) =>
           applyConditionalFormat(element, r, view, this.currentDbConfig, targetField),
@@ -292,6 +320,8 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     private defaultRecordFolder = "",
     private embeddedReadOnly = true,
     private getShowDatabaseIcons: () => boolean = () => true,
+    private readonly getSettingsFolding: () => SettingsFoldingPreferences | undefined = () => undefined,
+    renameReminderCompletion?: (databaseId: string, change: ReminderCompletionRename, reverse: boolean) => Promise<void>,
   ) {
     super(containerEl);
     const isCodeBlock = persistMode === "codeblock";
@@ -307,7 +337,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
         this.containerEl.setAttribute("aria-busy", String(busy));
         this.containerEl.querySelectorAll<HTMLButtonElement>(".db-selection-status-bar button").forEach((button) => { button.disabled = busy; });
         this.resetEmbeddedHistoryNoticeTimer();
-      });
+      }, renameReminderCompletion);
     const shouldHideResultCreateEntryButtons = () =>
       this.isEmbedReadOnly() || (this.config ? this.vs(this.config).searchText.trim().length > 0 : false);
     this.cellRenderer = new CellRenderer(
@@ -400,6 +430,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.boardRenderer = new BoardRenderer(this.app, {
       getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
+      openNoteFromCard: (row, anchor) => this.openNoteFromDatabaseCard(row, anchor),
       createEntry: (defaults) => { if (!this.isEmbedReadOnly()) void this.createBlankEntry(defaults); },
       updateGroup: (row, field, value, fromValue) => this.updateBoardGroup(row, field, value, fromValue),
       moveRowWithGroupUpdatesAndPosition: (row, groups, before, after) => this.moveEmbeddedRecord(row, groups, before, after),
@@ -1354,6 +1385,20 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     if (searchQuery) highlightSearchMatches(this.containerEl, searchQuery);
   }
 
+  private refreshTimelineSearchOnPan(root: HTMLElement, config: ViewConfig, redrawn: boolean): void {
+    const query = this.vs(config).searchText.trim();
+    if (!query) return;
+    if (redrawn) highlightSearchMatches(root, query);
+    const panel = this.calendarTimelineSearchResultsEl;
+    if (!panel?.isConnected) return;
+    const result = buildCalendarTimelineSearchResults(this.rows, config, this.calendarTimelineRenderer.getCurrentVisibleRange());
+    const scrollTop = panel.querySelector<HTMLElement>(".db-calendar-search-results-list")?.scrollTop ?? 0;
+    panel.empty();
+    this.renderCalendarTimelineSearchResultsContent(panel, result, config, query);
+    const list = panel.querySelector<HTMLElement>(".db-calendar-search-results-list");
+    if (list) list.scrollTop = scrollTop;
+  }
+
   private renderCalendarTimelineSearchResultsPanel(config: ViewConfig): void {
     this.closeCalendarTimelineSearchResultsPanel();
     if (config.viewType !== "calendar" && config.viewType !== "timeline") return;
@@ -1456,7 +1501,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.pendingSearchResultRevealPath = item.filePath;
     if (config.viewType === "timeline") {
       const timeMinutes = (config.timelineScale || "week") === "day" ? item.startMinutes : undefined;
-      this.updateTimelineAnchor(item.startDateKey, timeMinutes);
+      this.calendarTimelineRenderer.navigateToTimelineDate(item.startDateKey, timeMinutes);
       return;
     }
     if (config.viewType !== "calendar") return;
@@ -1476,7 +1521,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.pendingSearchResultRevealPath = undefined;
     window.requestAnimationFrame(() => {
       if (!target.isConnected) return;
-      target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      revealCalendarTimelineSearchResult(target);
       target.addClass("is-new-record-highlight");
       window.setTimeout(() => {
         if (target.isConnected) target.removeClass("is-new-record-highlight");
@@ -1486,7 +1531,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private findRenderedRowElement(path: string): HTMLElement | null {
     const candidates = Array.from(
-      this.containerEl.querySelectorAll<HTMLElement>("[data-note-database-row-path]")
+      this.containerEl.querySelectorAll<HTMLElement>("[data-note-database-row-path]:not(.db-timeline-window-jump)")
     );
     return candidates.find((candidate) => candidate.dataset.noteDatabaseRowPath === path) || null;
   }
@@ -1516,6 +1561,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       ? baseDbConfig
       : { ...baseDbConfig, views: baseDbConfig.views.map((view, idx) => (idx === this.currentViewIndex ? config : view)) };
     this.toolbarRenderer.render(this.containerEl, [{ config: dbConfig, sourcePath: this.currentSourcePath }], 0, this.currentViewIndex, this.vs(config), {
+      getSettingsFolding: this.getSettingsFolding,
       selectDatabase: () => undefined,
       selectViewInView: (_dbIndex: number, viewIndex: number) => {
         if (!this.currentDbConfig || viewIndex === this.currentViewIndex) return;
@@ -1638,6 +1684,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(config, anchorEl),
       toggleCalendarOptions: (containerEl, anchor, cfg) => {
         this.calendarToolbarRenderer.togglePopover(containerEl, anchor, cfg, {
+          getSettingsFolding: this.getSettingsFolding,
           database: this.currentDbConfig,
           onChange: () => {
             this.persistEmbeddedConfigLocally(cfg);
@@ -2044,6 +2091,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
 
   private renderViewConfigPanel(config: ViewConfig): void {
     this.viewConfigPanelRenderer.render(this.containerEl, this.showViewConfigPanel, config, {
+      settingsFolding: this.getSettingsFolding(),
       app: this.app,
       database: this.currentDbConfig,
       isDatabaseReadOnly: true,
@@ -2095,8 +2143,9 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     const state = this.vs(config);
     let changed = false;
     for (const rule of rules) {
-      if (state.filters.some((existing) => filtersEqual(existing, rule))) continue;
-      state.filters.push(rule);
+      const next: FilterRule = { ...rule, comparison: rule.comparison ?? "typed" };
+      if (state.filters.some((existing) => filtersEqual(existing, next))) continue;
+      state.filters.push(next);
       changed = true;
     }
     if (!changed) return;
@@ -2115,6 +2164,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     this.closePopovers();
     const activeAnchor = this.containerEl.querySelector<HTMLElement>(".db-chart-options-toolbar-btn") || anchorEl;
     this.chartToolbarRenderer.togglePopover(this.containerEl, activeAnchor, config, {
+      getSettingsFolding: this.getSettingsFolding,
       onChange: () => {
         this.persistEmbeddedConfigLocally(config);
         this.renderChartOnly(config);
@@ -2860,6 +2910,7 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       new Notice(t("timeline.dayRequiresDateTime"));
       return false;
     }
+    this.calendarTimelineRenderer.preserveTimelineScalePosition(config, scale);
     config.timelineScale = scale;
     this.persistEmbeddedConfigLocally(config);
     this.renderResults(config);
@@ -3065,10 +3116,10 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     let order: string[];
     switch (mode) {
       case "number-asc":
-        order = [...keys].sort((a, b) => this.toNumericGroupValue(a) - this.toNumericGroupValue(b) || a.localeCompare(b));
+        order = [...keys].sort((a, b) => numericGroupSortValue(a) - numericGroupSortValue(b) || a.localeCompare(b));
         break;
       case "number-desc":
-        order = [...keys].sort((a, b) => this.toNumericGroupValue(b) - this.toNumericGroupValue(a) || a.localeCompare(b));
+        order = [...keys].sort((a, b) => numericGroupSortValue(b) - numericGroupSortValue(a) || a.localeCompare(b));
         break;
       case "date-asc":
         order = [...keys].sort((a, b) => this.toDateGroupValue(a) - this.toDateGroupValue(b) || a.localeCompare(b));
@@ -3107,11 +3158,6 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
     return config.viewType === "board"
       ? config.boardGroupField || this.vs(config).groupByField || this.getDefaultBoardField(config)
       : this.vs(config).groupByField;
-  }
-
-  private toNumericGroupValue(value: string): number {
-    const n = Number(String(value).replace(/[^0-9.-]/g, ""));
-    return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
   }
 
   private toDateGroupValue(value: string): number {
@@ -3256,6 +3302,13 @@ export class EmbeddedDatabaseRenderer extends MarkdownRenderChild {
       const entry = this.dataSource.getViewDefFiles().find(({ file }) => file.path === this.currentSourcePath);
       const view = entry?.config.views.find((candidate) => candidate.id === this.config?.id);
       if (entry && view) {
+        const filterState = (views: ViewConfig[]) => views.map(({ id, filters, statusFilter, viewStates }) =>
+          ({ id, filters, statusFilter, viewStates }));
+        if (this.currentDbConfig &&
+            !configsSemanticEqual(filterState(this.currentDbConfig.views), filterState(entry.config.views))) {
+          this.stateStore.reloadDatabase(0, entry.config.views);
+          this.state = undefined;
+        }
         this.currentDbConfig = this.cloneDatabaseConfig(entry.config);
         this.config = this.cloneConfig(view);
         this.pendingDatabaseOverride = undefined;

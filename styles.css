@@ -186,23 +186,63 @@
 
 /* ── 全局焦点和无障碍 ── */
 
-.note-database-container button:focus-visible,
-.note-database-container input:focus-visible,
-.note-database-container select:focus-visible,
-.note-database-container textarea:focus-visible,
-.note-database-container [tabindex]:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
+/* Shared control focus, including plugin portals and the chrome of plugin-owned modals.
+ * Keep independent state outlines (selection, clipboard, drag targets, new records). */
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-form,
+  .modal:has(> :where(.note-database-modal, .note-database-changelog), > .modal-content > .db-add-database-header),
+  .db-dropdown-popover, .db-cell-edit-popover, .db-cell-option-popover, .db-relation-popover,
+  .db-icon-picker-popover, .db-color-picker-popup, .db-record-detail-panel, .db-calendar-search-results-popover,
+  .db-mobile-column-width-panel, .db-return-to-view, .db-ri-workspace-return)
+  :focus:not(:where(.db-icon-color.is-active, .db-cell-cut-source, .is-new-record-highlight,
+    .is-new-column-highlight, .is-drop-target, .is-resize-target)),
+:is(.db-embed-height-grip, .note-database-ribbon-action):focus {
+  --input-shadow-active: none;
+  outline: none !important;
 }
 
-.note-database-container *:focus {
-  outline: none;
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-form,
+  .modal:has(> :where(.note-database-modal, .note-database-changelog), > .modal-content > .db-add-database-header),
+  .db-dropdown-popover, .db-cell-edit-popover, .db-cell-option-popover, .db-relation-popover,
+  .db-icon-picker-popover, .db-color-picker-popup, .db-record-detail-panel, .db-calendar-search-results-popover,
+  .db-mobile-column-width-panel, .db-return-to-view, .db-ri-workspace-return)
+  :where(button, select, summary, a[href], input[type="checkbox"], input[type="radio"], input[type="range"],
+    [role="button"], [role="link"], [role="switch"], [role="slider"], [role="tab"], .checkbox-container,
+    .modal-close-button, [data-note-database-row-path]:not(tr)):not(:where(.is-new-record-highlight,
+    .is-new-column-highlight, .is-drop-target, .is-resize-target)):focus-visible,
+:is(.db-embed-height-grip, .note-database-ribbon-action):focus-visible {
+  /* A solid inset tint, not a perimeter: preserve the control's actual fill, icon and borders. */
+  box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--text-normal) 15%, transparent),
+    var(--db-control-state-shadow, 0 0 0 0 transparent) !important;
 }
 
-.note-database-container *:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
-  border-radius: 3px;
+/* Shared text-entry focus. Include plugin portals that are mounted outside the main view. */
+:is(.note-database-container, .note-database-modal, .note-database-settings, .db-form,
+  .db-dropdown-popover, .db-cell-edit-popover, .db-cell-option-popover, .db-relation-popover, .db-starter-preview)
+:is(textarea, input:where(:not([type]), [type="text"], [type="search"], [type="number"], [type="url"],
+  [type="email"], [type="tel"], [type="password"], [type="date"], [type="datetime-local"],
+  [type="time"], [type="month"], [type="week"])):focus {
+  /* Also replace the focus glow/outline from Obsidian or the active theme. */
+  --background-modifier-border-focus: var(--background-modifier-border);
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: var(--db-editor-focus-background, var(--background-modifier-hover)) !important;
+}
+
+/* Windows High Contrast suppresses box-shadow. Use its semantic selection colors
+ * there so keyboard navigation remains visible without bringing back a perimeter. */
+@media (forced-colors: active) {
+  :is(.note-database-container, .note-database-modal, .note-database-settings, .db-form,
+    .modal:has(> :where(.note-database-modal, .note-database-changelog), > .modal-content > .db-add-database-header),
+    .db-dropdown-popover, .db-cell-edit-popover, .db-cell-option-popover, .db-relation-popover,
+    .db-icon-picker-popover, .db-color-picker-popup, .db-record-detail-panel, .db-calendar-search-results-popover,
+    .db-mobile-column-width-panel, .db-return-to-view, .db-ri-workspace-return, .db-starter-preview)
+    :is(button, select, summary, a:where([href]), textarea, input, :where([role="button"], [role="link"], [role="switch"],
+      [role="slider"], [role="tab"], .checkbox-container, .modal-close-button, [data-note-database-row-path]:not(tr))):focus-visible,
+  :is(.db-embed-height-grip, .note-database-ribbon-action):focus-visible {
+    forced-color-adjust: none;
+    background-color: Highlight !important;
+    color: HighlightText !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1527,7 +1567,7 @@
 }
 
 
-.note-database-container .db-toggle-switch {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
@@ -1544,7 +1584,7 @@
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.note-database-container .db-toggle-switch::before {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch::before {
   content: "";
   position: absolute;
   top: 2px;
@@ -1557,23 +1597,23 @@
   transition: transform 0.15s ease;
 }
 
-.note-database-container .db-toggle-switch:checked {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch:checked {
   border-color: var(--interactive-accent);
   background: var(--interactive-accent);
   background-image: none;
 }
 
-.note-database-container .db-toggle-switch:checked::before {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch:checked::before {
   transform: translateX(16px);
 }
 
-.note-database-container .db-toggle-switch::after,
-.note-database-container .db-toggle-switch:checked::after {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch::after,
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch:checked::after {
   content: none;
   display: none;
 }
 
-.note-database-container .db-toggle-switch:disabled {
+:is(.note-database-container, .db-settings-folding-editor) .db-toggle-switch:disabled {
   cursor: default;
   opacity: 0.5;
 }
@@ -2144,11 +2184,6 @@
   font: inherit;
 }
 
-:is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-search input:focus {
-  border-color: var(--interactive-accent);
-  outline: none;
-}
-
 :is(.note-database-container, .note-database-modal, .note-database-settings, .db-dropdown-popover) .db-dropdown-option + .db-dropdown-section-title {
   margin-top: 8px;
 }
@@ -2308,7 +2343,9 @@
   white-space: nowrap;
 }
 
-.note-database-modal .db-dropdown-field {
+/* The defaults editor hosts actual toolbar panels; their dropdowns use the container skin.
+ * The modal's own dropdowns (including the compact view picker) keep the modal skin. */
+.note-database-modal .db-dropdown-field:not(:where(.db-creation-defaults-body *)) {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
@@ -2329,7 +2366,7 @@
   cursor: pointer;
 }
 
-.note-database-modal .db-dropdown-field:hover {
+.note-database-modal .db-dropdown-field:not(:where(.db-creation-defaults-body *)):hover {
   border-color: var(--background-modifier-border-hover);
 }
 
@@ -2358,7 +2395,7 @@
   height: 14px;
 }
 
-.note-database-modal .db-dropdown-field-text {
+.note-database-modal .db-dropdown-field-text:not(:where(.db-creation-defaults-body *)) {
   display: flex;
   align-items: baseline;
   min-width: 0;
@@ -2366,7 +2403,7 @@
   gap: 0;
 }
 
-.note-database-modal .db-dropdown-field-value {
+.note-database-modal .db-dropdown-field-value:not(:where(.db-creation-defaults-body *)) {
   min-width: 0;
   overflow: hidden;
   color: var(--text-normal);
@@ -2376,7 +2413,7 @@
   white-space: nowrap;
 }
 
-.note-database-modal .db-dropdown-field-disabled-reason {
+.note-database-modal .db-dropdown-field-disabled-reason:not(:where(.db-creation-defaults-body *)) {
   min-width: 0;
   overflow: hidden;
   color: var(--text-faint);
@@ -2651,10 +2688,9 @@
   transition: opacity 120ms ease, width 120ms ease;
 }
 
-.note-database-container .db-search-input:focus {
-  background: transparent;
-  box-shadow: none;
-  outline: none;
+.note-database-container .db-search-input { --db-editor-focus-background: transparent; }
+.note-database-container .db-search-control:has(.db-search-input:focus) {
+  background-color: var(--background-modifier-hover);
 }
 
 .note-database-container .db-search-control .db-search-input:hover {
@@ -3475,6 +3511,38 @@
   overscroll-behavior: contain;
 }
 
+.note-database-container .db-more-display-options {
+  margin-block: 4px;
+}
+
+.note-database-container .db-more-display-options > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 6px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  border-radius: var(--db-radius-sm);
+}
+
+.note-database-container .db-more-display-options > summary::-webkit-details-marker { display: none; }
+.note-database-container .db-more-display-options > summary:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+
+.note-database-container .db-more-display-chevron { display: inline-flex; flex: none; }
+.note-database-container .db-more-display-chevron svg { width: 12px; height: 12px; }
+.note-database-container .db-more-display-options[open] .db-more-display-chevron { transform: rotate(90deg); }
+.note-database-container .db-more-display-content { padding-inline-start: 8px; }
+.note-database-container .db-more-display-options:not([open]) > .db-more-display-content { display: none; }
+
+body.is-mobile .note-database-container .db-more-display-options > summary { min-height: 44px; }
+
 .note-database-container .db-chart-options-close {
   width: 24px;
   height: 24px;
@@ -3785,7 +3853,8 @@
 
 .note-database-container .db-chart-reference-line-swatch:hover,
 .note-database-container .db-chart-reference-line-swatch.is-selected {
-  box-shadow: 0 0 0 2px var(--interactive-accent);
+  --db-control-state-shadow: 0 0 0 2px var(--interactive-accent);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 .note-database-container .db-chart-reference-line-remove {
@@ -4488,9 +4557,9 @@
   cursor: pointer;
 }
 .db-column-display-style-popover .db-displayopt-swatch.is-selected {
-  box-shadow:
-    0 0 0 1px var(--background-primary),
+  --db-control-state-shadow: 0 0 0 1px var(--background-primary),
     0 0 0 3px #000;
+  box-shadow: var(--db-control-state-shadow);
 }
 .db-column-display-style-popover .db-displayopt-swatch.db-option-color-gray { background: #787774; }
 .db-column-display-style-popover .db-displayopt-swatch.db-option-color-brown { background: #8f5d45; }
@@ -4670,7 +4739,8 @@
 .note-database-container table.db-table thead th.db-frozen-cell {
   position: sticky;
   background: var(--background-primary);
-  background-clip: padding-box;
+  /* The translucent grid lines need backing from the frozen cell too. */
+  background-clip: border-box;
 }
 
 .note-database-container table.db-table tbody td.db-frozen-cell {
@@ -4684,6 +4754,18 @@
 
 .note-database-container .db-table .db-frozen-boundary {
   box-shadow: inset -2px 0 0 color-mix(in srgb, var(--background-modifier-border) 85%, transparent);
+}
+
+/* A scrolling data cell paints its tint over the row tint. Match that
+   composition on an opaque base in gutters and sticky cells. */
+.note-database-container .db-table tr.db-conditional-format {
+  --db-conditional-row-tint: var(--db-conditional-format-bg);
+}
+.note-database-container .db-table :is(tr.db-conditional-format > td, td.db-conditional-format):is(.db-frozen-cell, .db-record-icon-col):where(:not(.db-cell-range-selected, .db-cell-focus, .is-fill-source, .is-fill-target)) {
+  background-color: var(--background-primary);
+  background-image:
+    linear-gradient(var(--db-conditional-format-bg), var(--db-conditional-format-bg)),
+    linear-gradient(var(--db-conditional-row-tint, transparent), var(--db-conditional-row-tint, transparent));
 }
 
 /* 选择列内部容器：手柄（左）走文档流垂直居中；checkbox 用绝对定位钉在距右
@@ -4702,13 +4784,14 @@
 }
 
 .note-database-container .db-table .db-select-col .db-select-inner input[type="checkbox"] {
+  /* Obsidian sizes the native checkmark from this token, not from the input's width. */
+  --checkbox-size: 16px;
   position: absolute;
   right: 6px;
   top: 50%;
   transform: translateY(-50%);
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
+  width: var(--checkbox-size);
+  height: var(--checkbox-size);
   margin: 0;
 }
 
@@ -4921,7 +5004,7 @@
 /* Cell selection highlight — covers both Dashboard and embedded tables */
 .note-database-container .db-table td.db-cell-range-selected,
 .note-database-container .db-grouped-table .db-table td.db-cell-range-selected {
-  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  background: color-mix(in srgb, var(--interactive-accent) var(--db-cell-selection-tint, 12%), var(--background-primary));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 58%, transparent);
   user-select: none;
   -webkit-user-select: none;
@@ -4932,19 +5015,14 @@
 }
 
 .note-database-container .db-table td.db-cell-focus {
-  box-shadow: inset 0 0 0 2px var(--interactive-accent);
-  background: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary));
+  /* Stronger fill than the selected range, without a focus perimeter. */
+  --db-cell-selection-tint: 30%;
+  background: color-mix(in srgb, var(--interactive-accent) var(--db-cell-selection-tint), var(--background-primary));
 }
 
 .note-database-container .db-table td.db-cell-cut-source {
   outline: 2px dashed var(--interactive-accent);
   outline-offset: -2px;
-}
-
-.note-database-container .db-table td[tabindex]:focus,
-.note-database-container .db-table td[tabindex]:focus-visible {
-  outline: none;
-  outline-offset: 0;
 }
 
 /* Embedded view: hide edit-only buttons in selection status bar */
@@ -5421,11 +5499,8 @@
   box-shadow: none;
 }
 
-.note-database-container .db-option-rename-input:hover,
-.note-database-container .db-option-rename-input:focus-visible {
+.note-database-container .db-option-rename-input:hover {
   background: var(--background-modifier-hover);
-  box-shadow: none;
-  outline: none;
 }
 
 .note-database-container .db-option-check {
@@ -5452,16 +5527,6 @@
   text-align: left;
   font-size: 14px;
   color: var(--text-normal);
-}
-
-.note-database-container .db-cell-option-add input:hover,
-.note-database-container .db-cell-option-add input:focus,
-.note-database-container .db-cell-option-add input:focus-visible {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  outline: none;
-  border-bottom: 1px solid var(--background-modifier-border);  /* 默认灰色细线 */
 }
 
 /* placeholder 样式弱化 */
@@ -5526,7 +5591,8 @@
 }
 
 .db-color-picker-popup .db-color-picker-swatch.is-selected {
-  box-shadow: 0 0 0 2px var(--interactive-accent);
+  --db-control-state-shadow: 0 0 0 2px var(--interactive-accent);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 .db-option-color-gray {
@@ -5738,15 +5804,6 @@
   font-size: 14px;
   outline: none;
   padding: 8px 10px;
-}
-
-.note-database-container .db-cell-line-input:focus,
-.note-database-container .db-cell-line-input:focus-visible,
-.db-cell-line-input:focus,
-.db-cell-line-input:focus-visible {
-  border: 0;
-  box-shadow: none;
-  outline: none;
 }
 
 .db-cell-edit-popover.is-mobile {
@@ -6742,12 +6799,6 @@
   box-shadow: none;
 }
 
-.note-database-modal .base-import-toolbar .base-import-search:focus-visible {
-  border-color: var(--interactive-accent);
-  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-  outline-offset: 1px;
-}
-
 .note-database-modal .base-import-toolbar .base-import-sort-dropdown {
   flex: 0 1 160px;
   width: 160px;
@@ -6841,12 +6892,6 @@
   border-color: var(--background-modifier-border-hover);
 }
 
-.note-database-modal .base-import-table td:nth-child(2) input:focus {
-  border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-  outline: none;
-}
-
 /* 6. 类型选择器：图标 */
 .note-database-modal .base-import-type-cell {
   vertical-align: middle;
@@ -6877,11 +6922,6 @@
   border-color: var(--background-modifier-border-hover);
 }
 
-.note-database-modal .base-import-type-cell .db-base-import-type-dropdown:focus {
-  border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
-  outline: none;
-}
 
 /* 7. 复选框列：居中 + 统一 accent 色 */
 .note-database-modal .base-import-check-cell {
@@ -6924,9 +6964,6 @@
   background-size: 14px 14px;
 }
 
-.note-database-modal .db-modal-checkbox:focus-visible {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
-}
 
 .note-database-modal .db-modal-checkbox:checked::after,
 .note-database-modal .db-modal-checkbox:indeterminate::after {
@@ -7584,6 +7621,18 @@
   min-width: 0;
 }
 
+/* Calendar/timeline detail values share the right edge; table checkboxes stay centered. */
+.note-database-container .db-record-detail-field > .db-board-card-value.db-checkbox-cell {
+  display: flex;
+  align-self: center;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.note-database-container .db-record-detail-field > .db-board-card-value.db-checkbox-cell > input[type="checkbox"] {
+  margin: 0;
+}
+
 /* 非 wrap：值单行截断（对齐看板卡片）；wrap 由 db-board-card-field-wrap 覆盖为正常换行 */
 .note-database-container .db-record-detail-field:not(.db-board-card-field-wrap) .db-board-card-value:not(.has-badges):not(.db-checkbox-cell) {
   overflow: hidden;
@@ -7697,10 +7746,6 @@ body.is-phone .note-database-container .db-record-detail-panel {
   cursor: pointer;
 }
 
-.note-database-container .db-board-add-group-color-preview:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
-}
 
 .note-database-container .db-board-add-group-confirm svg,
 .note-database-container .db-board-add-group-cancel svg {
@@ -9796,7 +9841,8 @@ body.is-phone .note-database-container .db-record-detail-panel {
 .note-database-container .db-column-wrap-toggle.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-accent);
-  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+  --db-control-state-shadow: inset 0 0 0 1px var(--interactive-accent);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 /* ============================================================================
@@ -10134,7 +10180,12 @@ body.is-phone .note-database-container .db-record-detail-panel {
   line-height: inherit;
 }
 
+.note-database-modal .db-formula-code-wrap:focus-within {
+  background-color: var(--background-modifier-hover);
+}
+
 .note-database-modal .db-formula-textarea {
+  --db-editor-focus-background: transparent;
   z-index: 1;
   color: transparent;
   caret-color: var(--text-normal);
@@ -11010,7 +11061,8 @@ body.is-phone .note-database-container .db-record-detail-panel {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   font-weight: 600;
-  box-shadow: 0 0 0 1px var(--interactive-accent), 0 2px 8px rgba(0,0,0,0.12);
+  --db-control-state-shadow: 0 0 0 1px var(--interactive-accent), 0 2px 8px rgba(0,0,0,0.12);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 .note-database-modal .db-status-preset-button.is-active:hover {
@@ -11109,14 +11161,6 @@ body.is-phone .note-database-container .db-record-detail-panel {
   transition: border-color 120ms ease;
 }
 
-.note-database-modal .db-status-option-input input:focus {
-  border-bottom-color: var(--interactive-accent);
-  box-shadow: none;
-  outline: none;
-  border-radius: 0;
-  border: 0;
-}
-
 .note-database-modal .db-status-option-input input::placeholder {
   color: var(--text-faint);
 }
@@ -11149,7 +11193,8 @@ body.is-phone .note-database-container .db-record-detail-panel {
 /* 选中态：内嵌白圈，不外扩 */
 .note-database-modal .db-status-color-button.is-selected {
   border-color: var(--text-normal);
-  box-shadow: inset 0 0 0 2px var(--background-primary);
+  --db-control-state-shadow: inset 0 0 0 2px var(--background-primary);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 /* ── 删除按钮 ── */
@@ -11523,12 +11568,6 @@ body.is-phone .note-database-container .db-record-detail-panel {
   box-shadow: none;
 }
 
-.note-database-modal .db-formula-copy-ai-prompt:focus-visible,
-.note-database-modal .db-formula-result-type .db-formula-result-type-dropdown:focus-visible,
-.note-database-modal .db-formula-insert-example:focus-visible {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 28%, transparent);
-  outline: none;
-}
 
 .note-database-modal .db-formula-help-search {
   width: 100%;
@@ -12341,10 +12380,6 @@ body.is-phone .note-database-container .db-record-detail-panel {
   background: var(--interactive-accent);
 }
 
-.db-embed-height-grip:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: -2px;
-}
 
 .note-database-embed-headerless.note-database-container {
   --db-table-header-top: 0px;
@@ -12498,7 +12533,7 @@ body.is-phone .note-database-container .db-record-detail-panel {
 }
 
 .note-database-embed.note-database-container table.db-table td.db-cell-range-selected {
-  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  background: color-mix(in srgb, var(--interactive-accent) var(--db-cell-selection-tint, 12%), var(--background-primary));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 58%, transparent);
   user-select: none;
   -webkit-user-select: none;
@@ -13079,7 +13114,8 @@ body.is-phone .note-database-container .db-record-detail-panel {
 .note-database-container .db-timeline-scale-button.is-active {
   background: var(--background-primary);
   color: var(--text-normal);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  --db-control-state-shadow: 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  box-shadow: var(--db-control-state-shadow);
 }
 
 .note-database-container .db-calendar-scale-button:hover:not(.is-active),
@@ -14443,6 +14479,23 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   content: none;
 }
 
+/* The scroll region itself is a keyboard stop; tint its ruler without adding a ring. */
+.note-database-container .db-timeline-scroll:focus-visible .db-timeline-axis {
+  box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--text-normal) 15%, transparent);
+}
+
+@media (forced-colors: active) {
+  .note-database-container .db-timeline-scroll:focus-visible .db-timeline-axis {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    color: HighlightText;
+  }
+
+  .note-database-container .db-timeline-scroll:focus-visible .db-timeline-axis :is(.db-timeline-band-item, .db-timeline-tick *) {
+    color: HighlightText !important;
+  }
+}
+
 .note-database-container .db-timeline-axis-range {
   display: flex;
   grid-column: 1 / -1;
@@ -15600,6 +15653,19 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   gap: 8px;
 }
 
+/* Native switch rows can keep two columns at phone width. Other controls
+   (folders, menus, groups of buttons) still get a full-width second row. */
+.is-phone .note-database-settings .setting-group-body .setting-item:has(> .setting-item-control > .checkbox-container:only-child) {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 12px;
+}
+.is-phone .note-database-settings .setting-group-body .setting-item:has(> .setting-item-control > .checkbox-container:only-child) > .setting-item-control {
+  width: auto;
+  justify-self: end;
+  justify-content: flex-end;
+}
+
 .is-phone .note-database-settings .setting-group-body .setting-item .setting-item-control > button {
   flex: 1 1 140px;
   min-width: 0;
@@ -15612,8 +15678,17 @@ body.is-mobile .note-database-container .db-calendar-month-time {
   max-width: 100%;
 }
 
+.is-phone .note-database-settings .setting-group-body .setting-item .setting-item-control > .db-settings-dropdown {
+  align-content: center;
+  align-items: center;
+  height: auto;
+  min-height: 44px;
+  padding-block: 0;
+  line-height: 1.25;
+}
 .is-phone .note-database-settings .db-settings-dropdown .db-dropdown-field-text {
   min-width: 0;
+  align-items: center;
 }
 
 .is-phone .note-database-settings .db-settings-dropdown .db-dropdown-field-value {
@@ -16309,13 +16384,8 @@ img.db-text-md-image {
   font-size: var(--font-ui-small);
 }
 
-.db-relation-popover .db-cell-option-search:hover,
-.db-relation-popover .db-cell-option-search:focus,
-.db-relation-popover .db-cell-option-search:focus-visible {
-  border: 1px solid var(--interactive-accent);
-  background: var(--background-secondary);
-  box-shadow: none;
-  outline: none;
+.db-relation-popover .db-cell-option-search:hover {
+  border-color: var(--background-modifier-border-hover);
 }
 
 .db-relation-option-list {
@@ -16686,7 +16756,6 @@ img.db-text-md-image {
 .modal.db-quick-form-modal {
   --db-form-control-background: var(--background-primary);
   --db-form-control-border: var(--background-modifier-border);
-  --db-form-control-focus-border: var(--background-modifier-border-hover);
   width: min(720px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: min(820px, calc(100vh - 32px));
@@ -16982,20 +17051,6 @@ img.db-text-md-image {
   resize: vertical;
 }
 
-/* 对齐搜索栏的无外圈高亮语义：聚焦只显示光标，不加边框/光晕（错误红边除外）。 */
-.note-database-container .db-form-input:focus,
-.note-database-modal .db-form-input:focus,
-.db-form-input:focus,
-.db-form-input:focus-visible,
-.note-database-container .db-form-textarea:focus,
-.db-form-textarea:focus,
-.db-form-textarea:focus-visible {
-  border-color: var(--db-form-control-focus-border, transparent) !important;
-  box-shadow: none !important;
-  outline: none !important;
-  background: var(--db-form-control-background, var(--background-secondary)) !important;
-}
-
 .db-form-locked-value {
   padding: 8px 10px;
   border-radius: var(--db-radius-lg);
@@ -17082,10 +17137,6 @@ img.db-text-md-image {
   background: transparent;
 }
 
-.db-form-rating-star:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
-}
 
 .db-form-rating-clear {
   display: inline-flex;
@@ -17169,11 +17220,6 @@ img.db-text-md-image {
   stroke: var(--db-number-color, var(--text-accent));
 }
 
-.db-form-progress-track:focus-visible,
-.db-form-progress-ring:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 3px;
-}
 
 .db-form .db-form-progress-number {
   flex: 0 0 64px;
@@ -17259,10 +17305,6 @@ img.db-text-md-image {
   color: var(--text-normal);
   font-size: 13px;
   outline: none;
-}
-
-.db-form-multiselect-search:focus {
-  border-color: var(--interactive-accent);
 }
 
 .db-form-multiselect-list {
@@ -17609,8 +17651,8 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 }
 
 .db-form .db-form-text-preview:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
+  outline: none;
+  background-color: var(--background-modifier-hover);
 }
 
 /* 覆盖数据库标题输入框的更高优先级规则，避免编辑时跳回大标题字号。 */
@@ -17649,10 +17691,6 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
   box-shadow: none;
 }
 
-.db-starter-picker .db-dropdown-field:focus-visible {
-  outline: 1px solid var(--text-accent);
-  outline-offset: -2px;
-}
 
 .db-starter-dropdown.db-dropdown-popover {
   width: min(360px, calc(100vw - 24px)) !important;
@@ -17823,7 +17861,6 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 .note-database-container .db-record-button.is-primary:not(:disabled):hover { background: var(--interactive-accent); color: var(--text-on-accent); border-color: transparent; }
 .note-database-container .db-record-button.is-plain { background: transparent; border-color: transparent; }
 .note-database-container .db-record-button.is-plain:not(:disabled):hover { background: var(--background-modifier-hover); border-color: transparent; }
-.note-database-container .db-record-button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .note-database-container .db-record-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .note-database-container .db-record-button .db-record-button-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .note-database-container .db-record-button-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 12px; width: 12px; height: 12px; }
@@ -17872,13 +17909,6 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 }
 .db-button-modal .db-modal-row .db-modal-input:hover,
 .db-button-modal .db-modal-row .db-modal-dropdown:hover { border-color: var(--background-modifier-border-hover); }
-.db-button-modal .db-modal-row .db-modal-input:focus,
-.db-button-modal button:focus-visible,
-.db-button-modal .checkbox-container:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
-  box-shadow: none;
-}
 .db-button-modal .db-dropdown-field-value { font-size: 14px; }
 .db-button-modal textarea.db-modal-input { min-height: 84px; resize: vertical; line-height: 1.6; }
 .db-button-modal .db-button-toggle-row { min-height: 30px; flex-wrap: nowrap; }
@@ -18018,12 +18048,12 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 .db-button-modal .db-button-composition { position: relative; flex: 1; min-width: 0; }
 .db-button-modal .db-button-composition-surface { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 40px; padding: 5px 36px 5px 7px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--db-button-field-background); }
 .db-button-modal .db-button-composition-surface:hover { border-color: var(--background-modifier-border-hover); }
-.db-button-modal .db-button-composition-surface:focus-within { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.db-button-modal .db-button-composition-surface:has(.db-button-composition-text:focus) { background-color: var(--background-modifier-hover); }
 .db-button-modal .db-button-composition-surface.is-multiline { display: block; min-height: 76px; }
 .db-button-modal .db-button-composition-line { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px; min-height: 28px; }
 .db-button-modal .db-button-composition-text { flex: 0 1 auto; min-width: 2px; max-width: 100%; height: 28px; min-height: 28px; padding: 3px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font: inherit; line-height: 22px; resize: none; }
 .db-button-modal .db-button-composition-text:only-child { flex: 1; }
-.db-button-modal .db-button-composition-text:focus { outline: none; box-shadow: none; }
+.db-button-modal .db-button-composition-text { --db-editor-focus-background: transparent; }
 .db-button-modal .db-button-value-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 4px 2px 8px; min-height: 28px; border-radius: 6px; color: var(--text-accent); background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary)); font-size: 12px; }
 .db-button-modal .db-button-value-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-button-modal .db-button-value-chip > button { flex: 0 0 auto; width: 22px; height: 24px; padding: 3px; border: 0; background: transparent; box-shadow: none; color: inherit; }
@@ -18136,7 +18166,6 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 .db-button-modal button.db-button-card-disclosure { width: 20px; height: 28px; margin-left: -4px; }
 .db-button-modal .db-button-card-disclosure svg { width: 12px; height: 12px; }
 .db-button-modal .db-button-action-title.is-collapsible { cursor: pointer; border-radius: 4px; }
-.db-button-modal .db-button-action-title.is-collapsible:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .db-button-modal .db-button-action.is-collapsed { padding-block: 8px; min-height: 46px; }
 .db-button-modal .db-button-action.is-collapsed > :not(.db-button-action-heading) { display: none; }
 .db-button-modal .db-button-action.is-collapsed > .db-button-action-heading { margin-bottom: 0; }
@@ -18149,3 +18178,686 @@ body.is-mobile .modal.db-quick-form-modal .modal-content.db-quick-form-content {
 
 .db-menu-button-icon { display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
 .db-menu-button-icon svg { width: 14px; height: 14px; }
+
+/* Record reminders reuse modal, setting and dropdown controls. */
+.modal.db-reminder-modal { width: min(620px, calc(100vw - 32px)); }
+.db-reminder-rules { display: flex; flex-direction: column; gap: 12px; margin-block: 16px; }
+.db-reminder-rule { padding: 14px; margin-block-end: 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-secondary); }
+.db-reminder-rule .db-dropdown-field { margin-block: 10px; }
+.db-reminder-rule input { background: var(--background-primary); border: 1px solid var(--background-modifier-border); }
+.db-reminder-rule .setting-item { padding-block: 8px; }
+.db-reminder-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 10px; }
+.db-reminder-open { text-align: start; white-space: normal; height: auto; max-width: 100%; }
+/* Respect Obsidian's Notice lifecycle, but size this message rather than all notices. */
+.notice:has(> .db-reminder-notice-label),
+.notice .notice-message:has(> .db-reminder-notice-label) {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.notice .db-reminder-notice-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.notice .db-reminder-notice-action {
+  flex: none;
+  max-width: 100%;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+.is-phone .notice:has(.db-reminder-notice-label) {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(300px, calc(100vw - 96px));
+  margin-inline: auto;
+  padding: 4px 8px 4px 12px;
+  border-radius: var(--radius-m, 12px);
+}
+.is-phone .notice .db-reminder-notice-label { font-size: var(--font-ui-small, 13px); }
+.is-phone .notice button.db-reminder-notice-action {
+  height: auto;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: var(--font-ui-small, 13px);
+}
+
+.note-database-container.db-view-timeline.db-timeline-continuous { touch-action: pan-x pan-y; }
+.note-database-container .db-timeline.is-continuous .db-timeline-scroll {
+  overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; touch-action: pan-x pan-y;
+  overflow-anchor: none;
+  scroll-behavior: auto;
+}
+.note-database-container .db-timeline.is-continuous .db-timeline-axis { cursor: grab; user-select: none; }
+.note-database-container .db-timeline.is-continuous .db-timeline-axis:active { cursor: grabbing; }
+.note-database-container .db-timeline.is-continuous .db-timeline-group-header-label { position: sticky; left: 0; background: var(--background-primary); }
+.note-database-container .db-timeline.is-continuous .db-timeline-group > .db-group-expand-controls {
+  position: sticky;
+  left: 0;
+  width: max-content;
+  max-width: var(--db-timeline-viewport-width, 100%);
+  box-sizing: border-box;
+  flex-wrap: wrap;
+}
+
+
+.db-reminder-rule .setting-item-control .db-dropdown-field { width: min(260px, 42vw); margin: 0; }
+@media (max-width: 600px) { .db-reminder-rule .setting-item-control .db-dropdown-field { width: 100%; } }
+
+/* Keep the first visible ruler label inside the scroll clip without shifting its tick. */
+.note-database-container .db-timeline.is-continuous .db-timeline-tick-label {
+  transform: translateX(max(-50%, var(--db-timeline-leading-tick-shift, -50%)));
+}
+
+.note-database-container .db-timeline.is-continuous .db-timeline-event { overflow: visible; }
+.note-database-container .db-timeline.is-continuous .db-timeline-event-content {
+  position: sticky;
+  left: 8px;
+  max-width: min(100%, calc(var(--db-timeline-viewport-width, 700px) - 16px));
+  overflow: hidden;
+}
+.note-database-container .db-timeline.is-continuous .db-timeline-event-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-database-container .db-timeline.is-continuous .db-timeline-event:is(.is-clipped-start, .is-left-edge-jump) .db-timeline-event-content { left: 32px; }
+
+.note-database-container .db-timeline.is-continuous .db-timeline-event-title { flex: 0 0 auto; max-width: 100%; }
+.note-database-container .db-timeline.is-continuous .db-timeline-event-meta { flex: 0 1 auto; min-width: 0; }
+
+.note-database-container .db-timeline.is-continuous .db-timeline-event-content {
+  max-width: min(100%, calc(var(--db-timeline-viewport-width, 700px) - 16px), max(0px,
+    calc(var(--db-timeline-exact-width, 100%) - max(0px, var(--db-timeline-scroll-left, 0px) - var(--db-timeline-exact-offset, 0px)))));
+}
+/* Like the non-continuous axis, a fully visible short event can label the
+ * space beside its duration bar, without spilling past the viewport. */
+.note-database-container .db-timeline.is-continuous.is-scale-day .db-timeline-event.is-fully-in-view:not(.is-all-day) .db-timeline-event-content {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: max(0px, calc(var(--db-timeline-viewport-width, 700px) - max(0px,
+    calc(var(--db-timeline-exact-offset, 0px) - var(--db-timeline-scroll-left, 0px))) - 12px));
+}
+
+/* Put the idle New label at the visible edge, not the left edge of the render buffer.
+ * While a date is previewed, keep its text visible even in a partial edge column. */
+.note-database-container .db-timeline.is-continuous .db-timeline-create-content {
+  --db-timeline-create-view-left: var(--db-timeline-scroll-left, 0px);
+  --db-timeline-create-view-right: calc(var(--db-timeline-create-view-left) + var(--db-timeline-viewport-width, 100%));
+  --db-timeline-create-content-left: clamp(
+    var(--db-timeline-create-view-left),
+    var(--db-timeline-create-left, 0px),
+    max(var(--db-timeline-create-view-left), calc(var(--db-timeline-create-view-right) - var(--db-timeline-create-label-min-width)))
+  );
+  max-width: max(0px, calc(var(--db-timeline-create-view-right) - var(--db-timeline-create-content-left)));
+}
+.note-database-container .db-timeline.is-continuous .db-timeline-create-button:not(.is-previewing):not(:focus-visible) .db-timeline-create-content {
+  --db-timeline-create-content-left: var(--db-timeline-create-view-left);
+}
+
+.note-database-container .db-timeline.is-continuous :is(.db-timeline-window-jump, .db-timeline-event)[hidden] { display: none; }
+
+/* The inbox and rules editor share the same responsive modal width. */
+.modal:is(.db-reminder-inbox, .db-reminder-rules-editor) {
+  width: min(588px, calc(100vw - 32px));
+}
+@media (max-width: 600px) {
+  .modal:is(.db-reminder-inbox, .db-reminder-rules-editor) { width: min(390px, calc(100vw - 24px)); }
+}
+
+/* Reminder inbox: the list is quiet; only the independently opened event is a card. */
+.modal.db-reminder-inbox {
+  max-height: min(720px, calc(100dvh - 32px));
+  padding: 0; overflow: hidden; background: var(--background-primary);
+}
+.modal.db-reminder-inbox.db-ri-searchable { height: min(620px, calc(100dvh - 32px)); }
+.db-reminder-inbox .db-reminder-inbox-content {
+  display: flex; flex-direction: column; padding: 0; min-height: 0; max-height: inherit; overflow: hidden;
+}
+.db-ri-searchable .db-reminder-inbox-content { height: 100%; }
+.db-ri-head { flex: none; padding: 24px 28px 0; }
+.db-ri-title { display: flex; align-items: center; gap: 7px; margin: 0; font-size: var(--h3-size); }
+.db-ri-title > .db-modal-drag-grip { margin-inline-start: -4px; }
+.db-ri-count { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: 500; font-variant-numeric: tabular-nums; }
+.db-ri-body { padding: 18px 28px 22px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.db-ri-searchable .db-ri-body { flex: 1 1 auto; }
+.db-ri-search[hidden], .db-ri-feedback[hidden] { display: none; }
+.db-reminder-inbox .db-ri-search { width: 100%; min-height: 34px; margin-block-end: 16px; }
+.db-ri-list { container: db-ri-list / inline-size; }
+.db-ri-group + .db-ri-group { margin-block-start: 20px; }
+.db-ri-group > h4 {
+  display: flex; align-items: baseline; gap: 7px; margin: 0 0 4px;
+  color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: 600;
+}
+.db-ri-group > h4 > span { font-weight: 400; font-variant-numeric: tabular-nums; }
+.db-ri-group ul { padding: 0; margin: 0; list-style: none; }
+.db-ri-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0;
+  border-radius: var(--radius-s);
+}
+.db-ri-row + .db-ri-row { box-shadow: 0 -1px var(--background-modifier-border); }
+.db-ri-row:is(:hover, :focus-within) { background: var(--background-modifier-hover); }
+.db-ri-row button.db-ri-summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px;
+  min-width: 0; width: 100%; height: auto; min-height: 50px; padding: 7px 0 7px 6px;
+  border: 0; background: transparent; box-shadow: none; color: var(--text-normal);
+  text-align: start; white-space: normal; cursor: pointer;
+}
+.db-ri-labels { display: grid; min-width: 0; gap: 2px; }
+/* Separate UI metadata visually without adding punctuation to user-provided text. */
+.db-segmented-meta { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; }
+.db-segmented-meta > * + * {
+  margin-inline-start: 6px; padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--background-modifier-border);
+}
+.db-ri-labels :is(strong, .db-ri-source > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-ri-source > .db-ri-database { flex: 0 1 auto; }
+.db-ri-source > .db-ri-rule { flex: 0 0 auto; max-width: 60%; font-weight: 500; }
+.db-ri-labels .db-ri-path-hint, .db-ri-event .db-ri-path-hint { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.db-ri-labels strong { font-size: var(--font-ui-small); font-weight: 600; line-height: 1.35; }
+.db-ri-labels > span, .db-ri-due { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: 400; }
+.db-ri-due { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.db-ri-group.is-overdue .db-ri-due { color: var(--text-error); }
+.db-ri-actions { display: flex; align-items: center; padding-inline: 4px 2px; }
+.db-ri-actions button.db-ri-icon {
+  display: inline-grid; place-items: center; width: 28px; min-height: 28px; padding: 0; border: 0;
+  background: transparent; box-shadow: none; color: var(--text-muted); cursor: pointer;
+}
+.db-ri-actions button.db-ri-icon:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.db-ri-icon svg { display: block; width: 15px; height: 15px; }
+.db-ri-actions button.db-ri-inline {
+  display: none; align-items: center; justify-content: center; gap: 4px; padding: 0; width: 28px; min-height: 30px;
+  border: 0; border-radius: var(--radius-s, 6px); background: transparent; box-shadow: none;
+  color: var(--text-muted); font-size: var(--font-ui-smaller, 12px); white-space: nowrap; cursor: pointer;
+}
+.db-ri-actions button.db-ri-snooze { width: auto; padding-inline: 5px; font-variant-numeric: tabular-nums; }
+.db-ri-actions button.db-ri-inline:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.db-ri-inline svg { display: block; width: 14px; height: 14px; }
+@container db-ri-list (width >= 445px) {
+  .db-ri-actions { gap: 2px; }
+  .db-ri-actions button.db-ri-inline { display: inline-flex; }
+  .db-ri-actions button.db-ri-more { display: none; }
+}
+.db-ri-empty { padding: 22px 0 16px; text-align: center; }
+.db-ri-empty > span { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-m); background: var(--background-secondary); color: var(--text-muted); }
+.db-ri-empty > span svg { width: 20px; height: 20px; }
+.db-ri-empty h4 { margin: 8px 0 4px; }
+.db-ri-empty p { margin: 0; color: var(--text-muted); font-size: var(--font-ui-small); }
+.db-ri-feedback { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 6px; padding: 0 28px 16px; color: var(--text-muted); font-size: var(--font-ui-small); }
+.db-ri-feedback button { color: var(--text-accent); border: 0; background: transparent; box-shadow: none; }
+.db-reminder-rule.is-target { border-color: var(--interactive-accent); }
+.db-reminder-rule.is-target:focus { outline: none; }
+.db-reminder-rules-back { margin-inline-end: auto; }
+.db-ri-event-overlay { position: absolute; inset: 0; z-index: var(--layer-popover, 1000); }
+.modal-container:has(> .db-ri-event-overlay) .modal-close-button { opacity: 0; }
+.db-ri-event-host.note-database-container { position: absolute; inset: 0; overflow: visible; scrollbar-gutter: auto; padding: 0; pointer-events: none; }
+.db-ri-event-host .db-ri-event { pointer-events: auto; }
+.db-ri-event .db-record-detail-header { align-items: center; }
+.db-ri-event .db-record-detail-header > .db-record-icon { margin-inline-end: 2px; }
+.db-ri-event .db-board-card-value { text-align: end; overflow-wrap: anywhere; }
+.db-ri-event-controls { display: flex; gap: 4px; flex: none; }
+.db-ri-event-controls button { display: inline-grid; place-items: center; }
+.db-ri-event button.db-ri-rule-link {
+  display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; min-width: 0; max-width: 70%;
+  height: auto; min-height: 24px; padding: 2px 0 2px 4px; border: 0; box-shadow: none; background: transparent;
+  color: var(--text-accent); font-size: inherit; font-weight: inherit; text-align: end; cursor: pointer;
+}
+.db-ri-rule-link > span:first-child { order: 1; flex: none; }
+.db-ri-rule-link > span:last-child { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.db-ri-rule-link:hover > span:last-child { text-decoration: underline; text-underline-offset: 3px; }
+.db-ri-rule-link svg, .db-ri-workspace-return svg { display: block; width: 14px; height: 14px; }
+.db-ri-event-overlay:has(.is-sheet) { background: rgba(0, 0, 0, .19); }
+.db-ri-event.is-sheet .db-ri-event-controls button { min-width: 44px; min-height: 44px; }
+.db-ri-event.is-sheet button.db-ri-rule-link { min-height: 44px; }
+.db-ri-note-hover.popover { z-index: calc(var(--layer-modal, 1000) + 10) !important; }
+.db-ri-parked { display: none !important; }
+.db-ri-workspace-return {
+  display: flex; position: fixed; z-index: var(--layer-popover, 1000); inset-inline-end: 12px; inset-block-start: 50%;
+  transform: translateY(-50%); border-radius: var(--radius-m); background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border); box-shadow: var(--shadow-s); padding: 2px;
+}
+.db-ri-workspace-return .db-ri-return, .db-ri-workspace-return .db-ri-return-close {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; min-height: 32px;
+  background: transparent; box-shadow: none; border: 0; color: var(--text-muted); cursor: pointer;
+}
+.db-ri-workspace-return .db-ri-return { color: var(--text-accent); }
+.db-ri-workspace-return button:hover { background: var(--background-modifier-hover); }
+@container db-ri-list (width < 360px) {
+  .db-ri-actions button.db-ri-icon { min-height: 44px; width: 44px; }
+  .db-ri-row button.db-ri-summary { gap: 6px; }
+}
+@media (max-width: 600px) {
+  .db-reminder-inbox :is(.db-ri-head, .db-ri-body, .db-ri-feedback) { padding-inline: 17px; }
+  .db-ri-workspace-return { inset-block-start: auto; inset-block-end: max(48px, calc(env(safe-area-inset-bottom) + 40px)); transform: none; }
+}
+@media (pointer: coarse) {
+  .db-ri-actions button.db-ri-icon { min-height: 44px; width: 44px; }
+  .db-ri-actions button.db-ri-inline { min-width: 44px; min-height: 44px; }
+  .db-ri-workspace-return button { min-height: 44px; }
+}
+
+/* Live reminder settings reuse the button workflow's card, field, chip and menu styles. */
+.modal.db-reminder-rules-editor {
+  max-height: min(760px, calc(100dvh - 32px));
+  padding: 0; overflow: hidden;
+}
+.db-reminder-rules-editor .db-rr-content { display: flex; flex-direction: column; min-height: 0; max-height: inherit; padding: 0; overflow: hidden; }
+.db-rr-head { flex: none; padding: 24px 26px 0; }
+.db-rr-head h3 { margin: 0 0 8px; }
+.db-rr-context { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.db-rr-body { padding: 12px 26px 2px; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; }
+.db-rr-section-title { margin: 0 0 10px; font-size: var(--font-ui-medium); }
+.db-rr-content .db-rr-list { margin-inline-start: 20px; gap: 9px; }
+.db-rr-content .db-rr-card { container: db-rr-card / inline-size; }
+.db-rr-content .db-rr-card.is-folded { padding-block: 7px; }
+.db-rr-content .db-rr-card-head { gap: 6px; align-items: center; }
+.db-rr-content .is-folded .db-rr-card-head { margin-block-end: 0; }
+.db-rr-content .db-rr-toggle {
+  display: flex; align-items: center; flex: 1 1 0; justify-content: flex-start; gap: 6px; width: 100%; min-width: 0;
+  padding: 3px 4px; min-height: 26px; height: auto; border: 0; border-radius: var(--radius-s);
+  background: transparent; box-shadow: none; text-align: start; color: var(--text-normal);
+}
+.db-rr-content .db-rr-toggle:hover { background: var(--background-modifier-hover); }
+.db-rr-chevron { color: var(--text-muted); flex: none; }
+.db-rr-chevron svg, .db-rr-add svg, .db-rr-time-add svg { width: 13px; height: 13px; display: block; }
+.db-rr-identity { min-width: 0; display: flex; align-items: center; overflow: hidden; }
+.db-rr-toggle:has(.db-rr-offset-summary) .db-rr-identity { max-width: min(54%, calc(100% - 40px)); }
+.db-rr-identity .db-button-action-name { display: block; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.db-rr-toggle > .db-rr-offset-summary { min-width: min(54px, 24%); }
+.db-rr-offset-summary { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; border-inline-start: 1px solid var(--background-modifier-border); padding-inline-start: 7px; box-sizing: content-box; }
+.db-rr-offset-strip { display: flex; gap: 7px; align-items: center; font-size: var(--font-ui-smaller); font-weight: 400; color: var(--text-muted); }
+.db-rr-offset-strip > span { flex: none; white-space: nowrap; }
+.db-rr-offset-probe { position: absolute; visibility: hidden; width: max-content; pointer-events: none; }
+.db-rr-card.is-disabled .db-rr-toggle { color: var(--text-muted); }
+.db-rr-rule-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  margin-inline-start: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.db-rr-rule-state.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
+  color: var(--text-accent);
+}
+.db-rr-rule-state > span:first-child { display: inline-flex; }
+.db-rr-rule-state svg { display: block; width: 11px; height: 11px; }
+.db-rr-form { display: grid; gap: 7px; }
+.db-rr-field { display: grid; grid-template-columns: minmax(76px, 26%) minmax(0,1fr); gap: 8px; align-items: start; }
+.db-rr-field > .db-modal-label { margin: 0; padding-block-start: 6px; }
+.db-rr-control { min-width: 0; }
+.db-rr-date-time-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.db-rr-content .db-rr-date-time {
+  box-sizing: border-box; display: inline-flex; align-items: center; gap: 1px;
+  min-height: var(--input-height, 28px); padding-inline: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s); background: var(--background-primary);
+}
+.db-rr-content .db-rr-date-time.is-invalid { border-color: var(--text-error); }
+.db-rr-content .db-rr-date-time .db-time-seg {
+  width: 30px; min-height: 24px; height: auto; padding: 0 2px; border: 0; border-radius: var(--radius-s);
+  background: transparent; box-shadow: none; text-align: center;
+  font-family: inherit; font-variant-numeric: tabular-nums;
+}
+.db-rr-content .db-rr-date-time .db-time-colon { color: var(--text-muted); pointer-events: none; }
+.db-rr-content .db-rr-date-time-error:empty,
+.db-rr-content .db-rr-preview-row[hidden] { display: none; }
+.db-rr-control > .db-dropdown-field, .db-rr-control > .db-dropdown-field > button { width: 100%; min-width: 0; }
+.db-rr-time-points, .db-rr-status, .db-rr-custom-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.db-rr-content .db-rr-chip { display: inline-flex; align-items: center; padding-inline: 3px; gap: 1px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.db-rr-content .db-rr-chip > button { background: transparent; border: 0; box-shadow: none; padding: 0 5px; min-height: 24px; height: auto; color: inherit; font-size: inherit; }
+.db-rr-content .db-rr-chip > button.db-rr-chip-text {
+  flex: 0 1 auto; width: auto; min-width: 0; max-width: 100%; text-overflow: ellipsis; overflow: hidden;
+}
+.db-rr-content .db-rr-chip > button.db-rr-chip-text > span { overflow: hidden; text-overflow: ellipsis; }
+.db-rr-content .db-rr-chip > button:is(:hover,:active) { background: transparent; box-shadow: none; }
+.db-rr-content .db-rr-chip-remove { display: inline-grid; place-items: center; }
+.db-rr-chip-remove svg { width: 13px; height: 13px; }
+.db-rr-content .db-rr-chip-remove:disabled { opacity: .42; }
+.db-rr-content :is(.db-rr-time-add,.db-rr-preview-link,.db-rr-status-chip) { border: 0; box-shadow: none; background: transparent; }
+.db-rr-content .db-rr-time-add { color: var(--text-muted); min-height: 27px; padding: 2px 5px; gap: 4px; }
+.db-rr-content .db-rr-time-add:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.db-rr-content .db-rr-custom { padding: 8px; margin-block: 7px 0; }
+.db-rr-custom-fields > .db-dropdown-field { flex: 1 1 72px; min-width: 0; }
+.db-rr-custom-fields > input { width: 62px; }
+.db-rr-custom-actions,.db-rr-name-row { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; margin-block: 6px; }
+.db-rr-name-row input { flex: 1 1 120px; }
+.db-rr-content .db-rr-status-chip {
+  display: inline-flex; box-sizing: border-box; min-width: 0; max-width: 100%; padding: 0; height: auto; min-height: 26px;
+}
+.db-rr-status-chip .status-badge {
+  display: flex; box-sizing: border-box; min-width: 0; max-width: 100%;
+  gap: 4px; font-size: var(--font-ui-smaller); padding: 1px 6px; min-height: 23px; border-radius: 5px;
+}
+.db-rr-status-chip .status-badge > :not(.db-rr-status-label) { flex: none; }
+.db-rr-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-rr-status-chip .status-badge.is-neutral { background: var(--background-primary); color: var(--text-muted); }
+.db-rr-status-chip svg { display: block; width: 10px; height: 10px; }
+.db-rr-status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.db-rr-preview-counts { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 7px; }
+.db-rr-preview-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 6px; margin-block-start: 10px; }
+.db-rr-content .db-rr-preview-link { color: var(--text-accent); padding: 3px 5px; font-size: var(--font-ui-smaller); min-height: 25px; height: auto; }
+.db-rr-muted,.db-rr-error { color: var(--text-muted); font-size: var(--font-ui-smaller); line-height: 1.5; margin: 0; }
+.db-rr-error { color: var(--text-error); }
+.db-rr-error:not(:empty) { margin-block-start: 5px; }
+.db-rr-footer { display: flex; flex: none; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 7px; padding: 14px 26px 20px; }
+.db-rr-content button.db-rr-add { width: 100%; min-height: 36px; margin: 0; text-align: start; justify-content: flex-start; }
+
+.db-rr-details-overlay { position: absolute; inset: 0; z-index: var(--layer-popover, 1000); }
+.modal-container:has(> .db-rr-details-overlay) .modal-close-button { opacity: 0; }
+.db-rr-details.db-relation-popover {
+  display: flex; flex-direction: column; min-height: 0; padding: 12px; box-sizing: border-box;
+  border: 1px solid var(--background-modifier-border); border-radius: var(--db-radius-lg, 12px);
+  background: var(--background-primary); box-shadow: var(--shadow-l);
+}
+.db-rr-details-head { display: flex; align-items: center; justify-content: space-between; }
+.db-rr-details-head h4 { margin: 0; }
+.db-rr-details-search { margin: 8px 0; width: 100%; flex: none; }
+.db-rr-details-frame { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); }
+.db-rr-details-tabs { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 4px; padding: 5px; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); }
+.db-rr-details-tabs button { font-size: var(--font-ui-smaller); height: auto; min-height: 29px; padding: 3px 6px; background: transparent; box-shadow: none; border: 0; }
+.db-rr-details-tabs button[aria-pressed=true] { background: var(--background-modifier-hover); font-weight: 600; }
+.db-rr-details-list { min-height: 0; overflow: auto; padding: 8px 7px; overscroll-behavior: contain; }
+.db-rr-details-list ul { list-style: none; padding: 0; margin: 0; }
+.db-rr-details-list li + li { border-top: 1px solid var(--background-modifier-border); }
+.db-rr-details-list .db-rr-detail-row {
+  display: flex; justify-content: flex-start; align-items: center; min-height: 35px; height: auto;
+  width: 100%; gap: 7px; padding: 4px 6px; background: transparent; box-shadow: none; border: 0; text-align: start;
+}
+.db-rr-details-list .db-rr-detail-row:hover { background: var(--background-modifier-hover); }
+.db-rr-detail-label { display: grid; flex: 1; min-width: 0; }
+.db-rr-detail-label > *, .db-rr-detail-time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-rr-detail-label > span,.db-rr-detail-time { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.db-rr-detail-time { max-width: 42%; }
+.db-rr-detail-file { flex: none; color: var(--text-muted); }
+.db-rr-detail-file svg { display: block; width: 14px; height: 14px; }
+.db-rr-event-host.db-ri-event-host { z-index: 1; }
+.db-rr-details-overlay:has(.db-rr-preview-event.is-sheet) { background: rgba(0,0,0,.17); }
+@container db-rr-card (width < 280px) { .db-rr-field { grid-template-columns: minmax(0,1fr); gap: 3px; } .db-rr-field > .db-modal-label { padding-block-start: 0; } }
+@media (max-width: 600px) {
+  .db-rr-content :is(.db-rr-head,.db-rr-body,.db-rr-footer) { padding-inline: 17px; }
+  .db-rr-content .db-rr-list { margin-inline-start: 0; }
+}
+@media (pointer: coarse) {
+  .db-rr-content .db-rr-date-time .db-time-seg { min-height: 44px; width: 44px; }
+  .db-rr-content :is(button.db-rr-toggle,button.db-rr-add), .db-rr-details-list .db-rr-detail-row, .db-rr-details-tabs button { min-height: 44px; }
+  .db-rr-time-points { row-gap: 0; }
+  /* Keep the painted chip short and the two touch controls independently tappable. */
+  .db-rr-content .db-rr-chip {
+    position: relative; isolation: isolate; max-width: 100%; padding: 0 2px; background: transparent;
+  }
+  .db-rr-content .db-rr-chip::before {
+    content: ""; position: absolute; inset: 6px 0; z-index: -1; pointer-events: none;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  }
+  .db-rr-content .db-rr-chip > button.db-rr-chip-text { min-inline-size: 40px; padding-inline: 5px 2px; }
+  .db-rr-content .db-rr-chip > :is(button.db-rr-chip-text,button.db-rr-chip-remove) { min-height: 40px; }
+  .db-rr-content .db-rr-chip > button.db-rr-chip-remove { flex: 0 0 36px; width: 36px; }
+}
+
+/* Only the foreground note pane owns the transient desktop return control. */
+.db-return-to-view {
+  position: fixed; z-index: var(--layer-popover, 1000); transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m); box-shadow: var(--shadow-s);
+}
+.db-return-to-view button {
+  display: inline-flex; align-items: center; gap: 5px; height: auto; min-height: 30px; padding: 4px 7px;
+  border: 0; background: transparent; box-shadow: none; color: var(--text-muted);
+}
+.db-return-to-view button:first-child { min-width: 0; color: var(--text-accent); }
+.db-return-to-view button:first-child > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-return-to-view button:hover { background: var(--background-modifier-hover); }
+.db-return-to-view svg { display: block; width: 14px; height: 14px; }
+
+/* Settings-fold customization and on-demand popover preview. */
+.modal.db-settings-folding-modal {
+  width: min(600px, calc(100vw - 24px));
+  max-height: min(740px, calc(100dvh - 24px));
+}
+.db-settings-folding-editor :is(.db-settings-folding-help, .db-settings-folding-group-help) {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+.db-settings-folding-editor .db-settings-folding-help { margin: 0 0 12px; }
+.note-database-modal .db-settings-folding-tabs {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  gap: 4px;
+  padding: 4px 6px;
+  overflow: auto hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-md, 8px);
+}
+.note-database-modal .db-settings-folding-tabs .db-formula-category {
+  width: auto;
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.note-database-modal .db-settings-folding-tabs .db-formula-category:not(.is-active):hover {
+  background: var(--background-modifier-hover);
+}
+.db-settings-folding-body { margin-block-start: 14px; }
+.db-settings-folding-group-help { margin-block-end: 5px; }
+.db-settings-folding-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.db-settings-folding-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+.db-settings-folding-choices { display: grid; }
+.db-settings-folding-editor .db-settings-folding-choice {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  min-height: 34px;
+  margin: 0;
+  padding: 5px 7px;
+  border-radius: var(--db-radius-sm, 6px);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: 400;
+  cursor: pointer;
+}
+.db-settings-folding-choice:is(:hover, :focus-within) { background: var(--background-modifier-hover); }
+.db-settings-folding-choice > span { overflow-wrap: anywhere; }
+.db-settings-folding-choice .db-toggle-switch { margin: 0; }
+/* Only the overlay, not the skin of the popovers. The normal toolbar classes style the panel and its fields. */
+.note-database-container.db-settings-folding-preview-host {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  height: auto;
+  padding: 0;
+  overflow: visible;
+  scrollbar-gutter: auto;
+  pointer-events: none;
+}
+.db-settings-folding-preview-host > .db-anchored-popover { pointer-events: auto; }
+.db-settings-folding-preview-host .db-anchored-popover > .db-panel-header {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  padding-block: 4px;
+  background: var(--background-primary);
+}
+.db-settings-folding-preview-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.db-settings-folding-group-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.db-settings-folding-editor .db-settings-folding-preview-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.db-settings-folding-preview-trigger > span:first-child { display: flex; }
+.db-settings-folding-preview-trigger svg { width: 14px; height: 14px; }
+.db-settings-folding-footer,
+.db-settings-folding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.db-settings-folding-footer { justify-content: space-between; margin-top: 14px; }
+.db-settings-folding-editor button.db-settings-folding-quiet {
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+.db-settings-folding-editor button.db-settings-folding-quiet:not(:disabled):hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.db-settings-folding-editor button.db-settings-folding-quiet:disabled { opacity: 0.5; }
+body.is-mobile .db-settings-folding-editor button.db-settings-folding-quiet,
+body.is-mobile .db-settings-folding-choice,
+body.is-mobile .note-database-modal .db-settings-folding-tabs .db-formula-category { min-height: 44px; }
+
+/* New-database/view defaults. The content uses the actual toolbar settings panels. */
+.modal.db-creation-defaults-modal {
+  width: min(620px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}
+.db-creation-defaults-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.db-creation-defaults-help {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+.db-creation-defaults-view-help { margin: 9px 0; }
+.db-creation-defaults-navigation { margin-block-end: 9px; }
+.db-creation-defaults-navigation + .db-creation-defaults-view-help { margin-block-start: 0; }
+.note-database-modal .db-creation-defaults-tabs .db-formula-category.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-secondary));
+}
+.note-database-container.db-creation-defaults-body {
+  height: auto;
+  max-height: min(465px, calc(100dvh - 220px));
+  min-height: 0;
+  padding: 0;
+  overflow-y: auto;
+  scrollbar-gutter: auto;
+  overscroll-behavior: contain;
+  background: var(--background-primary);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 8%);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--db-radius-lg);
+}
+.note-database-container.db-creation-defaults-body > :is(.db-view-config-panel, .db-chart-options-popover) {
+  position: static;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.db-creation-defaults-body .db-view-config-row[data-creation-default] { padding-inline: 8px; }
+.db-creation-defaults-body [data-creation-default].is-default-overridden {
+  --db-control-state-shadow: inset 2px 0 0 var(--interactive-accent);
+  box-shadow: var(--db-control-state-shadow);
+}
+.db-creation-defaults-body [data-creation-default].is-default-overridden:dir(rtl) {
+  --db-control-state-shadow: inset -2px 0 0 var(--interactive-accent);
+}
+.db-creation-defaults-body .db-chart-options-section > .db-chart-options-section-plain {
+  padding: 0;
+  border: 0;
+}
+.db-creation-default-inheritance {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: -1px 4px 5px;
+  text-align: end;
+}
+.db-creation-default-inheritance button {
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  font-size: inherit;
+  padding: 2px 5px;
+}
+.db-creation-default-inheritance button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.db-creation-defaults-editor .db-settings-folding-quiet { color: var(--text-muted); background: transparent; box-shadow: none; }
+.db-creation-defaults-editor .db-settings-folding-quiet:hover { background: var(--background-modifier-hover); }
+@media (max-width: 520px) {
+  .db-creation-defaults-body [data-creation-default] :is(button, [role="switch"]) { scroll-margin-block: 12px; }
+  .db-creation-defaults-editor .db-settings-folding-footer button,
+  .db-creation-default-inheritance button { min-height: 44px; }
+}
+
+/* The inbox reuses the calendar detail rows and opens their editors at the clicked value. */
+.db-ri-event-host > :is(.db-date-value-popover, .db-dropdown-popover, .db-cell-status-value-picker) { z-index: 1001; pointer-events: auto; }
+.db-cell-status-value-picker .db-option-color-dot { cursor: inherit; }
+.db-ri-event .db-ri-inline-field, .db-ri-event .db-ri-inline-field > button { align-items: center; }
+.db-ri-event .db-ri-inline-field > :is(.db-ri-inline-date, .db-ri-inline-status) {
+  display: flex; justify-content: flex-end; padding: 0; min-height: 22px; height: auto;
+  border: 0; background: transparent; box-shadow: none; text-align: end; color: inherit;
+}
+.db-ri-event .db-ri-inline-date .db-date-value-field-icon { display: none; }
+.db-ri-event .db-ri-trigger-value { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.db-ri-rule-time {
+  max-inline-size: 100%; overflow-wrap: anywhere; font-size: var(--font-ui-smaller); color: var(--text-muted);
+  border-radius: var(--db-radius-sm); background: var(--background-secondary); padding: 2px 6px;
+}
+.db-ri-rule-time-hint, .db-ri-edit-hint { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+@media (pointer: coarse) {
+  .db-ri-event .db-ri-inline-field { min-block-size: 44px; }
+}
+/* Keep the switch aligned with the rest of the settings page; use text as well as color. */
+.db-desktop-reminder-setting :is(.setting-item-name, .setting-item-control) { flex-wrap: wrap; }
+.db-desktop-reminder-setting .setting-item-control { justify-content: flex-end; }
+.db-desktop-reminder-status {
+  display: inline-flex; align-items: center; gap: 4px; margin-inline-start: 8px;
+  color: var(--text-muted); font-size: var(--font-ui-smaller); white-space: nowrap;
+}
+.db-desktop-reminder-status::before { content: ""; inline-size: 7px; block-size: 7px; border-radius: 50%; background: currentColor; }
+.db-desktop-reminder-status[data-state="verified"] { color: var(--text-success, var(--color-green)); }
+.db-desktop-reminder-status[data-state="blocked"] { color: var(--text-error, var(--color-red)); }
+
+.db-ri-event .db-ri-detail-feedback { margin-top: 6px; padding: 5px 6px 0; }

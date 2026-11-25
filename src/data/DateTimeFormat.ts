@@ -18,7 +18,10 @@ export interface DateTimeDisplayOptions extends DateDisplayOptions {
   showTimeWhenMissing?: boolean;
 }
 
-const DATE_TIME_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?/;
+const DATE_TIME_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?/i;
+
+// Reminders must not turn an invalid explicit time into a midnight notification.
+const STRICT_DATE_TIME_RE = /^\d{4}-\d{1,2}-\d{1,2}(?:[T\s]+\d{1,2}:\d{2}(?::[0-5]\d(?:\.\d+)?)?(?:\s?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d))?)?$/i;
 
 export function isDateLikeColumnType(type: string | undefined): boolean {
   return type === "date" || type === "datetime";
@@ -37,7 +40,18 @@ export function hasDateTimeValue(value: unknown): boolean {
   return Boolean(parts?.time);
 }
 
-export function parseDateTimeParts(value: unknown): DateTimeParts | null {
+/** Normalize known local date/time spellings before strict calendar validation. */
+export function normalizeReminderDateTimeInput(input: string): string {
+  const date = input.trim()
+    .replace(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?=$|[Tt\s])/, "$1-$2-$3")
+    .replace(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?=$|[Tt\s])/, "$3-$1-$2");
+  const clock = /^(\d{4}-\d{1,2}-\d{1,2})[T\s]+(0?[1-9]|1[0-2]):([0-5]\d)(:[0-5]\d(?:\.\d+)?)?\s*([AP]M)$/i.exec(date);
+  if (!clock) return date;
+  const hour = Number(clock[2]) % 12 + (clock[5].toUpperCase() === "PM" ? 12 : 0);
+  return `${clock[1]}T${pad2(hour)}:${clock[3]}${clock[4] ?? ""}`;
+}
+
+export function parseDateTimeParts(value: unknown, options?: { rejectInvalidTime?: boolean }): DateTimeParts | null {
   if (value == null || value === "") return null;
   // 毫秒时间戳（如 file.ctime）按绝对时间转本地日期分量；Obsidian/YAML Date 对象用 UTC 分量。
   if (typeof value === "number") {
@@ -67,7 +81,8 @@ export function parseDateTimeParts(value: unknown): DateTimeParts | null {
       time: `${pad2(value.getUTCHours())}:${pad2(value.getUTCMinutes())}`,
     };
   }
-  const text = stringifyValue(value).trim();
+  const input = stringifyValue(value).trim();
+  const text = options?.rejectInvalidTime ? normalizeReminderDateTimeInput(input) : input;
   const match = text.match(DATE_TIME_RE);
   if (match) {
     const year = Number(match[1]);
@@ -81,8 +96,10 @@ export function parseDateTimeParts(value: unknown): DateTimeParts | null {
     const time = hour != null && minute != null && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
       ? `${pad2(hour)}:${pad2(minute)}`
       : undefined;
+    if (options?.rejectInvalidTime && (!STRICT_DATE_TIME_RE.test(text) || (match[4] !== undefined && time === undefined))) return null;
     return { dateKey: `${year}-${month}-${day}`, year, month, day, time };
   }
+  if (options?.rejectInvalidTime) return null;
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) return null;
   const year = parsed.getFullYear();

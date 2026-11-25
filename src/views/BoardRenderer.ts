@@ -57,6 +57,7 @@ export interface BoardRendererActions {
   /** U1-REL-1：relation 列状态判定所需目标库条目集合（缺省仅做 missing 检测）。 */
   getRelationScopePaths?(col: ColumnDef): ReadonlySet<string> | undefined;
   openRow(row: RowData): void;
+  openNoteFromCard?(row: RowData, anchor: HTMLElement): void;
   createEntry(defaults?: Record<string, unknown>, position?: CreateEntryPosition): void;
   createGroup?(field: string, name: string, color: StatusColor): Promise<boolean>;
   updateGroup(row: RowData, field: string, value: string, fromValue?: string): Promise<void>;
@@ -610,7 +611,8 @@ export class BoardRenderer {
     openBtn.onclick = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.actions.openRow(row);
+      if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && this.actions.openNoteFromCard) this.actions.openNoteFromCard(row, card);
+      else this.actions.openRow(row);
     };
     if (!this.actions.isReadOnly && this.isPhoneLayout()) {
       this.renderMobileMoveButton(controls, config, groups, group, row, groupField, subgroupField, subgroupKey);

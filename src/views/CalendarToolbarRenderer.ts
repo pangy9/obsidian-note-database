@@ -1,3 +1,6 @@
+import { defaultSetting, markDefaultSetting } from "./DefaultSettingControl";
+import { createSettingsFoldSection, readSettingsFoldOpen, type SettingsFoldSection } from "./MoreDisplayOptions";
+import { selectedSettingFolds, type SettingsFoldingPreferences } from "../data/SettingsFolding";
 import { setIcon } from "obsidian";
 import { getColumnDisplayType } from "../data/ColumnDisplay";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
@@ -14,6 +17,7 @@ import { traceDatabaseInteraction } from "./InteractionDiagnostics";
 
 /** Actions exposed by the calendar toolbar settings panel. */
 export interface CalendarToolbarActions {
+	getSettingsFolding?(): SettingsFoldingPreferences | undefined;
 	onChange(label?: string): void;
 	database?: DatabaseConfig;
 	createRecordIconField?(): void;
@@ -38,6 +42,7 @@ export class CalendarToolbarRenderer {
 	private cleanupPopover?: () => void;
 	private popover?: HTMLElement;
 	private popoverContent?: HTMLElement;
+	private repositionPopover?: () => void;
 
 	/** Toggle the calendar settings popover open or closed. */
 	togglePopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig | undefined, actions: CalendarToolbarActions): void {
@@ -73,23 +78,28 @@ export class CalendarToolbarRenderer {
 
 	// ── Private helpers ──
 
-	private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
-		this.closePopover();
+	renderPreview(host: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): HTMLElement {
+		const { panel, content } = this.createPopoverFrame(host);
+		this.renderSections(content, config, actions);
+		return panel;
+	}
 
-		const panel = containerEl.createDiv({ cls: "db-calendar-options-popover db-chart-options-popover" });
-		this.popover = panel;
-
-		// Panel header
+	private createPopoverFrame(host: HTMLElement) {
+		const panel = host.createDiv({ cls: "db-calendar-options-popover db-chart-options-popover" });
 		const header = panel.createDiv({ cls: "db-panel-header" });
 		header.createDiv({ cls: "db-panel-title", text: t("calendar.options") });
-
-		// Sections render into a content wrapper so a scale change can rebuild them
-		// in place (week/day expose different settings than month) without reopening.
 		const content = panel.createDiv({ cls: "db-calendar-options-content" });
-		this.popoverContent = content;
-		this.renderSections(content, config, actions);
+		return { panel, content };
+	}
 
-		positionToolbarPopover(panel, anchor, { preferredWidth: 420, maxWidth: 480 });
+	private openPopover(containerEl: HTMLElement, anchor: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
+		this.closePopover();
+		const { panel, content } = this.createPopoverFrame(containerEl);
+		this.popover = panel;
+		this.popoverContent = content;
+		this.repositionPopover = () => positionToolbarPopover(panel, anchor, { preferredWidth: 420, maxWidth: 480 });
+		this.renderSections(content, config, actions);
+		this.repositionPopover();
 
 		// Outside-click handler
 		const onOutside = (event: MouseEvent) => {
@@ -124,24 +134,28 @@ export class CalendarToolbarRenderer {
 			panel.remove();
 			this.popover = undefined;
 			this.popoverContent = undefined;
+			this.repositionPopover = undefined;
 		};
 	}
 
 	// ── Data section: scale, start date, end date, title field ──
 
 	private renderSections(content: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
+		const open = readSettingsFoldOpen(content, "calendar");
 		content.empty();
-		this.renderDataSection(content, config, actions);
-		this.renderLayoutSection(content, config, actions);
+		const fold = createSettingsFoldSection(content, selectedSettingFolds(actions.getSettingsFolding?.()), "calendar", open, this.repositionPopover);
+		this.renderDataSection(content, config, actions, fold);
+		this.renderLayoutSection(fold.target("calendarLayout"), config, actions);
 		// The time grid (visible hours / hour height) only exists in week & day views,
 		// so hide the whole Time section in month view to avoid dead controls.
 		if (config.calendarScale === "week" || config.calendarScale === "day") {
-			this.renderTimeSection(content, config, actions);
+			this.renderTimeSection(fold.target("calendarTime"), config, actions);
 		}
-		this.renderAppearanceSection(content, config, actions);
+		this.renderAppearanceSection(content, config, actions, fold);
+		fold.finish();
 	}
 
-	private renderDataSection(panel: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
+	private renderDataSection(panel: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions, fold: SettingsFoldSection): void {
 		const data = this.createSection(panel, t("chart.optionsData"));
 
 		// 顺序与时间线 popover 对齐：start → end → 同字段警告 → invalid 提示 → title → scale → year。
@@ -170,26 +184,26 @@ export class CalendarToolbarRenderer {
 			{ value: "month", text: t("calendar.scaleMonth") },
 			{ value: "week", text: t("calendar.scaleWeek") },
 			{ value: "day", text: t("calendar.scaleDay") },
-		], config.calendarScale || "month", (value) => {
+		], config.calendarScale || "month", defaultSetting("calendarScale", (value) => {
 			config.calendarScale = value === "day" || value === "week" ? value : "month";
 			actions.onChange(t("undo.calendarScaleConfig"));
 			// Rebuild the panel so week/day-specific sections (Time, all-day lanes)
 			// appear immediately instead of requiring a reopen.
 			if (this.popoverContent) this.renderSections(this.popoverContent, config, actions);
-		}, "layout-grid");
+		}), "layout-grid");
 
-		this.renderSelect(data, t("viewConfig.yearDisplayMode"), [
+		this.renderSelect(fold.target("yearDisplay", data), t("viewConfig.yearDisplayMode"), [
 			{ value: "always", text: t("viewConfig.yearDisplayMode.always") },
 			{ value: "smart", text: t("viewConfig.yearDisplayMode.smart") },
 			{ value: "never", text: t("viewConfig.yearDisplayMode.never") },
-		], config.yearDisplayMode || "always", (value) => {
+		], config.yearDisplayMode || "always", defaultSetting("yearDisplayMode", (value) => {
 			config.yearDisplayMode = value === "always" || value === "smart" || value === "never" ? value : undefined;
 			actions.onChange(t("undo.yearDisplayModeConfig"));
-		}, "calendar");
-		this.renderSwitch(data, t("viewConfig.showEmptyFields"), config.showEmptyFields === true, (value) => {
-			config.showEmptyFields = value || undefined;
+		}), "calendar");
+		this.renderSwitch(fold.target("showEmptyFields", data), t("viewConfig.showEmptyFields"), config.showEmptyFields === true, defaultSetting("showEmptyFields", (value) => {
+			config.showEmptyFields = value;
 			actions.onChange(t("undo.showEmptyFieldsConfig"));
-		}, "rows-3");
+		}), "rows-3");
 	}
 
 	private renderSameDateFieldWarning(parent: HTMLElement, startField: string | undefined, endField: string | undefined): void {
@@ -257,34 +271,35 @@ export class CalendarToolbarRenderer {
 				{ value: "15", text: t("viewConfig.calendarWeekSlotDuration.15") },
 				{ value: "30", text: t("viewConfig.calendarWeekSlotDuration.30") },
 				{ value: "60", text: t("viewConfig.calendarWeekSlotDuration.60") },
-			], String(config.calendarWeekSlotDuration || 30), (value) => {
+			], String(config.calendarWeekSlotDuration || 30), defaultSetting("calendarWeekSlotDuration", (value) => {
 				const num = Number(value);
 				if (num === 15 || num === 30 || num === 60) config.calendarWeekSlotDuration = num;
 				actions.onChange(t("undo.calendarSlotDurationConfig"));
-			}, "clock");
+			}), "clock");
 		}
 	}
 
 	// ── Appearance section: color field, show field labels ──
 
-	private renderAppearanceSection(panel: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
+	private renderAppearanceSection(panel: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions, fold: SettingsFoldSection): void {
 		const style = this.createSection(panel, t("calendar.appearance"));
-		this.renderSelect(style, t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.calendarColorField || "", (value) => {
+		this.renderSelect(fold.target("calendarEventColor", style), t("viewConfig.eventColorField"), this.getColorFieldOptions(config), config.calendarColorField || "", (value) => {
 			config.calendarColorField = value || undefined;
 			actions.onChange(t("undo.calendarColorFieldConfig"));
 		}, "palette");
-		this.renderRecordIconSettings(style, config, actions);
+		if (actions.database) this.renderRecordIconSettings(fold.target("recordIcon", style), config, actions);
+		if (style.childElementCount === 1) style.remove();
 	}
 
 	private renderRecordIconSettings(parent: HTMLElement, config: ViewConfig, actions: CalendarToolbarActions): void {
 		const database = actions.database;
 		if (!database) return;
-		this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, (value) => {
-			config.showRecordIcon = value || undefined;
+		this.renderSwitch(parent, t("recordIcon.show"), config.showRecordIcon === true, defaultSetting("showRecordIcon", (value) => {
+			config.showRecordIcon = value;
 			if (value && !resolveRecordIconField(database, config) && !database.recordIconField) config.recordIconFieldOverrideEnabled = true;
 			actions.onChange(t("recordIcon.show"));
 			if (this.popoverContent) this.renderSections(this.popoverContent, config, actions);
-		}, "smile-plus");
+		}), "smile-plus");
 		if (config.showRecordIcon !== true) return;
 		this.renderSwitch(parent, t("recordIcon.override"), config.recordIconFieldOverrideEnabled === true, (value) => {
 			config.recordIconFieldOverrideEnabled = value || undefined;
@@ -346,11 +361,11 @@ export class CalendarToolbarRenderer {
 			{ value: "0", text: t("viewConfig.calendarFirstDayOfWeek.0") },
 			{ value: "1", text: t("viewConfig.calendarFirstDayOfWeek.1") },
 			{ value: "6", text: t("viewConfig.calendarFirstDayOfWeek.6") },
-		], config.calendarFirstDayOfWeek == null ? "" : String(config.calendarFirstDayOfWeek), (value) => {
+		], config.calendarFirstDayOfWeek == null ? "" : String(config.calendarFirstDayOfWeek), defaultSetting("calendarFirstDayOfWeek", (value) => {
 			const num = Number(value);
-			config.calendarFirstDayOfWeek = num === 0 || num === 1 || num === 6 ? num : undefined;
+			config.calendarFirstDayOfWeek = value !== "" && (num === 0 || num === 1 || num === 6) ? num : undefined;
 			actions.onChange(t("undo.calendarFirstDayOfWeekConfig"));
-		}, "calendar-days");
+		}), "calendar-days");
 
 		// Row height only affects the month grid (in week/day, row height == hour
 		// height, which has its own setting). Hide it outside month so the Layout
@@ -438,7 +453,7 @@ export class CalendarToolbarRenderer {
 		searchable = options.length > 8,
 		disabled = false,
 	): void {
-		createDropdownField({
+		const { button } = createDropdownField({
 			parent,
 			label,
 			options,
@@ -453,10 +468,12 @@ export class CalendarToolbarRenderer {
 				if (!renderDropdownPropertyTypeIcon(iconEl, iconName)) setIcon(iconEl, iconName);
 			},
 		});
+		markDefaultSetting(button, onChange);
 	}
 
 	private renderSwitch(parent: HTMLElement, label: string, value: boolean, onChange: (value: boolean) => void, icon: string): void {
 		const row = parent.createEl("label", { cls: "db-chart-options-row db-chart-options-switch-row" });
+		markDefaultSetting(row, onChange);
 		setIcon(row.createSpan({ cls: "db-chart-options-row-icon" }), icon);
 		row.createDiv({ cls: "db-chart-options-row-text" }).createSpan({ cls: "db-chart-options-label", text: label });
 		const input = row.createEl("input", { cls: "db-toggle-switch", attr: { type: "checkbox", role: "switch" } });

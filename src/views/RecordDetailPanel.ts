@@ -45,6 +45,7 @@ export interface RecordDetailActions {
   editFileName?: (target: HTMLElement, row: RowData, currentName: string) => void;
   showColumnMenu?: (event: MouseEvent, col: ColumnDef, anchorEl: HTMLElement) => void;
   openRow: (row: RowData) => void;
+  openNoteFromCard?: (row: RowData, anchor: HTMLElement) => void;
   renderRecordIcon?(parent: HTMLElement, row: RowData, config: ViewConfig, compact?: boolean): HTMLElement | null;
   applyConditionalFormat?(element: HTMLElement, row: RowData, config: ViewConfig, targetField?: string): void;
   isReadOnly?: boolean;
@@ -194,7 +195,8 @@ export function openRecordDetailPanel(opts: OpenRecordDetailOptions): void {
     setTooltip(openBtn, t("menu.openNote"), { delay: 100 });
     openBtn.addEventListener("click", (event) => {
       event.stopPropagation();
-      actions.openRow(r);
+      if (actions.openNoteFromCard && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) actions.openNoteFromCard(r, anchorEl);
+      else actions.openRow(r);
       close();
     });
     // 字段列表（跳过 titleField；空字段按 showEmptyFields 过滤，对齐看板卡片）

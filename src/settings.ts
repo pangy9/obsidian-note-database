@@ -1,4 +1,4 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, setIcon, setTooltip } from "obsidian";
+import { App, Modal, Notice, Platform, PluginSettingTab, Setting, setIcon, setTooltip, type ButtonComponent, type ToggleComponent } from "obsidian";
 import { makeModalDraggable } from "./views/modals/ModalDrag";
 import NoteDatabasePlugin from "./main";
 import { DatabaseConfig, PluginSettings, TrashedDatabase } from "./data/types";
@@ -11,7 +11,11 @@ import { createDatabaseFromModalResult } from "./views/modals/AddDatabaseFlow";
 import { DatabaseFileEntry, moveDatabaseFilePath, sortDatabaseFileEntries } from "./data/DatabaseFileOrder";
 import { confirmWithModal } from "./views/modals/ConfirmModal";
 import { createDropdownField, DropdownOption } from "./views/DropdownField";
+import { normalizeRecordReminderPreferences, type RecordReminderPreferences } from "./data/RecordReminders";
 import { isHTMLElement } from "./views/DomGuards";
+import { normalizeSettingsFolding } from "./data/SettingsFolding";
+import { NewViewDefaultsModal } from "./views/modals/NewViewDefaultsModal";
+import { SettingsFoldingModal } from "./views/modals/SettingsFoldingModal";
 
 /** Default databases shipped with the plugin. Keep empty for a neutral marketplace first run. */
 export const DEFAULT_DATABASES: DatabaseConfig[] = [];
@@ -38,6 +42,8 @@ export const DEFAULT_SETTINGS = {
 export function createDefaultSettings(): PluginSettings {
   return {
     databases: [],
+    settingsFolding: normalizeSettingsFolding(undefined),
+    recordReminderPreferences: normalizeRecordReminderPreferences(undefined),
     databaseFolder: DEFAULT_SETTINGS.databaseFolder,
     databaseFileOrder: [],
     databaseFileOrderMigrated: false,
@@ -55,6 +61,9 @@ export function createDefaultSettings(): PluginSettings {
 
 export class SettingsTab extends PluginSettingTab {
   private plugin: NoteDatabasePlugin;
+  private stopDesktopReminderRefresh?: () => void;
+  private savingCreationWidth = false;
+  private refreshCreationWidth?: (previous?: HTMLButtonElement) => void;
   /** 文件型数据库拖拽排序状态 */
   private draggedFileEntry: DatabaseFileEntry | null = null;
 
@@ -63,7 +72,14 @@ export class SettingsTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  hide(): void {
+    this.refreshCreationWidth = undefined;
+    this.stopDesktopReminderRefresh?.();
+    this.stopDesktopReminderRefresh = undefined;
+  }
+
   display(): void {
+    this.hide();
     const { containerEl } = this;
     containerEl.empty();
 
@@ -148,7 +164,12 @@ export class SettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
+    this.renderCreationDefaults(containerEl);
+    this.renderSettingsFolding(containerEl);
+
     // 分组 2：数据管理
+    this.renderReminderPreferences(containerEl);
+
     const dataMgmt = this.createSettingGroup(containerEl, "settings.groups.dataManagement");
     new Setting(dataMgmt)
       .setName(t("settings.csvMarkdownTransfer.name"))
@@ -195,7 +216,205 @@ export class SettingsTab extends PluginSettingTab {
     }
   }
 
+  private renderCreationDefaults(parent: HTMLElement): void {
+    const group = this.createSettingGroup(parent, "settings.creationDefaults.title");
+    const width = new Setting(group)
+      .setName(t("settings.creationDefaults.displayWidth"))
+      .setDesc(t("settings.creationDefaults.displayWidthDesc"));
+    const widthLabel = t("settings.creationDefaults.displayWidth");
+    const renderWidth = (previous?: HTMLButtonElement): void => {
+      const doc = width.controlEl.ownerDocument;
+      const restoreFocus = previous && width.controlEl.contains(previous) &&
+        (doc.activeElement === doc.body || doc.activeElement === previous);
+      width.controlEl.empty();
+      const control = this.renderSettingsDropdown(width.controlEl, {
+        label: widthLabel,
+        options: [
+          { value: "default", text: t("toolbar.defaultWidth"), preserveValueOnSelect: true },
+          { value: "wide", text: t("toolbar.wide"), preserveValueOnSelect: true },
+        ],
+        value: this.plugin.settings.newViewDefaults?.shared.displayWidth ?? "default",
+        focusOptions: true,
+        onChange: async value => {
+          if (this.savingCreationWidth || (value !== "default" && value !== "wide")) return;
+          this.savingCreationWidth = true;
+          control.button.disabled = true;
+          try { await this.plugin.saveNewViewDisplayWidth(value); }
+          catch (error) { new Notice(t("errors.updateFailed", { error: String(error) })); }
+          finally {
+            this.savingCreationWidth = false;
+            // display() may have replaced the settings row while this save was pending.
+            this.refreshCreationWidth?.(control.button);
+          }
+        },
+      });
+      control.button.disabled = this.savingCreationWidth;
+      control.button.setAttribute("aria-label", `${widthLabel}: ${control.valueEl.textContent}`);
+      if (restoreFocus && control.button.isConnected) control.button.focus({ preventScroll: true });
+    };
+    this.refreshCreationWidth = renderWidth;
+    renderWidth();
+    let editor: NewViewDefaultsModal | undefined;
+    new Setting(group)
+      .setName(t("settings.creationDefaults.item"))
+      .setDesc(t("settings.creationDefaults.description"))
+      .addButton(button => button.setButtonText(t("settings.creationDefaults.edit")).onClick(() => {
+        if (editor?.containerEl.isConnected) return;
+        editor = new NewViewDefaultsModal(this.app, this.plugin.settings.newViewDefaults, draft => this.plugin.saveNewViewDefaults(draft));
+        editor.open();
+      }));
+  }
+
+  private renderSettingsFolding(parent: HTMLElement): void {
+    const group = this.createSettingGroup(parent, "settings.folding.title");
+    const read = () => normalizeSettingsFolding(this.plugin.settings.settingsFolding);
+    let saving = false;
+    let customize: ButtonComponent | undefined;
+    let editor: SettingsFoldingModal | undefined;
+    new Setting(group).setName(t("settings.folding.enabled")).setDesc(t("settings.folding.enabledHelp"))
+      .addToggle(toggle => {
+        const updateToggle = (disabled: boolean) => {
+          const current = read().enabled;
+          toggle.setDisabled(disabled).setValue(current);
+          const input = toggle.toggleEl.querySelector("input");
+          if (input) { input.checked = current; input.disabled = disabled; }
+          toggle.toggleEl.tabIndex = disabled ? -1 : 0;
+        };
+        toggle.setTooltip(t("settings.folding.enabled"));
+        toggle.toggleEl.setAttribute("aria-label", t("settings.folding.enabled"));
+        updateToggle(false);
+        toggle.onChange(async value => {
+          // Obsidian invokes onChange on programmatic setValue too, including rollback.
+          if (saving || value === read().enabled) return;
+          saving = true;
+          toggle.setDisabled(true);
+          const input = toggle.toggleEl.querySelector("input");
+          if (input) input.disabled = true;
+          toggle.toggleEl.tabIndex = -1;
+          customize?.setDisabled(true);
+          try { await this.plugin.saveSettingsFolding({ enabled: value }); }
+          catch (error) { new Notice(t("errors.updateFailed", { error: String(error) })); }
+          finally {
+            updateToggle(false);
+            customize?.setDisabled(false);
+            saving = false;
+          }
+        });
+      });
+    new Setting(group).setName(t("settings.folding.items")).setDesc(t("settings.folding.itemsHelp"))
+      .addButton(button => {
+        customize = button;
+        button.setButtonText(t("settings.folding.customizeButton")).onClick(() => {
+          if (saving || editor?.containerEl.isConnected) return;
+          editor = new SettingsFoldingModal(this.app, read(), draft => this.plugin.saveSettingsFolding({ items: draft.items }));
+          editor.open();
+        });
+      });
+  }
+
   /** 创建一个分组卡片，返回 body 容器供添加内容 */
+  private renderReminderPreferences(parent: HTMLElement): void {
+    const group = this.createSettingGroup(parent, "reminder.title");
+    const rows = new Map<keyof RecordReminderPreferences, ToggleComponent>();
+    let writing = false;
+    let refreshing = false;
+    let testRunning = false;
+    let desktopRow: Setting | undefined;
+    let desktopTest: ButtonComponent | undefined;
+    let desktopStatus: HTMLSpanElement | undefined;
+    const setDisabled = (toggle: ToggleComponent, disabled: boolean): void => {
+      toggle.setDisabled(disabled);
+      const input = toggle.toggleEl.querySelector("input");
+      if (input) input.disabled = disabled;
+      toggle.toggleEl.tabIndex = disabled ? -1 : 0;
+    };
+    const refresh = (): void => {
+      refreshing = true;
+      try {
+        const preferences = this.plugin.getRecordReminderPreferences();
+        for (const [key, toggle] of rows) {
+          toggle.setValue(preferences[key]);
+          const input = toggle.toggleEl.querySelector("input");
+          if (input) input.checked = preferences[key];
+          setDisabled(toggle, (key !== "enabled" && !preferences.enabled) ||
+            (key === "desktopNotificationPreview" && !preferences.desktopSystemNotifications));
+        }
+        if (desktopRow && desktopTest && desktopStatus) {
+          const permission = this.plugin.getDesktopReminderPermission();
+          const inactive = !preferences.enabled || !preferences.desktopSystemNotifications;
+          const blocked = permission === "denied" || permission === "unavailable";
+          const status = inactive ? "off" : blocked ? "blocked" :
+            this.plugin.hasVerifiedDesktopReminder() ? "verified" : "unchecked";
+          desktopStatus.dataset.state = status;
+          desktopStatus.setText(t(`settings.reminders.status.${status}`));
+          const reason = blocked && !inactive ? t(`settings.reminders.permission.${permission}`) : "";
+          desktopRow.setDesc(reason || t("settings.reminders.desktopNotificationsDesc"));
+          desktopTest.setDisabled(testRunning || inactive || blocked);
+          desktopTest.setButtonText(t(testRunning ? "settings.reminders.testWaiting" :
+            blocked && !inactive ? "settings.reminders.testDisabled" : "settings.reminders.test"));
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const add = (key: keyof RecordReminderPreferences, label: string): Setting => {
+      return new Setting(group).setName(t(label)).setDesc(t(`${label}Desc`)).addToggle(toggle => {
+        toggle.setTooltip(t(label));
+        toggle.toggleEl.setAttribute("aria-label", t(label));
+        rows.set(key, toggle);
+        toggle.onChange(async (value) => {
+          // Obsidian also calls onChange from setValue; programmatic refreshes must not save.
+          if (refreshing || writing) return;
+          writing = true;
+          for (const control of rows.values()) setDisabled(control, true);
+          try {
+            await this.plugin.setRecordReminderPreference(key, value);
+          } catch (error) {
+            new Notice(t("errors.updateFailed", { error: String(error) }));
+          } finally {
+            writing = false;
+            refresh();
+          }
+        });
+      });
+    };
+    add("enabled", "settings.reminders.enabled");
+    if (Platform.isDesktopApp) {
+      desktopRow = add("desktopSystemNotifications", "settings.reminders.desktopNotifications");
+      desktopRow.settingEl.addClass("db-desktop-reminder-setting");
+      desktopStatus = desktopRow.nameEl.createSpan({ cls: "db-desktop-reminder-status", attr: { role: "status" } });
+      const row = desktopRow;
+      const win = row.settingEl.ownerDocument.defaultView;
+      const event = this.app.workspace.on("record-reminder-desktop-status-change" as never, refresh);
+      win?.addEventListener("focus", refresh);
+      this.stopDesktopReminderRefresh = () => {
+        this.app.workspace.offref(event);
+        win?.removeEventListener("focus", refresh);
+      };
+      row.addButton(button => {
+        desktopTest = button;
+        row.controlEl.prepend(button.buttonEl);
+        button.setButtonText(t("settings.reminders.test")).onClick(async () => {
+          if (testRunning || writing) return;
+          testRunning = true;
+          refresh();
+          new Notice(t("settings.reminders.testSwitchApp"));
+          const failed = () => { new Notice(t("settings.reminders.testFailed")); refresh(); };
+          try {
+            const result = await this.plugin.sendDesktopReminderTest(failed, refresh);
+            if (result === "timed-out") new Notice(t("settings.reminders.testTimedOut"));
+            else if (result === "unavailable" && this.plugin.getRecordReminderPreferences().desktopSystemNotifications) failed();
+          } catch { failed(); }
+          finally { testRunning = false; refresh(); }
+        });
+      });
+    }
+    if (Platform.isDesktopApp) add("desktopNotificationPreview", "settings.reminders.desktopNotificationPreview");
+    add("showInboxRibbon", "settings.reminders.ribbon");
+    add("showDatabaseToolbar", "settings.reminders.toolbar");
+    refresh();
+  }
+
   private createSettingGroup(
     parent: HTMLElement,
     titleKey: string,
@@ -237,6 +456,7 @@ export class SettingsTab extends PluginSettingTab {
         this.app, this.plugin.dataSource, result, name,
         this.plugin.settings.databaseFolder || DEFAULT_SETTINGS.databaseFolder,
         (config) => this.plugin.prepareNewDatabasePropertyTypeConflicts(config),
+        () => this.plugin.settings.newViewDefaults,
       );
       if (!file) return;
       new Notice(t("notice.createdDbFile", { path: file.path }));
@@ -288,16 +508,18 @@ export class SettingsTab extends PluginSettingTab {
       label: string;
       options: DropdownOption[];
       value: string;
+      focusOptions?: boolean;
       onChange(value: string): void | Promise<void>;
     }
-  ): void {
-    createDropdownField({
+  ) {
+    return createDropdownField({
       parent,
       label: options.label,
       options: options.options,
       value: options.value,
       className: "db-settings-dropdown",
       hideLabel: true,
+      focusOptions: options.focusOptions,
       onChange: (value) => {
         void options.onChange(value);
       },

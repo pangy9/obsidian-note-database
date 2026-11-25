@@ -1,5 +1,5 @@
 import { ColumnDef, ViewConfig } from "../data/types";
-import { getFrozenColumnOffsets, getTableColumnStyle, getTableLayout, normalizeFrozenColumnCount } from "./TableLayout";
+import { getFrozenTableLayout, getTableColumnStyle, getTableLayout } from "./TableLayout";
 
 export function syncTableColumnLayouts(root: ParentNode, config: ViewConfig): void {
   if (typeof CSS === "undefined" || !CSS.escape) return;
@@ -56,24 +56,14 @@ function applyFrozenCells(
   selectionWidth: number,
   iconWidth: number,
 ): void {
-  const leadingWidths = [selectionWidth, iconWidth].filter((width) => width > 0);
-  const frozenCount = normalizeFrozenColumnCount(config.frozenColumnCount, dataWidths.length);
-  const offsets = getFrozenColumnOffsets(leadingWidths, dataWidths, frozenCount);
-  const leadingSelectors = [
-    selectionWidth > 0 ? ".db-select-col" : "",
-    iconWidth > 0 ? ".db-record-icon-col" : "",
-  ].filter(Boolean);
-  let leadingIndex = 0;
-  for (const selector of leadingSelectors) {
-    // 工具列常驻钉住但不画冻结边界：未冻结数据列时 checkbox 列右侧的加粗
-    // 分隔线是噪音；边界只画在最后一个被冻结的数据列上（下方 keys 循环）。
-    table.querySelectorAll<HTMLElement>(selector).forEach((cell) => {
-      cell.addClass("db-frozen-cell");
-      cell.style.left = `${offsets.leading[leadingIndex] || 0}px`;
-      cell.removeClass("db-frozen-boundary");
-    });
-    leadingIndex += 1;
-  }
+  const { frozenCount, iconOffset, dataOffsets } = getFrozenTableLayout(selectionWidth, iconWidth, dataWidths, config.frozenColumnCount);
+  table.querySelectorAll<HTMLElement>(".db-select-col, .db-record-icon-col").forEach((cell) => {
+    const left = cell.classList.contains("db-select-col") ? 0 : iconOffset;
+    cell.toggleClass("db-frozen-cell", left !== undefined);
+    cell.removeClass("db-frozen-boundary");
+    if (left !== undefined) cell.setCssProps({ left: `${left}px` });
+    else cell.style.removeProperty("left");
+  });
   const keys = Array.from(table.querySelectorAll<HTMLElement>("col[data-note-database-column-key]"))
     .map((col) => col.getAttribute("data-note-database-column-key") || "");
   keys.forEach((key, index) => {
@@ -82,7 +72,7 @@ function applyFrozenCells(
       .forEach((cell) => {
         cell.toggleClass("db-frozen-cell", frozen);
         cell.toggleClass("db-frozen-boundary", frozen && index === frozenCount - 1);
-        if (frozen) cell.style.left = `${offsets.data[index] || 0}px`;
+        if (frozen) cell.style.left = `${dataOffsets[index] || 0}px`;
         else cell.style.removeProperty("left");
       });
   });

@@ -17,7 +17,7 @@ import { createOptionsFromValues, isOptionColumnType } from "../data/ColumnTypes
 import { getDefaultChartDateBucket, getDefaultChartNumberBucket, isChartAggregationValueColumn, requiresChartValueField } from "../data/ChartAggregation";
 import { normalizeTimelineDayScale } from "../data/CalendarTimelineModel";
 import { isDateLikeColumnType } from "../data/DateTimeFormat";
-import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences } from "../data/SourceRules";
+import { removeSourceRuleTreeReferences, updateSourceRuleTreeKeyReferences, withDatabaseSourceScope } from "../data/SourceRules";
 import { getColumnDisplayType, getComputedStorageKey, normalizeComputedStorageKey } from "../data/ColumnDisplay";
 import { ColumnDef, DatabaseConfig, StatusOptionDef, ViewConfig } from "../data/types";
 import { getFileFieldFixedType, isFileFieldKey, isSupportedFileField } from "../data/FileFields";
@@ -33,7 +33,7 @@ import {
 import type { RenamePlanInput } from "../data/RenamePlanBuilder";
 import { DataSourceTransactionWriter } from "../data/DataSourceTransactionWriter";
 import { executeRenameTransaction } from "../data/RenameTransaction";
-import type { RenameHistoryPayload, RenamePlan, TransactionFailure } from "../data/RenameTransaction";
+import type { ColumnKeyRename, RenameHistoryPayload, RenamePlan, TransactionFailure } from "../data/RenameTransaction";
 
 export interface FrontmatterValueChange {
   file: TFile;
@@ -70,6 +70,7 @@ export interface ColumnOperationsDeps {
   refreshColumnManager(): void;
   setPendingUndoLabel(label: string): void;
   setPendingConfigCellChanges(changes: FrontmatterValueChange[]): void;
+  renameColumnKeyReferences?: (rename: ColumnKeyRename) => Promise<void>;
   applyRenameTransactionSuccess(
     plan: RenamePlan,
     stateAfter: DatabaseViewState,
@@ -192,9 +193,11 @@ export class ColumnOperations {
       };
       const mode = decideFrontmatterMigrationMode(facts, request);
       const candidateKeys = requiredCandidateKeys(mode, request, facts);
-      const records = candidateKeys.length === 0
-        ? []
-        : await Promise.all(this.deps.getFilesForConfig(config).map(async (file) => ({
+      // Schema and reminder rule keys are database-wide, not restricted by the
+      // active view's additional source rules.
+      const base = withDatabaseSourceScope({ ...primarySnapshot.typedConfig, baseThisFilePath: sourcePath });
+      const files = candidateKeys.length ? this.deps.dataSource.getRecordsForDatabase(base).map(({ file }) => file) : [];
+      const records = await Promise.all(files.map(async (file) => ({
           path: file.path,
           values: await this.deps.dataSource.readFrontmatterKeySnapshots(file.path, candidateKeys),
         })));
@@ -243,7 +246,7 @@ export class ColumnOperations {
           serializeConfig: (value) => this.deps.dataSource.serializeDatabaseConfig(value),
           getFileFieldFixedType,
         },
-        writer: new DataSourceTransactionWriter(this.deps.dataSource, assertVersion),
+        writer: new DataSourceTransactionWriter(this.deps.dataSource, assertVersion, this.deps.renameColumnKeyReferences),
         undoLabel: t("undo.columnRenameConfig"),
       });
       if (!operation.ok) throw this.renameTransactionError(operation.transactionFailure);
@@ -252,7 +255,7 @@ export class ColumnOperations {
       if (this.deps.getConfigMutationVersion() !== mutationVersion) {
         const rollback = await executeRenameTransaction(
           operation.history.reverse,
-          new DataSourceTransactionWriter(this.deps.dataSource)
+          new DataSourceTransactionWriter(this.deps.dataSource, undefined, this.deps.renameColumnKeyReferences)
         );
         if (!rollback.ok) throw this.renameTransactionError(rollback);
         throw new Error("rename transaction conflict: view config changed before publish");

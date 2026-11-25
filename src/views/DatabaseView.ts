@@ -1,3 +1,8 @@
+import { revealCalendarTimelineSearchResult } from "./CalendarTimelineSearchReveal";
+import { withDatabaseSourceScope } from "../data/SourceRules";
+import { holdReminderReads } from "../data/ReminderReadBarrier";
+import type { ReminderCompletionRename } from "../data/RecordReminders";
+import { openDatabaseCardNote, type DatabaseReturnView } from "./DatabaseNoteReturn";
 import { prepareButtonWorkflow } from "../data/RecordButtonWorkflow";
 import { DataHistoryFailure, executeDataSteps, type ReversibleDataStep } from "../data/EmbeddedDataHistory";
 import { prepareRecordButton } from "../data/RecordButtonExecution";
@@ -45,7 +50,7 @@ import {
   toMultiSelectValuesForKey,
   toValidObsidianTagValues,
 } from "../data/ColumnTypes";
-import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder } from "../data/GroupOrder";
+import { getDefaultGroupOrder, getEffectiveGroupOrder, mergeGroupOrder, numericGroupSortValue } from "../data/GroupOrder";
 import { formatGroupKeyDisplay, isComputedGroupField, resolveGroupCreateDefaults } from "../data/GroupDisplay";
 import { setShowEmptyGroups, setGroupExpandedCount, withEmptyOptionGroups } from "../data/GroupVisibility";
 import { isEmptyGroupId, moveMultiSelectGroupValue } from "../data/MultiSelect";
@@ -87,7 +92,7 @@ import { ViewConfigPanelRenderer } from "./ViewConfigPanelRenderer";
 import { ColumnOperations, FrontmatterValueChange } from "./ColumnOperations";
 import { DataSourceTransactionWriter } from "../data/DataSourceTransactionWriter";
 import { executeRenameTransaction, rebaseRenameHistoryForUndo } from "../data/RenameTransaction";
-import type { FrontmatterKeySnapshot, FrontmatterWrite, RenameHistoryEntry, RenamePlan } from "../data/RenameTransaction";
+import type { ColumnKeyRename, FrontmatterKeySnapshot, FrontmatterWrite, RenameHistoryEntry, RenamePlan } from "../data/RenameTransaction";
 import { BoardGroup, BoardRenderer } from "./BoardRenderer";
 import { GalleryRenderer } from "./GalleryRenderer";
 import { ListRenderer } from "./ListRenderer";
@@ -111,10 +116,12 @@ import { DeleteDatabaseModal } from "./modals/DeleteDatabaseModal";
 import { confirmWithModal } from "./modals/ConfirmModal";
 import { sourceRuleTreesEqual } from "../data/SourceRules";
 import { remapRecordPathsInConfig } from "../data/RecordPathRemap";
+import { remapOptionValueReferences } from "../data/OptionValueReferences";
 import { FormRenderer } from "./FormRenderer";
 import { QuickFormModal, QuickFormTarget } from "./modals/QuickFormModal";
 import { FormCreateInput, FormPlan, planFormFields, validateCreatedFrontmatter } from "../data/FormModel";
 import { AddDatabaseModal } from "./modals/AddDatabaseModal";
+import { applyNewViewDefaults } from "../data/NewViewDefaults";
 import { createDatabaseFromModalResult } from "./modals/AddDatabaseFlow";
 import { normalizeComputedSyncMode } from "../data/ComputedSync";
 import { applyFrontmatterChangeToRows as applyChangeToRenderedRows } from "../data/RenderedRowUpdate";
@@ -200,7 +207,8 @@ const MOBILE_COLUMN_WIDTH_PRESETS = [
 ] as const;
 
 function filtersEqual(left: FilterRule, right: FilterRule): boolean {
-  return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "");
+  return left.field === right.field && left.op === right.op && (left.value || "") === (right.value || "")
+    && (left.comparison ?? "typed") === (right.comparison ?? "typed");
 }
 
 function clampColumnWidth(value: number, min: number, max: number): number {
@@ -223,6 +231,9 @@ interface NoteDatabasePluginLike {
   settings: import("../data/types").PluginSettings;
   saveSettings(): Promise<void>;
   openDatabaseFileView?(file: TFile): Promise<void>;
+  renameReminderField?(rename: ColumnKeyRename): Promise<void>;
+  renameReminderCompletionOptions?(databaseId: string, change: ReminderCompletionRename, reverse: boolean): Promise<void>;
+  getReminderConfigurationAction?(database: DatabaseConfig, view?: ViewConfig): { label: string; open: () => void } | undefined;
 }
 
 function getNoteDatabasePlugin(app: App): NoteDatabasePluginLike | null {
@@ -299,6 +310,7 @@ interface CellHistoryEntry {
   createdFiles?: CreatedFileSnapshot[];
 }
 
+
 interface ConfigHistoryEntry {
   type: "config";
   label: string;
@@ -310,6 +322,7 @@ interface ConfigHistoryEntry {
   cellChanges?: CellEditChange[];
   createdFiles?: CreatedFileSnapshot[];
   fileRenames?: FileRenameChange[];
+  reminderCompletionRename?: ReminderCompletionRename;
 }
 
 interface CreatedFileSnapshot {
@@ -397,6 +410,8 @@ export class DatabaseView extends FileView {
     expandGroup: (field, key, count) => this.expandGroup(this.getConfig(), field, key, count),
     getTimelineInvalidEventCount: () => this.getTimelineInvalidEventCount(),
     openTimelineInvalidEvents: () => { void this.openInvalidEvents(); },
+    onTimelineViewportChanged: (root, config, redrawn) => this.refreshTimelineSearchOnPan(root, config, redrawn),
+    getTimelinePositionSource: () => this.getCurrentEntry()?.sourcePath || "",
     updateTimelineAnchor: (dateKey, label, timeMinutes) => this.updateTimelineAnchor(dateKey, label, timeMinutes),
     updateTimelineScale: (scale, label) => this.updateTimelineScale(scale, label),
     onConfigChange: (label) => {
@@ -604,6 +619,7 @@ export class DatabaseView extends FileView {
       setPendingConfigCellChanges: (changes) => {
         this.pendingConfigCellChanges = changes.map((change) => this.normalizeFrontmatterValueChange(change));
       },
+      renameColumnKeyReferences: async rename => { await getNoteDatabasePlugin(this.app)?.renameReminderField?.(rename); },
       applyRenameTransactionSuccess: (plan, stateAfter, history, label) => {
         this.applyRenamePlanToMemory(plan, stateAfter);
         this.pushHistory({ type: "rename", label, payload: history });
@@ -670,6 +686,7 @@ export class DatabaseView extends FileView {
     this.boardRenderer = new BoardRenderer(this.app, {
       getRelationScopePaths: (col) => this.getRelationScopePaths(col),
       openRow: (row) => this.dataSource.openNote(row.file),
+      openNoteFromCard: (row, anchor) => this.openNoteFromDatabaseCard(row, anchor),
       createEntry: (defaults, position) => this.guardedCreateEntry(defaults, position),
       createGroup: (field, name, color) => this.createBoardGroup(field, name, color),
       updateGroup: (row, field, value, fromValue) => this.updateBoardGroup(row, field, value, fromValue),
@@ -1399,6 +1416,7 @@ export class DatabaseView extends FileView {
     }));
     this.registerEvent(this.app.workspace.on("css-change", () => this.chartRenderer.refreshTheme()));
     this.registerEvent(this.app.workspace.on("database-icon-visibility-change" as never, () => this.rerenderToolbar()));
+    this.registerEvent(this.app.workspace.on("record-reminder-preferences-change" as never, () => this.rerenderToolbar()));
     try {
       this.renderToolbar();
       this.render();
@@ -2009,6 +2027,7 @@ export class DatabaseView extends FileView {
   /** 日历选项弹窗的 actions：弹窗打开与 viewEntries 重建后的 rebind 共用。 */
   private buildCalendarPopoverActions(config: ViewConfig): CalendarToolbarActions {
     return {
+      getSettingsFolding: () => getNoteDatabasePlugin(this.app)?.settings.settingsFolding,
       database: this.getActiveDb(),
       createRecordIconField: () => { void this.openCreateRecordIconFieldModal("view"); },
       onChange: (label) => {
@@ -2041,6 +2060,7 @@ export class DatabaseView extends FileView {
     const collapseKey = headerCollapseStorageKey(this.app.vault.adapter.getResourcePath(""), database?.id || this.viewEntries[this.currentDbIndex].sourcePath);
     const collapseStorage = this.containerEl_.ownerDocument.defaultView?.localStorage;
     this.toolbarRenderer.render(this.containerEl_, this.viewEntries, this.currentDbIndex, this.currentViewIndex, this.vs(), {
+      getSettingsFolding: () => getNoteDatabasePlugin(this.app)?.settings.settingsFolding,
       headerCollapse: {
         state: collapseStorage ? loadHeaderCollapseState(collapseStorage, collapseKey) : { description: false },
         onChange: (state) => {
@@ -2083,6 +2103,7 @@ export class DatabaseView extends FileView {
       setBoardSubgroupEnabled: (enabled) => this.setBoardSubgroupEnabled(enabled),
       setBoardSubgroupField: (value) => this.setBoardSubgroupField(value),
       toggleViewConfig: (anchorEl) => this.toggleHeaderPopover("view", anchorEl),
+      reminderConfiguration: database ? getNoteDatabasePlugin(this.app)?.getReminderConfigurationAction?.(database, currentConfig ?? undefined) : undefined,
       configureGroupOrder: () => this.showGroupOrderPopover(),
       toggleSortPanel: (anchorEl) => this.toggleHeaderPopover("sort", anchorEl),
       toggleChartOptions: (anchorEl) => this.toggleChartOptions(anchorEl),
@@ -2781,6 +2802,7 @@ export class DatabaseView extends FileView {
     this.closeHeaderPopovers();
     const activeAnchor = this.containerEl_.querySelector<HTMLElement>(".db-chart-options-toolbar-btn") || anchorEl;
     this.chartToolbarRenderer.togglePopover(this.containerEl_, activeAnchor, config, {
+      getSettingsFolding: () => getNoteDatabasePlugin(this.app)?.settings.settingsFolding,
       onChange: (label) => {
         this.pendingUndoLabel = label || t("undo.chartConfig");
         this.scheduleConfigSave();
@@ -3105,10 +3127,10 @@ export class DatabaseView extends FileView {
 
     switch (mode) {
       case "number-asc":
-        order = [...keys].sort((a, b) => this.toNumericGroupValue(a) - this.toNumericGroupValue(b) || a.localeCompare(b));
+        order = [...keys].sort((a, b) => numericGroupSortValue(a) - numericGroupSortValue(b) || a.localeCompare(b));
         break;
       case "number-desc":
-        order = [...keys].sort((a, b) => this.toNumericGroupValue(b) - this.toNumericGroupValue(a) || a.localeCompare(b));
+        order = [...keys].sort((a, b) => numericGroupSortValue(b) - numericGroupSortValue(a) || a.localeCompare(b));
         break;
       case "date-asc":
         order = [...keys].sort((a, b) => this.toDateGroupValue(a) - this.toDateGroupValue(b) || a.localeCompare(b));
@@ -3143,11 +3165,6 @@ export class DatabaseView extends FileView {
     this.pendingUndoLabel = t("undo.groupConfig");
     this.scheduleConfigSave();
     this.refresh({ viewport: "reset-top" });
-  }
-
-  private toNumericGroupValue(value: string): number {
-    const n = Number(String(value).replace(/[^0-9.-]/g, ""));
-    return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
   }
 
   private toDateGroupValue(value: string): number {
@@ -3206,9 +3223,6 @@ export class DatabaseView extends FileView {
       galleryImageField: viewType === "gallery"
         ? this.getDefaultGalleryImageField(sourceView || { schema: db.schema } as ViewConfig)
         : undefined,
-      galleryCardSize: viewType === "gallery" ? 250 : undefined,
-      galleryImageAspectRatio: viewType === "gallery" ? 0.75 : undefined,
-      galleryImageFit: viewType === "gallery" ? "cover" : undefined,
       chartType: viewType === "chart" ? "bar" : undefined,
       chartGroupField: viewType === "chart" ? getDefaultChartField(db.schema.columns, db.schema.computedFields) : undefined,
       chartDateBucket: viewType === "chart" ? getDefaultChartDateBucket(db.schema.columns, getDefaultChartField(db.schema.columns, db.schema.computedFields), db.schema.computedFields) : undefined,
@@ -3221,6 +3235,7 @@ export class DatabaseView extends FileView {
         ? getDefaultEventDateField({ schema: db.schema } as ViewConfig)
         : undefined,
     };
+    applyNewViewDefaults(newView, getNoteDatabasePlugin(this.app)?.settings.newViewDefaults);
     db.views.push(newView);
     this.currentViewIndex = db.views.length - 1;
     this.clearViewStateCache();
@@ -3511,6 +3526,7 @@ export class DatabaseView extends FileView {
     const file = await createDatabaseFromModalResult(
       this.app, this.dataSource, result, dbName, this.databaseFolder,
       (config) => this.prepareNewDatabasePropertyTypeConflicts(config),
+      () => getNoteDatabasePlugin(this.app)?.settings.newViewDefaults,
     );
     if (!file) return;
     new Notice(t("notice.createdDbFile", { path: file.path }));
@@ -5102,6 +5118,7 @@ export class DatabaseView extends FileView {
     const config = this.getConfig();
     const db = this.getActiveDb();
     this.viewConfigPanelRenderer.render(this.containerEl_, this.showViewConfigPanel, config, {
+      settingsFolding: getNoteDatabasePlugin(this.app)?.settings.settingsFolding,
       app: this.app,
       database: db,
       onChange: (label) => {
@@ -5431,7 +5448,7 @@ export class DatabaseView extends FileView {
     const config = this.getConfig();
     const database = this.getActiveDb();
     if (!config || !database) return;
-    config.showRecordIcon = config.showRecordIcon === true ? undefined : true;
+    config.showRecordIcon = config.showRecordIcon !== true;
     if (config.showRecordIcon && !resolveRecordIconField(database, config) && !database.recordIconField) {
       config.recordIconFieldOverrideEnabled = true;
     }
@@ -5821,7 +5838,8 @@ export class DatabaseView extends FileView {
     this.pendingUndoLabel = t("undo.fieldOptionsConfig");
     new StatusOptionsModal(this.app, col, async (result) => {
       const previousOptions = col.statusOptions?.map((option) => ({ ...option })) || [];
-      await this.commitColumnOptionsTransaction(col, previousOptions, result.options, { presetId: result.presetId });
+      await this.commitColumnOptionsTransaction(col, previousOptions, result.options,
+        { presetId: result.presetId, renameValues: result.renameValues });
       this.refresh();
     }, this.getAvailableStatusPresets(this.getActiveDb(), this.getConfig()), true, this.getDefaultStatusOptions()).open();
   }
@@ -5931,7 +5949,7 @@ export class DatabaseView extends FileView {
     previousOptions: StatusOptionDef[],
     nextOptions: StatusOptionDef[],
     options: { cleanupRemovedValues?: string[]; renameValues?: Array<{ from: string; to: string }> } = {}
-  ): { normalizedNext: StatusOptionDef[]; cleanupChanges: CellEditChange[] } {
+  ): { normalizedNext: StatusOptionDef[]; cleanupChanges: CellEditChange[]; renameValues: Array<{ from: string; to: string }> } {
     const normalizedPrevious = this.normalizeOptionDefsForColumn(col, previousOptions);
     const normalizedNext = this.normalizeOptionDefsForColumn(col, nextOptions);
     const previousValues = new Set(normalizedPrevious.map((option) => option.value));
@@ -5951,7 +5969,7 @@ export class DatabaseView extends FileView {
         .filter(Boolean)
     );
     const cleanupChanges = this.mergeCellChanges(this.getOptionValueCellChanges(col, removedValues, renameValues));
-    return { normalizedNext, cleanupChanges };
+    return { normalizedNext, cleanupChanges, renameValues };
   }
 
   private async commitColumnOptionsTransaction(
@@ -5974,7 +5992,7 @@ export class DatabaseView extends FileView {
     const before = this.cloneDatabaseConfig(entry.config);
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
-    const { normalizedNext, cleanupChanges } = this.buildColumnOptionMutation(target, previousOptions, nextOptions, {
+    const { normalizedNext, cleanupChanges, renameValues } = this.buildColumnOptionMutation(target, previousOptions, nextOptions, {
       cleanupRemovedValues: options.cleanupRemovedValues,
       renameValues: options.renameValues,
     });
@@ -6000,7 +6018,8 @@ export class DatabaseView extends FileView {
         before,
         changes,
         t("undo.fieldOptionsConfig"),
-        { preserveCellSelection: Boolean(options.setValue && options.currentRow) },
+        { preserveCellSelection: Boolean(options.setValue && options.currentRow),
+          ...(renameValues.length ? { reminderCompletionRename: { property: target.key, renames: renameValues } } : {}) },
       );
     } catch (error) {
       if (showImmediateValue && currentChange && options.currentRow) {
@@ -6046,7 +6065,7 @@ export class DatabaseView extends FileView {
     const target = config.schema.columns.find((candidate) => candidate.key === col.key);
     if (!target) return;
 
-    const { normalizedNext, cleanupChanges } = this.buildColumnOptionMutation(
+    const { normalizedNext, cleanupChanges, renameValues } = this.buildColumnOptionMutation(
       target,
       transaction.previousOptions || target.statusOptions || [],
       transaction.nextOptions || target.statusOptions || [],
@@ -6073,7 +6092,8 @@ export class DatabaseView extends FileView {
       ...cleanupChanges,
       ...(prepared?.changes || []),
     ]);
-    await this.commitConfigAndCellChanges(entry, before, mergedChanges, t("undo.bulkEdit"));
+    await this.commitConfigAndCellChanges(entry, before, mergedChanges, t("undo.bulkEdit"),
+      renameValues.length ? { reminderCompletionRename: { property: target.key, renames: renameValues } } : {});
   }
 
   private normalizeOptionDefsForColumn(col: ColumnDef, options: StatusOptionDef[]): StatusOptionDef[] {
@@ -6130,25 +6150,29 @@ export class DatabaseView extends FileView {
     const changes: CellEditChange[] = [];
     if (removedValues.size === 0 && renameValues.length === 0) return changes;
     const renameMap = new Map(renameValues.map((rename) => [rename.from, rename.to]));
-    for (const record of this.getRecordsForActiveDatabase()) {
+    const currentRecords = !renameValues.length || removedValues.size ? this.getRecordsForActiveDatabase() : [];
+    const removalScope = new Set(currentRecords.map(record => record.file.path));
+    const records = renameValues.length ? this.getRecordsForActiveDatabaseBaseScope() : currentRecords;
+    for (const record of records) {
       if (!Object.prototype.hasOwnProperty.call(record.frontmatter, col.key)) continue;
       const oldValue = record.frontmatter[col.key];
+      const remove = (value: string) => removalScope.has(record.file.path) && removedValues.has(value);
       let newValue: unknown = oldValue;
       if (col.type === "multi-select") {
         const values = toMultiSelectValuesForKey(col.key, oldValue);
         const normalized: string[] = [];
         for (const value of values) {
           const nextValue = renameMap.get(value) || value;
-          if (removedValues.has(nextValue) || normalized.includes(nextValue)) continue;
+          if (remove(nextValue) || normalized.includes(nextValue)) continue;
           normalized.push(nextValue);
         }
         if (this.areCellValuesEqual(values, normalized)) continue;
         newValue = normalized;
       } else {
-        const current = safeString(oldValue);
+        const current = normalizeOptionValueForKey(col.key, oldValue);
         if (renameMap.has(current)) {
           newValue = renameMap.get(current) || current;
-        } else if (removedValues.has(current)) {
+        } else if (remove(current)) {
           newValue = null;
         } else {
           continue;
@@ -6189,7 +6213,7 @@ export class DatabaseView extends FileView {
     const db = this.getActiveDb();
     new StatusPresetManagerModal(
       this.app,
-      `${db.name || t("common.untitledDatabase")} · ${t("statusPresets.title")}`,
+      t("statusPresets.contextTitle", { name: db.name || t("common.untitledDatabase") }),
       db.statusPresets || [],
       db.defaultStatusPresetId || this.defaultStatusPresetId,
       async (presets, defaultPresetId) => {
@@ -6207,7 +6231,7 @@ export class DatabaseView extends FileView {
     const view = this.getConfig();
     new StatusPresetManagerModal(
       this.app,
-      `${view.name || t("common.untitled")} · ${t("statusPresets.title")}`,
+      t("statusPresets.contextTitle", { name: view.name || t("common.untitled") }),
       view.statusPresets || [],
       view.defaultStatusPresetId || db.defaultStatusPresetId || this.defaultStatusPresetId,
       async (presets, defaultPresetId) => {
@@ -6749,11 +6773,9 @@ export class DatabaseView extends FileView {
   }
 
   private getRecordsForActiveDatabaseBaseScope(): NoteRecord[] {
-    const view = this.getConfig();
-    const databaseOnlyView = view.viewSourceRulesEnabled === true
-      ? { ...view, viewSourceRulesEnabled: false }
-      : view;
-    return this.dataSource.getRecordsForConfig(this.getEffectiveConfig(this.getActiveDb(), databaseOnlyView));
+    return this.dataSource.getRecordsForConfig(withDatabaseSourceScope({
+      ...this.getActiveDb(), baseThisFilePath: this.getCurrentEntry()?.sourcePath,
+    }));
   }
 
   private async saveConfigImmediately(mutationOverride?: ViewConfigMutation): Promise<void> {
@@ -7051,6 +7073,20 @@ export class DatabaseView extends FileView {
     this.containerEl_.scrollTop = 0;
   }
 
+  private refreshTimelineSearchOnPan(root: HTMLElement, config: ViewConfig, redrawn: boolean): void {
+    const query = this.vs().searchText.trim();
+    if (!query) return;
+    if (redrawn) highlightSearchMatches(root, query);
+    const panel = this.calendarTimelineSearchResultsEl;
+    if (!panel?.isConnected) return;
+    const result = buildCalendarTimelineSearchResults(this.rows, config, this.calendarTimelineRenderer.getCurrentVisibleRange());
+    const scrollTop = panel.querySelector<HTMLElement>(".db-calendar-search-results-list")?.scrollTop ?? 0;
+    panel.empty();
+    this.renderCalendarTimelineSearchResultsContent(panel, result, query);
+    const list = panel.querySelector<HTMLElement>(".db-calendar-search-results-list");
+    if (list) list.scrollTop = scrollTop;
+  }
+
   private renderCalendarTimelineSearchResultsPanel(config: ViewConfig): void {
     this.closeCalendarTimelineSearchResultsPanel();
     if (!this.containerEl_ || (config.viewType !== "calendar" && config.viewType !== "timeline")) return;
@@ -7159,7 +7195,7 @@ export class DatabaseView extends FileView {
     this.pendingSearchResultRevealPath = item.filePath;
     if (config.viewType === "timeline") {
       const timeMinutes = (config.timelineScale || "week") === "day" ? item.startMinutes : undefined;
-      this.updateTimelineAnchor(item.startDateKey, t("undo.timelineAnchorConfig"), timeMinutes);
+      this.calendarTimelineRenderer.navigateToTimelineDate(item.startDateKey, timeMinutes);
       return;
     }
     if (config.viewType !== "calendar") return;
@@ -7202,6 +7238,8 @@ export class DatabaseView extends FileView {
     const config = this.getConfig();
     if (!config || (config.timelineScale || "week") === scale) return false;
     if (scale === "day" && !await this.ensureTimelineDayDateTimeFields(config)) return false;
+    if (this.getConfig() !== config) return false;
+    this.calendarTimelineRenderer.preserveTimelineScalePosition(this.getTimelineRenderConfig(config), scale);
     config.timelineScale = scale;
     this.pendingUndoLabel = label || t("undo.timelineScaleConfig");
     this.scheduleConfigSave();
@@ -8097,7 +8135,7 @@ export class DatabaseView extends FileView {
     this.pendingSearchResultRevealPath = undefined;
     window.requestAnimationFrame(() => {
       if (!target.isConnected) return;
-      target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      revealCalendarTimelineSearchResult(target);
       target.addClass("is-new-record-highlight");
       window.setTimeout(() => {
         if (target.isConnected) target.removeClass("is-new-record-highlight");
@@ -8120,7 +8158,7 @@ export class DatabaseView extends FileView {
   private findRenderedRowElement(path: string): HTMLElement | null {
     if (!this.containerEl_) return null;
     const candidates = Array.from(
-      this.containerEl_.querySelectorAll<HTMLElement>("[data-note-database-row-path]")
+      this.containerEl_.querySelectorAll<HTMLElement>("[data-note-database-row-path]:not(.db-timeline-window-jump)")
     );
     return candidates.find((candidate) => candidate.dataset.noteDatabaseRowPath === path) || null;
   }
@@ -9762,20 +9800,35 @@ export class DatabaseView extends FileView {
     this.rerenderToolbar();
   }
 
+  private async applyReminderCompletionRename(databaseId: string, change: ReminderCompletionRename, reverse = false): Promise<void> {
+    await getNoteDatabasePlugin(this.app)?.renameReminderCompletionOptions?.(databaseId, change, reverse);
+  }
+
   private async commitConfigAndCellChanges(
     entry: ViewEntry,
     before: DatabaseConfig,
     changes: CellEditChange[],
     label: string,
-    options: { preserveCellSelection?: boolean } = {},
+    options: { preserveCellSelection?: boolean; reminderCompletionRename?: ReminderCompletionRename } = {},
   ): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);
     const applied: CellEditChange[] = [];
     let configSaved = false;
+    const optionRename = options.reminderCompletionRename;
+    const mutation = optionRename ? this.getCurrentDatabaseMutationTarget() : this.getCurrentMutationTarget();
+    const releaseReminderReads = optionRename ? holdReminderReads(this.dataSource) : undefined;
+    const reloadOptionFilters = (): void => {
+      if (!optionRename) return;
+      const dbIndex = this.viewEntries.indexOf(entry);
+      if (dbIndex < 0) return;
+      this.viewStateStore.reloadDatabase(dbIndex, entry.config.views);
+      if (dbIndex === this.currentDbIndex) this.viewState = undefined;
+    };
     try {
+      if (optionRename) remapOptionValueReferences(entry.config, optionRename.property, optionRename.renames);
       if (file instanceof TFile) {
         this.suppressDataReload(2500);
-        await this.dataSource.updateViewDefFile(file, entry.config, this.getCurrentMutationTarget());
+        await this.dataSource.updateViewDefFile(file, entry.config, mutation);
       }
       configSaved = true;
       const byPath = new Map<string, CellEditChange[]>();
@@ -9796,6 +9849,7 @@ export class DatabaseView extends FileView {
         );
         applied.push(...pathChanges);
       }
+      if (options.reminderCompletionRename) await this.applyReminderCompletionRename(entry.config.id, options.reminderCompletionRename);
     } catch (err) {
       if (applied.length > 0) {
         try {
@@ -9805,17 +9859,19 @@ export class DatabaseView extends FileView {
         }
       }
       this.replaceDatabaseConfig(entry.config, before);
+      reloadOptionFilters();
       if (configSaved && file instanceof TFile) {
         try {
           this.suppressDataReload(2500);
-          await this.dataSource.updateViewDefFile(file, entry.config, this.getCurrentMutationTarget());
+          await this.dataSource.updateViewDefFile(file, entry.config, mutation);
         } catch (rollbackErr) {
           console.error("Note Database: failed to roll back config transaction database config", rollbackErr);
         }
       }
       this.configSnapshots.set(this.getConfigHistoryKey(entry), this.cloneDatabaseConfig(entry.config));
       throw err;
-    }
+    } finally { releaseReminderReads?.(); }
+    reloadOptionFilters();
     const after = this.cloneDatabaseConfig(entry.config);
     this.configSnapshots.set(this.getConfigHistoryKey(entry), after);
     this.pushHistory({
@@ -9827,6 +9883,7 @@ export class DatabaseView extends FileView {
       before,
       after,
       cellChanges: changes.map((change) => this.cloneCellChange(change)),
+      ...(options.reminderCompletionRename ? { reminderCompletionRename: options.reminderCompletionRename } : {}),
     });
     if (!options.preserveCellSelection) this.clearCellSelection();
     await this.refreshAfterSave();
@@ -9979,7 +10036,8 @@ export class DatabaseView extends FileView {
       nextPayload = rebaseRenameHistoryForUndo(entry.payload, current);
     }
     const plan = direction === "undo" ? nextPayload.reverse : nextPayload.forward;
-    const result = await executeRenameTransaction(plan, new DataSourceTransactionWriter(this.dataSource));
+    const result = await executeRenameTransaction(plan, new DataSourceTransactionWriter(this.dataSource, undefined,
+      async rename => { await getNoteDatabasePlugin(this.app)?.renameReminderField?.(rename); }));
     if (!result.ok) {
       const compensation = result.compensationErrors.map((item) => {
         const detail = item.error instanceof Error ? item.error.message : String(item.error);
@@ -10091,6 +10149,8 @@ export class DatabaseView extends FileView {
     let historyChanges: CellEditChange[] = [];
     let cellValuesApplied = false;
     let renamed = false;
+    let reminderCompletionApplied = false;
+    const releaseReminderReads = entry.reminderCompletionRename ? holdReminderReads(this.dataSource) : undefined;
     try {
       // Undo must remove newly-created files first: a created path may intentionally reuse a
       // source path that the rename transaction freed (A.md -> B.md, then create A.md).
@@ -10134,6 +10194,10 @@ export class DatabaseView extends FileView {
           restoredCreated.push(created);
         }
       }
+      if (entry.reminderCompletionRename) {
+        await this.applyReminderCompletionRename(entry.dbId, entry.reminderCompletionRename, direction === "undo");
+        reminderCompletionApplied = true;
+      }
       this.toolbarRenderer.closePopovers();
       this.chartToolbarRenderer.closePopover();
       this.calendarToolbarRenderer.closePopover();
@@ -10142,6 +10206,10 @@ export class DatabaseView extends FileView {
       this.rerenderToolbar();
       this.renderViewConfigPanel();
     } catch (err) {
+      if (reminderCompletionApplied && entry.reminderCompletionRename) {
+        try { await this.applyReminderCompletionRename(entry.dbId, entry.reminderCompletionRename, direction !== "undo"); }
+        catch (rollbackErr) { console.error("Note Database: failed to restore reminder completion values", rollbackErr); }
+      }
       if (direction === "redo") {
         for (const created of [...restoredCreated].reverse()) {
           try {
@@ -10188,7 +10256,7 @@ export class DatabaseView extends FileView {
         }
       }
       throw err;
-    }
+    } finally { releaseReminderReads?.(); }
   }
 
   private replaceDatabaseConfig(target: DatabaseConfig, source: DatabaseConfig): void {
@@ -10379,8 +10447,9 @@ export class DatabaseView extends FileView {
     const state = this.vs();
     let changed = false;
     for (const rule of rules) {
-      if (state.filters.some((existing) => filtersEqual(existing, rule))) continue;
-      state.filters.push(rule);
+      const next: FilterRule = { ...rule, comparison: rule.comparison ?? "typed" };
+      if (state.filters.some((existing) => filtersEqual(existing, next))) continue;
+      state.filters.push(next);
       changed = true;
     }
     if (!changed) return;
@@ -11070,6 +11139,25 @@ export class DatabaseView extends FileView {
     });
   }
 
+  private openNoteFromDatabaseCard(row: RowData, anchor: HTMLElement): void {
+    const host = this.containerEl_;
+    const config = this.getConfig();
+    const type = config?.viewType;
+    const openNormally = () => this.dataSource.openNote(row.file);
+    if (!host || !config || (type !== "calendar" && type !== "timeline" && type !== "board")) {
+      openNormally(); return;
+    }
+    const databaseId = this.getActiveDb()?.id;
+    const viewId = config.id ?? config.name;
+    void openDatabaseCardNote({
+      app: this.app, file: row.file, view: type satisfies DatabaseReturnView, anchor, host, openNormally,
+      sourceStillCurrent: () => {
+        const current = this.getConfig();
+        return current?.viewType === type && (current.id ?? current.name) === viewId && this.getActiveDb()?.id === databaseId;
+      },
+    });
+  }
+
   private openRecordDetailPanel(anchorEl: HTMLElement, row: RowData): void {
     if (!this.containerEl_) return;
     const config = this.getConfig();
@@ -11088,6 +11176,7 @@ export class DatabaseView extends FileView {
         editFileName: (target, r, currentName) => this.cellRenderer.editFileName(target, r, currentName),
         showColumnMenu: (event, col, anchorEl) => this.showContextMenu(event, col, anchorEl, { includeWidthActions: false }),
         openRow: (r) => this.dataSource.openNote(r.file),
+        openNoteFromCard: (r, anchor) => this.openNoteFromDatabaseCard(r, anchor),
         renderRecordIcon: (parent, r, view, compact) => this.renderRowRecordIcon(parent, r, view, compact),
         runRecordButton: (row, col) => this.executeRecordButton(row, col),
         applyConditionalFormat: (element, r, view, targetField) =>

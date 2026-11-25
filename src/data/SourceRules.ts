@@ -1,7 +1,7 @@
 import { isDateLikeColumnType } from "./DateTimeFormat";
 import { getBaseFileFieldType, isBaseFileField } from "./FileFields";
 import { stringifyValue } from "./Stringify";
-import { ColumnDef, ComputedFieldDef, SourceRule, SourceRuleExpression, SourceRuleGroup, SourceRuleNode, SourceRuleNot, SourceRuleOperator, SourceRuleValueType } from "./types";
+import { ColumnDef, ComputedFieldDef, DatabaseConfig, SourceRule, SourceRuleExpression, SourceRuleGroup, SourceRuleNode, SourceRuleNot, SourceRuleOperator, SourceRuleValueType } from "./types";
 
 /** 与 Obsidian normalizePath 等价的本地实现（合并连续斜杠、去首尾斜杠、空串回 "/"）：
  *  仅用于 linkTargetsEqual 的双侧同函数比较，保持本模块 obsidian-free 以便 vitest 直测。 */
@@ -82,6 +82,22 @@ export function combineSourceRuleTrees(...trees: Array<SourceRuleNode | undefine
   if (rules.length === 0) return undefined;
   if (rules.length === 1) return rules[0];
   return { type: "group", logic: "and", rules };
+}
+
+/** Legacy databases stored their base folders on views rather than on the database. */
+export function withDatabaseSourceScope(database: DatabaseConfig): DatabaseConfig {
+  if (database.sourceFolder?.trim()) return database;
+  // An unscoped legacy view is a vault-root view, so the union of base
+  // folders must also include the root, even alongside a narrower sibling.
+  const folders = [...new Set((database.views ?? []).map(view => normalizeLinkPath(view.sourceFolder?.trim() || "")))];
+  if (!folders.length || folders.includes("/")) return database;
+  if (folders.length === 1) return { ...database, sourceFolder: folders[0] };
+  const legacyFolders: SourceRuleNode = {
+    type: "group", logic: "or", rules: folders.map(value => ({ field: "file.folder", op: "inFolder", value })),
+  };
+  return { ...database, sourceRuleTree: combineSourceRuleTrees(
+    getSourceRuleTree(database.sourceRuleTree, database.sourceRules, database.sourceLogic), legacyFolders),
+  };
 }
 
 export function sourceRuleTreesEqual(left: SourceRuleNode | undefined, right: SourceRuleNode | undefined): boolean {

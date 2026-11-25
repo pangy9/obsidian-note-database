@@ -8,11 +8,11 @@ import { DragDropFeedbackState, resolveDropPlacement } from "./DragDropFeedback"
 import { renderMobileMoveIcon } from "./MobileMoveIcon";
 import { renderPropertyTypeIcon } from "./PropertyTypeIcon";
 import {
-  getFrozenColumnOffsets,
+  getFrozenTableLayout,
   getTableColumnStyle,
   getTableLayout,
   getTableMinWidth as calculateTableMinWidth,
-  normalizeFrozenColumnCount,
+  type FrozenTableLayout,
 } from "./TableLayout";
 import { renderGroupExpandControls } from "./GroupExpandControls";
 import { getGroupVisibleCount } from "../data/GroupVisibility";
@@ -29,14 +29,6 @@ export interface TableGroup {
   key: string;
   rows: RowData[];
   count: number;
-}
-
-interface FrozenTableLayout {
-  leadingWidths: number[];
-  dataWidths: number[];
-  leadingOffsets: number[];
-  dataOffsets: number[];
-  frozenCount: number;
 }
 
 export interface TableRendererActions {
@@ -367,19 +359,12 @@ export class TableRenderer {
   }
 
   private getFrozenTableLayout(config: ViewConfig, columns: ColumnDef[], availableWidth = 0): FrozenTableLayout {
-    const dataWidths = this.getRenderedColumnWidths(config, columns, availableWidth);
-    const leadingWidths: number[] = [];
-    if (!this.actions.isReadOnly) leadingWidths.push(this.getSelectionColumnWidth());
-    if (this.shouldRenderRecordIcon(config)) leadingWidths.push(this.getRecordIconColumnWidth());
-    const frozenCount = normalizeFrozenColumnCount(config.frozenColumnCount, columns.length);
-    const offsets = getFrozenColumnOffsets(leadingWidths, dataWidths, frozenCount);
-    return {
-      leadingWidths,
-      dataWidths,
-      leadingOffsets: offsets.leading,
-      dataOffsets: offsets.data,
-      frozenCount,
-    };
+    return getFrozenTableLayout(
+      this.actions.isReadOnly ? 0 : this.getSelectionColumnWidth(),
+      this.shouldRenderRecordIcon(config) ? this.getRecordIconColumnWidth() : 0,
+      this.getRenderedColumnWidths(config, columns, availableWidth),
+      config.frozenColumnCount,
+    );
   }
 
   private applyFrozenCellStyle(cell: HTMLElement, left: number, boundary: boolean): void {
@@ -453,7 +438,7 @@ export class TableRenderer {
       const selectTh = headerRow.createEl("th", { cls: "db-select-col" });
       // 工具列常驻钉住但不画冻结边界：未冻结数据列时 checkbox 列右侧的加粗
       // 分隔线是噪音；边界只画在「最后一个被冻结的数据列」上。
-      this.applyFrozenCellStyle(selectTh, frozenLayout.leadingOffsets[0] || 0, false);
+      this.applyFrozenCellStyle(selectTh, 0, false);
       const selectInner = selectTh.createDiv({ cls: "db-select-inner" });
       const selectAll = selectInner.createEl("input", { attr: { type: "checkbox" } });
       selectAll.checked = this.actions.areAllRowsSelected(rows);
@@ -466,8 +451,7 @@ export class TableRenderer {
         cls: "db-record-icon-col",
         attr: { "aria-label": t("recordIcon.icons"), title: t("recordIcon.icons") },
       });
-      const iconIndex = this.actions.isReadOnly ? 0 : 1;
-      this.applyFrozenCellStyle(iconTh, frozenLayout.leadingOffsets[iconIndex] || 0, false);
+      if (frozenLayout.iconOffset !== undefined) this.applyFrozenCellStyle(iconTh, frozenLayout.iconOffset, false);
     }
     for (const [index, col] of columns.entries()) {
       const th = headerRow.createEl("th");
@@ -550,7 +534,7 @@ export class TableRenderer {
     if (!this.actions.isReadOnly) {
       const selectTd = tr.createEl("td", { cls: "db-select-col" });
       // 工具列常驻钉住但不画冻结边界（同 renderHeader：边界只属于最后一个冻结数据列）。
-      if (frozenLayout) this.applyFrozenCellStyle(selectTd, frozenLayout.leadingOffsets[0] || 0, false);
+      if (frozenLayout) this.applyFrozenCellStyle(selectTd, 0, false);
       const selectInner = selectTd.createDiv({ cls: "db-select-inner" });
       // 拖拽手柄（左）与 checkbox（右）放入同一 flex 容器：先建手柄、再建 checkbox，
       // checkbox 用 margin-left:auto 贴右，使各行 checkbox 与表头 checkbox 上下对齐。
@@ -567,10 +551,7 @@ export class TableRenderer {
     }
     if (this.shouldRenderRecordIcon(config)) {
       const iconTd = tr.createEl("td", { cls: "db-record-icon-col" });
-      if (frozenLayout) {
-        const iconIndex = this.actions.isReadOnly ? 0 : 1;
-        this.applyFrozenCellStyle(iconTd, frozenLayout.leadingOffsets[iconIndex] || 0, false);
-      }
+      if (frozenLayout?.iconOffset !== undefined) this.applyFrozenCellStyle(iconTd, frozenLayout.iconOffset, false);
       const icon = this.actions.renderRecordIcon?.(iconTd, row, config, true);
       // Keep spreadsheet roving-tabindex authoritative: the gutter is clickable,
       // but must not become an extra Tab stop between real data cells.

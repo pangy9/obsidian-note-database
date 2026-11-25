@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
 import type { DataSource } from "../data/DataSource";
 import type { DatabaseConfig } from "../data/types";
+import { normalizeNewViewDefaults } from "../data/NewViewDefaults";
 import { createVaultStarter } from "../data/VaultStarterTemplates";
 import { buildDatabaseWithInferredColumns, createDatabaseFromModalResult } from "../views/modals/AddDatabaseFlow";
 
 vi.mock("obsidian", () => ({ TFile: class {}, TFolder: class {}, Notice: class {}, normalizePath: (path: string) => path }));
 vi.mock("../i18n", () => ({ t: (key: string) => key }));
-vi.mock("../data/FrontmatterScanner", () => ({}));
+vi.mock("../data/FrontmatterScanner", () => ({ collectFileFrontmatterKeys: vi.fn() }));
 vi.mock("../data/ColumnTypes", () => ({}));
 vi.mock("../views/modals/BaseImportConfirmModal", () => ({ BaseImportConfirmModal: class {} }));
 
@@ -51,6 +52,68 @@ describe("custom starter creation flow", () => {
     expect(file?.path).toBe("database/New.md");
     expect(dataSource.createNote).toHaveBeenCalledWith("database/records/New", "Sample", { status: "Todo" }, undefined, "Body");
     expect(commit).toHaveBeenCalledOnce();
+  });
+  it("fills only missing template options and preserves explicit false and Sunday", async () => {
+    const { app, result, dataSource, prepare } = setup();
+    const template = result.customStarter;
+    const schema = template.config.schema;
+    template.config.views = [
+      { name: "Timeline A", viewType: "timeline", sourceFolder: "", schema, timelineContinuous: false },
+      { name: "Timeline B", viewType: "timeline", sourceFolder: "", schema, showEmptyFields: false },
+      { name: "Board", viewType: "board", sourceFolder: "", schema, displayWidth: "default" },
+      { name: "Calendar", viewType: "calendar", sourceFolder: "", schema, calendarFirstDayOfWeek: 0 },
+    ];
+    template.config.quickFormEnabled = false;
+    const defaults = normalizeNewViewDefaults({
+      shared: { showEmptyFields: true, displayWidth: "wide" },
+      database: { quickFormEnabled: true },
+      views: { timeline: { timelineContinuous: true }, board: { boardColumnWidth: 330 }, calendar: { calendarFirstDayOfWeek: 1, calendarScale: "week" } },
+    });
+    await createDatabaseFromModalResult(app, dataSource as unknown as DataSource, result, "New", "database", prepare, defaults);
+    const calls = dataSource.createViewDefFile.mock.calls as unknown as Array<[string, string, DatabaseConfig]>;
+    const created = calls[0][2];
+    const [a, b, board, calendar] = created.views;
+    expect(created.quickFormEnabled).toBe(false);
+    expect(a).toMatchObject({ timelineContinuous: false, showEmptyFields: true, displayWidth: "wide" });
+    expect(b).toMatchObject({ timelineContinuous: true, showEmptyFields: false });
+    expect(board).toMatchObject({ boardColumnWidth: 330, showEmptyFields: true, displayWidth: "default" });
+    expect(calendar).toMatchObject({ calendarFirstDayOfWeek: 0, calendarScale: "week" });
+    expect(template.config.views[0].showEmptyFields).toBeUndefined();
+    expect(template.config.views[0].displayWidth).toBeUndefined();
+    expect(template.config.views[1].timelineContinuous).toBeUndefined();
+  });
+  it("applies database and table defaults when creating an empty database through the shared flow", async () => {
+    const { app, dataSource, prepare } = setup();
+    const defaults = normalizeNewViewDefaults({
+      database: { quickFormEnabled: true },
+      shared: { showRecordIcon: true, showEmptyFields: true, displayWidth: "wide" },
+      views: { table: { defaultColumnWidth: 240 } },
+    });
+    const file = await createDatabaseFromModalResult(app, dataSource as unknown as DataSource, {
+      name: "New", sourceFolder: "",
+    }, "New", "database", prepare, defaults);
+    expect(file?.path).toBe("database/New.md");
+    const calls = dataSource.createViewDefFile.mock.calls as unknown as Array<[string, string, DatabaseConfig]>;
+    expect(calls[0][2].quickFormEnabled).toBe(true);
+    const table = calls[0][2].views[0];
+    expect(table).toMatchObject({ viewType: "table", defaultColumnWidth: 240, showRecordIcon: true, displayWidth: "wide" });
+    expect(table.showEmptyFields).toBeUndefined();
+  });
+  it("uses the current saved width if it changes while creation awaits confirmation", async () => {
+    const { app, dataSource } = setup();
+    let defaults = normalizeNewViewDefaults({ shared: { displayWidth: "default" } });
+    let release = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const prepare = vi.fn(async () => { await gate; return { commit: async () => {} }; });
+    const creation = createDatabaseFromModalResult(app, dataSource as unknown as DataSource, {
+      name: "New", sourceFolder: "",
+    }, "New", "database", prepare, () => defaults);
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+    defaults = normalizeNewViewDefaults({ shared: { displayWidth: "wide" } });
+    release();
+    await expect(creation).resolves.toMatchObject({ path: "database/New.md" });
+    const [[, , config]] = dataSource.createViewDefFile.mock.calls as unknown as Array<[string, string, DatabaseConfig]>;
+    expect(config.views[0].displayWidth).toBe("wide");
   });
   it("honors excluding samples", async () => {
     const { app, result, dataSource, prepare } = setup();

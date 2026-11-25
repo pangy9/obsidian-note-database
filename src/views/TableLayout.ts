@@ -40,6 +40,23 @@ export function getFrozenColumnOffsets(
   return { leading, data };
 }
 
+export interface FrozenTableLayout {
+  frozenCount: number;
+  iconOffset: number | undefined;
+  dataOffsets: number[];
+}
+
+/** The record icon belongs to the first data column's frozen region, not to the selection gutter. */
+export function getFrozenTableLayout(
+  selectionWidth: number, iconWidth: number, dataWidths: number[], requestedCount: number | undefined,
+): FrozenTableLayout {
+  const frozenCount = normalizeFrozenColumnCount(requestedCount, dataWidths.length);
+  const iconOffset = frozenCount > 0 && iconWidth > 0 ? selectionWidth : undefined;
+  const leadingWidths = [selectionWidth, iconOffset === undefined ? 0 : iconWidth];
+  const { data } = getFrozenColumnOffsets(leadingWidths, dataWidths, frozenCount);
+  return { frozenCount, iconOffset, dataOffsets: data };
+}
+
 export function getTableMinWidth(selectionWidth: number, columnWidths: number[]): number {
   return selectionWidth + columnWidths.reduce((total, width) => total + width, 0);
 }

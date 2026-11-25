@@ -69,11 +69,27 @@ A database never duplicates your notes — the eight views are just different le
 | ![Calendar month view](assets/screenshots/calendar-view-month.png) | ![Calendar week view](assets/screenshots/calendar-view-week.png) |
 | Arrange all-day and multi-day records in a monthly overview. | Work with all-day and timed records on a detailed weekly grid. |
 
-## New in 1.3.3
+## New in 1.3.4
 
-- **Button workflows:** add a Button property to edit records, create or duplicate notes, update filtered records in another database, show confirmation, and open the result. Configure actions visually and combine dynamic values with text without writing code; built-in starters include example buttons. All changes made by a single button execution can be undone together.
-- **Collapsible descriptions:** collapse a database description to a one-line preview and expand it when needed.
-- **Fixes:** fix calendar events not using the selected status property’s colors (GitHub [#9](https://github.com/pangy9/obsidian-note-database/issues/9)); align date-valued computed fields across summaries, filters, sorting, and charts; show update notes in the plugin interface language.
+- **Task reminders:** Set multiple reminder times using a date and a completion property. Preview matching records before saving; reschedule, update completion, or snooze from the inbox. Desktop system notifications are optional.
+- **Continuous timeline:** Enable continuous horizontal browsing in a timeline to scroll without paging. Reopen it on the same device to pick up where you left off.
+- **View settings:** Tuck less-used options under More and set defaults for new databases and views, including view width. Existing views stay unchanged.
+- **Fixes and improvements:** Formula and rollup filters match their result types. Checkbox filtering, sorting, and frozen columns behave more consistently. After opening a note from a calendar, timeline, or board card, you can return to the original view.
+
+| Reminder rules and preview | Reminder inbox |
+| --- | --- |
+| ![Task reminder rule with multiple reminder times and a preview](assets/screenshots/en-1.3.4-reminder-rules.png) | ![Reminder inbox with an editable task detail card](assets/screenshots/en-1.3.4-reminder-inbox.png) |
+| Set multiple reminder times and see which records will be notified before saving. | Reschedule, update completion, or snooze without hunting for the original note. |
+
+| Continuous timeline |
+| --- |
+| ![Continuous timeline spanning late November and early December](assets/screenshots/en-1.3.4-continuous-timeline.png) |
+| Scroll across month boundaries without switching pages. |
+
+| View settings |
+| --- |
+| ![Customize which view settings move under More](assets/screenshots/en-1.3.4-view-settings.png) |
+| Choose which settings to put under More, then preview the layout before saving. |
 
 ## Local workflows with buttons
 

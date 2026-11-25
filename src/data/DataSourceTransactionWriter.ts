@@ -1,6 +1,7 @@
+import { holdReminderReads } from "./ReminderReadBarrier";
 import type { DataSource, ViewConfigMutation } from "./DataSource";
 import type { DatabaseConfig } from "./types";
-import type { TransactionWriter, FrontmatterKeySnapshot, FrontmatterWrite } from "./RenameTransaction";
+import type { ColumnKeyRename, TransactionWriter, FrontmatterKeySnapshot, FrontmatterWrite } from "./RenameTransaction";
 
 /**
  * 把 RenameTransaction executor 接到真实文件 IO（DataSource）—— TransactionWriter
@@ -17,11 +18,19 @@ import type { TransactionWriter, FrontmatterKeySnapshot, FrontmatterWrite } from
 export class DataSourceTransactionWriter implements TransactionWriter {
   constructor(
     private readonly dataSource: DataSource,
-    private readonly assertWritable?: () => void
+    private readonly assertWritable?: () => void,
+    private readonly renameReferences?: (rename: ColumnKeyRename) => Promise<void>,
   ) {}
 
+  holdReads(): () => void { return holdReminderReads(this.dataSource); }
+
   forCompensation(): TransactionWriter {
-    return new DataSourceTransactionWriter(this.dataSource);
+    return new DataSourceTransactionWriter(this.dataSource, undefined, this.renameReferences);
+  }
+
+  async patchColumnKeyReferences(rename: ColumnKeyRename): Promise<void> {
+    this.assertWritable?.();
+    await this.renameReferences?.(rename);
   }
 
   async patchFrontmatter(
